@@ -13,6 +13,7 @@ export function AttackChainPanel(props: { chains: AttackChain[]; onPromote?: (ch
             <strong>{chain.name}</strong>
             <span>{chain.status} / score {chain.score}</span>
             <p>{chain.notes || `${chain.steps.length} steps`}</p>
+            <p>{chain.steps.length} normalized steps</p>
             {props.onPromote ? <button onClick={() => props.onPromote?.(chain)}>Promote Finding</button> : null}
           </li>
         ))}

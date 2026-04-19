@@ -68,52 +68,52 @@ class WorkerRuntime:
 
     def _loop(self, execution_manager) -> None:
         while not self._stop_event.is_set():
-            claim: WorkflowClaim | None = None
-            with SessionLocal() as db:
-                claim = self._engine.claim_next_phase(db, worker_id=self._worker_id, lease_seconds=90)
-                db.commit()
-
-            if claim is None:
-                self._claimed_run_id = ""
-                self._claimed_phase = ""
-                self._lease_expires_at = utcnow() + timedelta(seconds=5)
-                self._heartbeat_at = utcnow()
-                time.sleep(0.4)
-                continue
-
-            self._claimed_run_id = claim.run_id
-            self._claimed_phase = claim.phase_name
-            self._lease_expires_at = claim.lease_expires_at
-            self._heartbeat_at = utcnow()
-
             try:
-                output = execution_manager.execute_phase(claim.run_id, claim.phase_name)
                 with SessionLocal() as db:
-                    self._engine.mark_phase_completed(db, claim, output=output if isinstance(output, dict) else {})
+                    claim = self._engine.claim_next_phase(db, worker_id=self._worker_id, lease_seconds=90)
                     db.commit()
-            except Exception as exc:  # noqa: BLE001
-                with SessionLocal() as db:
-                    error_class = exc.__class__.__name__
-                    if "Blocked" in error_class:
-                        self._engine.mark_phase_blocked(db, claim, reason=str(exc))
-                    else:
-                        decision = classify_retry(error_class)
-                        if decision.retryable:
-                            self._engine.schedule_retry(
-                                db,
-                                claim,
-                                retry_class=decision.retry_class.value,
-                                delay_seconds=decision.delay_seconds,
-                                reason=decision.reason or str(exc),
-                            )
+                if claim is None:
+                    self._claimed_run_id = ""
+                    self._claimed_phase = ""
+                    self._lease_expires_at = utcnow() + timedelta(seconds=5)
+                    self._heartbeat_at = utcnow()
+                    time.sleep(0.4)
+                    continue
+
+                self._claimed_run_id = claim.run_id
+                self._claimed_phase = claim.phase_name
+                self._lease_expires_at = claim.lease_expires_at
+                self._heartbeat_at = utcnow()
+                try:
+                    output = execution_manager.execute_phase(claim.run_id, claim.phase_name)
+                    with SessionLocal() as db:
+                        self._engine.mark_phase_completed(db, claim, output=output if isinstance(output, dict) else {})
+                        db.commit()
+                except Exception as exc:  # noqa: BLE001
+                    with SessionLocal() as db:
+                        error_class = exc.__class__.__name__
+                        if "Blocked" in error_class:
+                            self._engine.mark_phase_blocked(db, claim, reason=str(exc))
                         else:
-                            self._engine.mark_phase_failed(
-                                db,
-                                claim,
-                                error_class=decision.retry_class.value or error_class,
-                                error_message=decision.reason or str(exc),
-                            )
-                    db.commit()
+                            decision = classify_retry(error_class)
+                            if decision.retryable:
+                                self._engine.schedule_retry(
+                                    db,
+                                    claim,
+                                    retry_class=decision.retry_class.value,
+                                    delay_seconds=decision.delay_seconds,
+                                    reason=decision.reason or str(exc),
+                                )
+                            else:
+                                self._engine.mark_phase_failed(
+                                    db,
+                                    claim,
+                                    error_class=decision.retry_class.value or error_class,
+                                    error_message=decision.reason or str(exc),
+                                )
+                        db.commit()
+            except Exception:  # noqa: BLE001
+                time.sleep(0.25)
             finally:
                 self._heartbeat_at = utcnow()
                 self._claimed_run_id = ""

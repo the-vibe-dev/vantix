@@ -8,6 +8,7 @@ import {
   Fact,
   Handoff,
   ProviderConfig,
+  PlanningBundle,
   Run,
   RunMessage,
   RunPhase,
@@ -57,6 +58,7 @@ export default function App() {
   const [messages, setMessages] = useState<RunMessage[]>([]);
   const [vectors, setVectors] = useState<Vector[]>([]);
   const [results, setResults] = useState<RunResults | null>(null);
+  const [planningBundle, setPlanningBundle] = useState<PlanningBundle | null>(null);
   const [skillApps, setSkillApps] = useState<RunSkillApplication[]>([]);
   const [handoff, setHandoff] = useState<Handoff | null>(null);
   const [attackChains, setAttackChains] = useState<AttackChain[]>([]);
@@ -103,7 +105,7 @@ export default function App() {
 
   async function refreshRun(runId: string) {
     try {
-      const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runHandoff, chains] = await Promise.all([
+      const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runHandoff, chains, planning] = await Promise.all([
         api.getRun(runId),
         api.getGraph(runId),
         api.getFacts(runId),
@@ -114,6 +116,7 @@ export default function App() {
         api.getSkills(runId),
         api.getHandoff(runId),
         api.getAttackChains(runId),
+        api.getPlanningBundle(runId),
       ]);
       setSelectedRun(run);
       setRoutedProviderId(String((run.config?.provider_id as string | undefined) || ""));
@@ -126,6 +129,7 @@ export default function App() {
       setMessages(runMessages);
       setVectors(runVectors);
       setResults(runResults);
+      setPlanningBundle(planning);
       setSkillApps(runSkills);
       setHandoff(runHandoff);
       setAttackChains(chains);
@@ -153,6 +157,7 @@ export default function App() {
     setMessages([]);
     setVectors([]);
     setResults(null);
+    setPlanningBundle(null);
     setSkillApps([]);
     setHandoff(null);
     setAttackChains([]);
@@ -256,6 +261,11 @@ export default function App() {
     if (streamed.length) return streamed.join("\n");
     return results?.terminal_summary || "No live terminal output yet.";
   }, [events, results]);
+  const terminalFallback = useMemo(() => {
+    if (selectedRun?.status === "blocked") return "Run is blocked. Review approvals and policy events.";
+    if (selectedRun?.status === "failed") return "Run failed. Review latest terminal and workflow events.";
+    return "No live terminal output yet.";
+  }, [selectedRun?.status]);
 
   const cveFacts = facts.filter((fact) => fact.kind === "cve");
 
@@ -290,7 +300,7 @@ export default function App() {
           <OrchestratorChat messages={messages} chatText={chatText} setChatText={setChatText} onSend={sendChat} />
           <RunPhasePanel phase={phase} />
           <AgentTimeline agents={agents} tasks={tasks} roles={roles} />
-          <TerminalPanel terminalText={terminalText} />
+          <TerminalPanel terminalText={terminalText} fallback={terminalFallback} />
           <SkillPanel applications={skillApps} selectedRun={selectedRun} onApply={() => selectedRun && api.applySkills(selectedRun.id).then(() => refreshRun(selectedRun.id))} />
           <HandoffPanel handoff={handoff} />
           <AttackChainPanel chains={attackChains} onPromote={promoteAttackChain} />
@@ -298,7 +308,7 @@ export default function App() {
           <VectorPanel vectors={vectors} selectedRun={selectedRun} onSelect={(vector) => selectedRun && api.selectVector(selectedRun.id, vector.id).then(() => refreshRun(selectedRun.id))} onPromote={promoteVector} />
           <MemoryPanel learning={learning} />
           <CveIntelPanel cveFacts={cveFacts} />
-          <ResultsPanel results={results} />
+          <ResultsPanel results={results} planningBundle={planningBundle} />
           <ApprovalPanel approvals={approvals} onApprove={(approval) => selectedRun && api.approve(approval.id).then(() => refreshRun(selectedRun.id))} onReject={(approval) => selectedRun && api.reject(approval.id).then(() => refreshRun(selectedRun.id))} />
           <NotesPanel note={note} setNote={setNote} canSave={Boolean(selectedRun && note.trim())} onSave={saveNote} />
           <InstallerPanel

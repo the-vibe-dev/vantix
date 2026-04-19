@@ -122,6 +122,16 @@ export type RunResults = {
   vectors: Vector[];
   terminal_summary: string;
   report_path: string | null;
+  report_json_path?: string | null;
+};
+
+export type PlanningBundle = {
+  run_id: string;
+  workflow_status: string;
+  best_vectors: Vector[];
+  best_chains: AttackChain[];
+  ranking_rationale: Array<Record<string, unknown>>;
+  missing_evidence: string[];
 };
 
 export type SkillPack = {
@@ -154,6 +164,7 @@ export type AttackChain = {
   steps: Array<Record<string, unknown>>;
   mitre_ids: string[];
   notes: string;
+  provenance?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -187,6 +198,14 @@ export type SystemStatus = {
   providers: Record<string, unknown>;
   installer: Record<string, unknown>;
   tooling: Record<string, unknown>;
+  worker?: {
+    worker_id: string;
+    running: boolean;
+    heartbeat_at: string;
+    claimed_run_id: string;
+    claimed_phase: string;
+    lease_expires_at: string;
+  };
   warnings: string[];
 };
 
@@ -292,6 +311,7 @@ export const api = {
   promoteFinding: (runId: string, payload: Record<string, unknown>) =>
     request<Finding>(`/api/v1/runs/${runId}/findings/promote`, { method: "POST", body: JSON.stringify(payload) }),
   getResults: (runId: string) => request<RunResults>(`/api/v1/runs/${runId}/results`),
+  getPlanningBundle: (runId: string) => request<PlanningBundle>(`/api/v1/runs/${runId}/planning-bundle`),
   listSkills: () => request<SkillPack[]>("/api/v1/skills"),
   createSkill: (payload: Record<string, unknown>) => request<SkillPack>("/api/v1/skills", { method: "POST", body: JSON.stringify(payload) }),
   updateSkill: (skillId: string, payload: Record<string, unknown>) => request<SkillPack>(`/api/v1/skills/${skillId}`, { method: "PUT", body: JSON.stringify(payload) }),
