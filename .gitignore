@@ -75,6 +75,21 @@ memory/learning/index.json
 
 # Local operator configuration
 agent_ops/config/cracking_nodes.yaml
+agent_ops/config/*nodes*.yaml
+agent_ops/config/*access*.yaml
+agent_ops/config/*topology*.yaml
+
+# Local node access and environment-specific runbooks
+docs/local/
+docs/*node*access*.md
+docs/*access*node*.md
+docs/*topology*.md
+!docs/local_topology.example.md
+docs/*runbook*.local.md
+docs/*.local.md
+*node_access*
+*ssh_access*
+*benchmark_access*
 
 # CVE local deployment state
 tools/cve-search/.env

@@ -19,6 +19,7 @@ class InstallerStateService:
         self.install_root.mkdir(parents=True, exist_ok=True)
         self.state_path = self.install_root / "installer_state.json"
         self.tool_history_path = self.install_root / "tool_install_history.jsonl"
+        self.update_history_path = self.install_root / "update_history.jsonl"
 
     def read(self) -> dict[str, Any]:
         if not self.state_path.exists():
@@ -51,6 +52,26 @@ class InstallerStateService:
             return []
         rows = []
         for raw in self.tool_history_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if not raw.strip():
+                continue
+            try:
+                rows.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+        return rows[-limit:]
+
+    def append_update_history(self, event: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(event)
+        payload.setdefault("ts", utc_ts())
+        with self.update_history_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+        return payload
+
+    def update_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        if not self.update_history_path.exists():
+            return []
+        rows = []
+        for raw in self.update_history_path.read_text(encoding="utf-8", errors="ignore").splitlines():
             if not raw.strip():
                 continue
             try:

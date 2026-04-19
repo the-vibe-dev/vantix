@@ -21,6 +21,8 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/tools/install \
 curl -s http://127.0.0.1:8787/api/v1/tools/install/history
 ```
 
+`/api/v1/system/status` and `/api/v1/system/install-status` include git/update metadata when the repo has an `origin/main` remote. Updates are applied through `bash scripts/update-vantix.sh`, not through the API.
+
 ## Chat
 
 Start a run:

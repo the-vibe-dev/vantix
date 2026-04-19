@@ -1,18 +1,40 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from secops.services.installer_state import InstallerStateService
 from secops.services.tools import ToolService
+
+
+SERVICE_NAMES = {
+    "api": "vantix-api.service",
+    "ui": "vantix-ui.service",
+}
+
+EMBEDDED_BANNER = r"""
+{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}
+{}888     888     d8888 888b    888 88888888888 8888888 Y88b   d88P {}
+{}888     888    d88888 8888b   888     888       888    Y88b d88P  {}
+{}888     888   d88P888 88888b  888     888       888     Y88o88P   {}
+{}Y88b   d88P  d88P 888 888Y88b 888     888       888      Y888P    {}
+{} Y88b d88P  d88P  888 888 Y88b888     888       888      d888b    {}
+{}  Y88o88P  d88P   888 888  Y88888     888       888     d88888b   {}
+{}   Y888P  d8888888888 888   Y8888     888       888    d88P Y88b  {}
+{}    Y8P  d88P     888 888    Y888     888     8888888 d88P   Y88b {}
+{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}
+""".strip()
 
 
 def default_runtime_root(repo_root: Path) -> Path:
@@ -58,6 +80,47 @@ def write_env_file(path: Path, updates: dict[str, str], template_path: Path | No
     path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
 
 
+def banner_text(repo_root: Path) -> str:
+    art_path = repo_root.parent / "drop" / "vantix.txt"
+    if art_path.exists():
+        return art_path.read_text(encoding="utf-8", errors="ignore").rstrip()
+    return EMBEDDED_BANNER
+
+
+def render_progress_bar(current: int, total: int, *, width: int = 28) -> str:
+    total = max(total, 1)
+    current = max(0, min(current, total))
+    filled = round(width * current / total)
+    return f"[{'#' * filled}{'-' * (width - filled)}] {current}/{total}"
+
+
+def _systemd_quote(value: Path | str) -> str:
+    text = str(value)
+    if not text or any(char.isspace() or char in {'"', "'", "\\"} for char in text):
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def render_user_systemd_unit(*, description: str, repo_root: Path, script_path: Path) -> str:
+    return (
+        "[Unit]\n"
+        f"Description={description}\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"WorkingDirectory={_systemd_quote(repo_root)}\n"
+        f"EnvironmentFile=-{_systemd_quote(repo_root / '.env')}\n"
+        f"ExecStart=/usr/bin/env bash {_systemd_quote(script_path)}\n"
+        "Restart=on-failure\n"
+        "RestartSec=3\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+
 class Wizard:
     def __init__(self, repo_root: Path) -> None:
         self.repo_root = repo_root.resolve()
@@ -68,6 +131,25 @@ class Wizard:
         self.runtime_root = Path(self.env_updates.get("SECOPS_RUNTIME_ROOT") or default_runtime_root(self.repo_root))
         self.state = InstallerStateService(self.runtime_root)
         self.tool_service = ToolService(self.repo_root, self.runtime_root)
+        self.total_steps = 9
+        self.current_step = 0
+
+    def print_intro(self) -> None:
+        if os.getenv("VANTIX_INSTALLER_BANNER_SHOWN") == "1":
+            return
+        print(banner_text(self.repo_root))
+        print()
+        print("Vantix installer")
+        print("Use only on systems and targets you own or are explicitly authorized to test.")
+        print("This software can execute tools and write runtime data. Use at your own risk.")
+        print("Do not place provider keys, client data, credentials, or private topology in committed files.")
+
+    def section(self, title: str, detail: str = "") -> None:
+        self.current_step += 1
+        print()
+        print(f"{render_progress_bar(self.current_step, self.total_steps)}  {title}")
+        if detail:
+            print(f"    {detail}")
 
     def prompt(self, label: str, default: str = "") -> str:
         suffix = f" [{default}]" if default else ""
@@ -89,6 +171,32 @@ class Wizard:
     def run(self, command: list[str], *, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(command, capture_output=True, text=True, check=False, env=env, cwd=cwd or self.repo_root)
 
+    def run_visible(self, command: list[str], *, label: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        start = time.monotonic()
+        workdir = cwd or self.repo_root
+        print(f"    -> {label}")
+        print(f"       $ {' '.join(shlex.quote(part) for part in command)}")
+        proc = subprocess.Popen(
+            command,
+            cwd=workdir,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        lines: list[str] = []
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = raw.rstrip()
+            if line:
+                lines.append(line)
+                print(f"       {line}")
+        returncode = proc.wait()
+        elapsed = time.monotonic() - start
+        status = "ok" if returncode == 0 else f"failed rc={returncode}"
+        print(f"       [{status}] {elapsed:.1f}s")
+        return subprocess.CompletedProcess(command, returncode, "\n".join(lines), "")
+
     def os_info(self) -> dict[str, Any]:
         return self.tool_service.os_info()
 
@@ -103,30 +211,35 @@ class Wizard:
                 missing.append(pkg)
         if not missing:
             return
-        print(f"[*] Installing system packages: {' '.join(missing)}")
-        self.run(["sudo", "apt-get", "update"])
-        proc = self.run(["sudo", "apt-get", "install", "-y", *missing])
+        print(f"    Missing system packages: {' '.join(missing)}")
+        update = self.run_visible(["sudo", "apt-get", "update"], label="Refresh apt package metadata")
+        if update.returncode != 0:
+            raise RuntimeError("Failed to refresh apt package metadata")
+        proc = self.run_visible(["sudo", "apt-get", "install", "-y", *missing], label=f"Install {' '.join(missing)}")
         if proc.returncode != 0:
             raise RuntimeError(f"Failed to install packages: {' '.join(missing)}")
 
     def ensure_backend(self) -> None:
         self.ensure_system_packages(["python3", "python3-venv", "python3-pip", "git"])
         if not self.venv_python.exists():
-            proc = self.run(["python3", "-m", "venv", str(self.repo_root / ".venv")])
+            proc = self.run_visible(["python3", "-m", "venv", str(self.repo_root / ".venv")], label="Create Python virtual environment")
             if proc.returncode != 0:
                 raise RuntimeError("Failed to create Python virtual environment")
+        else:
+            print(f"    Python virtual environment: {self.venv_python}")
         pip = [str(self.venv_python), "-m", "pip"]
         for command in ([*pip, "install", "--upgrade", "pip"], [*pip, "install", "-e", ".[dev]"]):
-            proc = self.run(command)
+            proc = self.run_visible(command, label=" ".join(command[3:]))
             if proc.returncode != 0:
                 raise RuntimeError(f"Failed backend bootstrap: {' '.join(command)}")
 
     def ensure_corepack(self) -> None:
         if shutil.which("corepack"):
+            print("    Corepack: available")
             return
         if not shutil.which("npm"):
             raise RuntimeError("npm is required to install corepack")
-        proc = self.run(["sudo", "npm", "install", "-g", "corepack"])
+        proc = self.run_visible(["sudo", "npm", "install", "-g", "corepack"], label="Install corepack")
         if proc.returncode != 0:
             raise RuntimeError("Failed to install corepack with npm")
 
@@ -134,12 +247,12 @@ class Wizard:
         self.ensure_system_packages(["nodejs", "npm"])
         self.ensure_corepack()
         frontend_root = self.repo_root / "frontend"
-        proc = self.run(["corepack", "pnpm", "install"], cwd=frontend_root)
+        proc = self.run_visible(["corepack", "pnpm", "install"], cwd=frontend_root, label="Install frontend dependencies")
         if proc.returncode != 0:
             raise RuntimeError("Failed frontend dependency install")
         built = False
         if build:
-            proc = self.run(["corepack", "pnpm", "build"], cwd=frontend_root)
+            proc = self.run_visible(["corepack", "pnpm", "build"], cwd=frontend_root, label="Build frontend")
             if proc.returncode != 0:
                 raise RuntimeError("Failed frontend build")
             built = True
@@ -260,13 +373,35 @@ class Wizard:
                 return package
         return ""
 
+    def cve_api_ready(self, url: str) -> bool:
+        code = (
+            "import sys, urllib.error, urllib.request;"
+            "url=sys.argv[1].rstrip('/') + '/api/browse';"
+            "\ntry:\n"
+            "    with urllib.request.urlopen(url, timeout=3) as resp:\n"
+            "        print(resp.status)\n"
+            "except Exception:\n"
+            "    print(0)\n"
+        )
+        proc = self.run([str(self.venv_python), "-c", code, url])
+        return (proc.stdout or "").strip() == "200"
+
     def configure_cve(self) -> dict[str, Any]:
-        deploy = self.confirm("Deploy local CVE search and MCP", default=True)
+        deploy = self.confirm("Use local CVE search and MCP", default=True)
         refresh = self.choose("CVE refresh cadence", ["manual", "daily", "weekly"], "weekly")
-        result = {"selected": deploy, "deployed": False, "refresh_cadence": refresh, "degraded": False}
+        url = self.env_updates.get("SECOPS_CVE_SEARCH_URL", "http://127.0.0.1:5000")
+        result = {"selected": deploy, "deployed": False, "refresh_cadence": refresh, "degraded": False, "url": url, "existing": False}
         if not deploy:
             self.env_updates["SECOPS_ENABLE_CVE_MCP"] = "false"
             self._configure_cve_refresh(refresh="manual")
+            return result
+        if self.cve_api_ready(url):
+            print(f"    Existing CVE API is reachable: {url}")
+            result.update({"deployed": True, "existing": True})
+            self.env_updates["SECOPS_CVE_SEARCH_URL"] = url
+            self.env_updates["SECOPS_ENABLE_CVE_MCP"] = "true"
+            self.env_updates["SECOPS_CVE_MCP_REQUIRE_TOKEN"] = "true"
+            self._configure_cve_refresh(refresh)
             return result
         packages = ["redis-server"]
         mongo_pkg = self._available_mongo_package()
@@ -278,21 +413,26 @@ class Wizard:
             result["degraded"] = True
         self.ensure_system_packages(packages)
         cve_root = self.repo_root / "tools" / "cve-search"
-        proc = self.run(["python3", "-m", "venv", str(cve_root / ".venv")], cwd=cve_root)
+        proc = self.run_visible(["python3", "-m", "venv", str(cve_root / ".venv")], cwd=cve_root, label="Create cve-search virtual environment")
         if proc.returncode != 0 and not (cve_root / ".venv" / "bin" / "python").exists():
             raise RuntimeError("Failed to create cve-search virtual environment")
         pip = [str(cve_root / ".venv" / "bin" / "python"), "-m", "pip"]
         for command in ([*pip, "install", "--upgrade", "pip"], [*pip, "install", "-r", "requirements.txt"]):
-            proc = self.run(command, cwd=cve_root)
+            proc = self.run_visible(command, cwd=cve_root, label=" ".join(command[3:]))
             if proc.returncode != 0:
                 if not self.confirm("cve-search dependency install failed. Continue in degraded mode", default=False):
                     raise RuntimeError("Local CVE dependency install failed")
                 result["degraded"] = True
                 break
         if not result["degraded"]:
-            self.run(["bash", str(self.repo_root / "scripts" / "secops-cve-search.sh"), "start"])
-            result["deployed"] = True
-        self.env_updates["SECOPS_CVE_SEARCH_URL"] = "http://127.0.0.1:5000"
+            proc = self.run_visible(["bash", str(self.repo_root / "scripts" / "secops-cve-search.sh"), "start"], label="Start local CVE search")
+            if proc.returncode != 0:
+                raise RuntimeError("Failed to start local CVE search")
+            result["deployed"] = self.cve_api_ready(url)
+            if not result["deployed"]:
+                print("    [WARN] CVE start command completed, but the API probe is not ready yet.")
+                result["degraded"] = True
+        self.env_updates["SECOPS_CVE_SEARCH_URL"] = url
         self.env_updates["SECOPS_ENABLE_CVE_MCP"] = "true"
         self.env_updates["SECOPS_CVE_MCP_REQUIRE_TOKEN"] = "true"
         self._configure_cve_refresh(refresh)
@@ -343,9 +483,77 @@ class Wizard:
         if suite == "skip":
             return {"suite": "skip", "results": []}
         suite_tools = self.tool_service.suites().get(suite, {}).get("tools", [])
-        print(f"[*] Installing tool suite: {suite} ({len(suite_tools)} tools)")
+        print(f"    Installing tool suite: {suite} ({len(suite_tools)} tools)")
         results = self.tool_service.install_tools(suite_tools, apply=True)
+        ok_count = sum(1 for row in results if row.get("ok"))
+        for row in results:
+            status = row.get("status") or row.get("reason") or ("ok" if row.get("ok") else "failed")
+            print(f"    - {row.get('tool_id')}: {status}")
+        print(f"    Tool suite result: {ok_count}/{len(results)} ready")
         return {"suite": suite, "results": results}
+
+    def _user_systemd_dir(self) -> Path:
+        config_home = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+        return config_home / "systemd" / "user"
+
+    def install_user_systemd_units(self) -> dict[str, Any]:
+        unit_dir = self._user_systemd_dir()
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        units = {
+            SERVICE_NAMES["api"]: render_user_systemd_unit(
+                description="Vantix API",
+                repo_root=self.repo_root,
+                script_path=self.repo_root / "scripts" / "secops-api.sh",
+            ),
+            SERVICE_NAMES["ui"]: render_user_systemd_unit(
+                description="Vantix UI",
+                repo_root=self.repo_root,
+                script_path=self.repo_root / "scripts" / "secops-ui.sh",
+            ),
+        }
+        written: list[str] = []
+        for name, content in units.items():
+            path = unit_dir / name
+            path.write_text(content, encoding="utf-8")
+            written.append(str(path))
+            print(f"    Wrote {path}")
+        return {"unit_dir": str(unit_dir), "unit_files": written, "unit_names": list(units)}
+
+    def configure_user_systemd(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "mode": "manual",
+            "installed": False,
+            "enabled": False,
+            "started": False,
+            "linger": False,
+            "units": list(SERVICE_NAMES.values()),
+        }
+        if not self.confirm("Install Vantix API/UI as user systemd services", default=True):
+            print("    Service mode: manual scripts")
+            return result
+        if not shutil.which("systemctl"):
+            raise RuntimeError("systemctl was not found; cannot install user systemd services")
+        unit_info = self.install_user_systemd_units()
+        result.update({"mode": "user-systemd", "installed": True, **unit_info})
+        proc = self.run_visible(["systemctl", "--user", "daemon-reload"], label="Reload user systemd manager")
+        if proc.returncode != 0:
+            raise RuntimeError("Failed to reload the user systemd manager")
+        if self.confirm("Enable and start Vantix services now", default=True):
+            proc = self.run_visible(["systemctl", "--user", "enable", "--now", *SERVICE_NAMES.values()], label="Enable and start Vantix services")
+            if proc.returncode != 0:
+                raise RuntimeError("Failed to enable/start Vantix user services")
+            result.update({"enabled": True, "started": True})
+        if self.confirm("Enable boot startup without an active login using loginctl linger", default=False):
+            user = os.getenv("USER") or getpass.getuser()
+            proc = self.run_visible(["loginctl", "enable-linger", user], label=f"Enable lingering for {user}")
+            if proc.returncode == 0:
+                result["linger"] = True
+            else:
+                print("    [WARN] Linger setup failed. Services still work while the user systemd manager is running.")
+                result["linger_error"] = proc.stdout
+        status = self.run(["systemctl", "--user", "is-active", *SERVICE_NAMES.values()])
+        result["active"] = (status.stdout or "").splitlines()
+        return result
 
     def write_env(self) -> None:
         write_env_file(self.env_path, self.env_updates, template_path=self.env_example)
@@ -371,19 +579,33 @@ class Wizard:
         }
 
     def run_wizard(self) -> dict[str, Any]:
+        self.print_intro()
+        self.section("Host preflight", "Checking the operating system and installer prerequisites.")
         os_info = self.os_info()
         if not os_info["debian_family"]:
             raise RuntimeError("Vantix installer currently supports Debian-family hosts only")
-        print(f"== Vantix Installer ==\nOS: {os_info['name']}")
+        print(f"    OS: {os_info['name']}")
+        self.section("Runtime configuration", "Choosing user-owned runtime paths and writing .env.")
         self.configure_runtime()
         self.write_env()
+        self.section("Backend environment", "Installing Python dependencies and the editable backend package.")
         self.ensure_backend()
+        self.section("Web UI", "Installing frontend dependencies and optionally building the static UI.")
         frontend = self.ensure_frontend(build=self.confirm("Build the static Web UI now", default=True))
+        self.section("Runtime provider", "Checking Codex and optional model provider configuration.")
         runtime = self.configure_provider_flow()
+        self.section("CVE intel", "Configuring optional local CVE search and MCP support.")
         cve = self.configure_cve()
+        self.section("Host tool suite", "Installing selected operator tools from the allowlisted registry.")
         tools = self.configure_tools()
         self.write_env()
+        self.section("Verification", "Checking backend, frontend, runtime, CVE, and tool readiness.")
         verify = self.verify()
+        print(f"    Ready: {bool(verify['ready'])}")
+        print(f"    Frontend built: {bool(verify['frontend_built'])}")
+        print(f"    Tools installed: {verify['installed_tools']}/{verify['tool_count']}")
+        self.section("Service startup", "Optionally installing user systemd services for API and UI.")
+        services = self.configure_user_systemd()
         state = {
             "ready": bool(verify["ready"]),
             "repo_root": str(self.repo_root),
@@ -395,6 +617,7 @@ class Wizard:
             "cve": cve,
             "tools": tools,
             "verify": verify,
+            "services": services,
         }
         self.state.write(state)
         return state
@@ -416,9 +639,18 @@ def main(argv: list[str] | None = None) -> int:
     print("\n[+] Installation complete")
     print(f"    ready={state.get('ready')}")
     print(f"    runtime_root={state.get('runtime_root')}")
-    print("    start_api: bash scripts/secops-api.sh")
-    print("    start_ui:  bash scripts/secops-ui.sh")
-    print("    status:    bash scripts/doctor.sh")
+    services = state.get("services") or {}
+    if services.get("mode") == "user-systemd" and services.get("installed"):
+        print("    service_mode=user-systemd")
+        print("    status:  systemctl --user status vantix-api.service vantix-ui.service")
+        print("    logs:    journalctl --user -u vantix-api.service -u vantix-ui.service -f")
+        if not services.get("started"):
+            print("    start:   systemctl --user enable --now vantix-api.service vantix-ui.service")
+    else:
+        print("    service_mode=manual")
+        print("    start:  bash scripts/vantixctl.sh start")
+        print("    status: bash scripts/vantixctl.sh status")
+    print("    doctor: bash scripts/doctor.sh")
     return 0
 
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from secops.installer import default_runtime_root, write_env_file
+from secops.installer import banner_text, default_runtime_root, render_progress_bar, render_user_systemd_unit, write_env_file
 from secops.services.installer_state import InstallerStateService
 from secops.services.tools import ToolService
 
@@ -20,6 +20,40 @@ def test_write_env_file_updates_existing_values(tmp_path: Path) -> None:
     assert "A=1" in text
     assert "B=3" in text
     assert "C=4" in text
+
+
+def test_banner_text_uses_drop_art_when_present(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    drop = tmp_path / "drop"
+    repo_root.mkdir()
+    drop.mkdir()
+    (drop / "vantix.txt").write_text("ASCII VANTIX\n", encoding="utf-8")
+
+    assert banner_text(repo_root) == "ASCII VANTIX"
+
+
+def test_banner_text_has_embedded_fallback(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    assert "888     888" in banner_text(repo_root)
+
+
+def test_progress_bar_renders_known_total() -> None:
+    assert render_progress_bar(2, 4, width=8) == "[####----] 2/4"
+    assert render_progress_bar(9, 4, width=8) == "[########] 4/4"
+
+
+def test_render_user_systemd_unit_contains_repo_paths(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    script_path = repo_root / "scripts" / "secops-api.sh"
+    unit = render_user_systemd_unit(description="Vantix API", repo_root=repo_root, script_path=script_path)
+
+    assert "Description=Vantix API" in unit
+    assert f"WorkingDirectory={repo_root}" in unit
+    assert f"EnvironmentFile=-{repo_root / '.env'}" in unit
+    assert f"ExecStart=/usr/bin/env bash {script_path}" in unit
+    assert "Restart=on-failure" in unit
 
 
 def test_installer_state_round_trip(tmp_path: Path) -> None:

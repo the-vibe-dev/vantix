@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -29,6 +30,33 @@ def _writable(path: Path) -> bool:
         return False
 
 
+def _git_status(repo_root: Path) -> dict:
+    def run(*args: str) -> str:
+        proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            return ""
+        return (proc.stdout or "").strip()
+
+    if not (repo_root / ".git").exists():
+        return {"available": False}
+    current = run("rev-parse", "HEAD")
+    target = run("rev-parse", "origin/main")
+    ahead = run("rev-list", "--count", "HEAD..origin/main") if target else "0"
+    behind = run("rev-list", "--count", "origin/main..HEAD") if target else "0"
+    dirty = run("status", "--porcelain", "--untracked-files=all")
+    return {
+        "available": True,
+        "branch": run("branch", "--show-current"),
+        "remote": run("remote", "get-url", "origin"),
+        "current_commit": current,
+        "target_commit": target,
+        "updates_available": bool(target and current != target and ahead not in {"", "0"}),
+        "ahead_count": int(ahead or 0),
+        "behind_count": int(behind or 0),
+        "clean": not bool(dirty),
+    }
+
+
 @router.get("/status", response_model=SystemStatusRead)
 def system_status(db: Session = Depends(get_db)) -> dict:
     runner = CodexRunner(workspace_dir=settings.runtime_root / "status" / "codex")
@@ -38,7 +66,9 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     artifacts_ok = _writable(artifacts_root)
     memory = MemoryWriteService().health(stale_minutes=120)
     provider_count = db.query(ProviderConfig).count()
-    installer_state = InstallerStateService().read()
+    installer_service = InstallerStateService()
+    installer_state = installer_service.read()
+    git = _git_status(settings.repo_root)
     tool_service = ToolService()
     tool_statuses = tool_service.list_tools()
     installed_tools = sum(1 for row in tool_statuses if row.get("installed"))
@@ -69,6 +99,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "updated_at": installer_state.get("updated_at", ""),
             "selected_suite": (installer_state.get("tools") or {}).get("suite", ""),
             "cve_refresh": (installer_state.get("cve") or {}).get("refresh_cadence", ""),
+            "git": git,
+            "last_update": installer_state.get("last_update", {}),
         },
         "tooling": {
             "count": len(tool_statuses),
@@ -83,5 +115,8 @@ def system_status(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/install-status", response_model=InstallerStateRead)
 def install_status() -> dict:
-    state = InstallerStateService().read()
+    service = InstallerStateService()
+    state = service.read()
+    state.setdefault("update_history", service.update_history(limit=20))
+    state.setdefault("git", _git_status(settings.repo_root))
     return {"ready": bool(state.get("ready")), "updated_at": state.get("updated_at", ""), "state": state}
