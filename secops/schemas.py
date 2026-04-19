@@ -201,6 +201,96 @@ class RunEventRead(BaseModel):
     created_at: datetime
 
 
+class WorkflowExecutionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workflow_kind: str
+    status: str
+    current_phase: str
+    attempt_count: int
+    blocked_reason: str
+    error_class: str
+    metadata: dict[str, Any] = Field(validation_alias="metadata_json")
+    started_at: datetime | None
+    completed_at: datetime | None
+    updated_at: datetime
+    created_at: datetime
+
+
+class WorkflowPhaseRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workflow_id: str
+    phase_name: str
+    attempt: int
+    status: str
+    retry_class: str
+    worker_id: str
+    lease_expires_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    next_attempt_at: datetime | None
+    input: dict[str, Any] = Field(validation_alias="input_json")
+    output: dict[str, Any] = Field(validation_alias="output_json")
+    error: dict[str, Any] = Field(validation_alias="error_json")
+    metadata: dict[str, Any] = Field(validation_alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+
+class RunCheckpointRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workflow_id: str | None
+    phase_name: str
+    phase_attempt: int
+    checkpoint_key: str
+    status: str
+    payload: dict[str, Any] = Field(validation_alias="payload_json")
+    is_latest: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkerLeaseRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workflow_id: str | None
+    phase_name: str
+    phase_run_id: str | None
+    worker_id: str
+    status: str
+    heartbeat_at: datetime
+    lease_expires_at: datetime
+    released_at: datetime | None
+    metadata: dict[str, Any] = Field(validation_alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+
+class RunMetricRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workflow_id: str | None
+    phase_name: str
+    metric_name: str
+    metric_value: float
+    metric_unit: str
+    tags: list[str]
+    metadata: dict[str, Any] = Field(validation_alias="metadata_json")
+    created_at: datetime
+
+
 class ApprovalRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

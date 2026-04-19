@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from secops.db import Base
@@ -63,6 +63,11 @@ class WorkspaceRun(Base):
     agent_sessions: Mapped[list["AgentSession"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     facts: Mapped[list["Fact"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     messages: Mapped[list["RunMessage"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    workflows: Mapped[list["WorkflowExecution"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    workflow_phase_runs: Mapped[list["WorkflowPhaseRun"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    run_checkpoints: Mapped[list["RunCheckpoint"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    worker_leases: Mapped[list["WorkerLease"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    run_metrics: Mapped[list["RunMetric"]] = relationship(back_populates="run", cascade="all, delete-orphan")
 
 
 class Task(Base):
@@ -323,6 +328,138 @@ class ProviderConfig(Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WorkflowExecution(Base):
+    __tablename__ = "workflow_executions"
+    __table_args__ = (
+        Index("ix_workflow_executions_run_status", "run_id", "status"),
+        Index("ix_workflow_executions_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    workflow_kind: Mapped[str] = mapped_column(String(64), default="vantix-run")
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    current_phase: Mapped[str] = mapped_column(String(64), default="context-bootstrap")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_reason: Mapped[str] = mapped_column(String(255), default="")
+    error_class: Mapped[str] = mapped_column(String(64), default="")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="workflows")
+    phase_runs: Mapped[list["WorkflowPhaseRun"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+    checkpoints: Mapped[list["RunCheckpoint"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+    leases: Mapped[list["WorkerLease"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+    metrics: Mapped[list["RunMetric"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+
+
+class WorkflowPhaseRun(Base):
+    __tablename__ = "workflow_phase_runs"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "phase_name", "attempt", name="uq_workflow_phase_attempt"),
+        Index("ix_workflow_phase_runs_run_phase", "run_id", "phase_name"),
+        Index("ix_workflow_phase_runs_claim", "status", "lease_expires_at"),
+        Index("ix_workflow_phase_runs_latest", "workflow_id", "phase_name", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflow_executions.id"), index=True)
+    phase_name: Mapped[str] = mapped_column(String(64), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    retry_class: Mapped[str] = mapped_column(String(32), default="none")
+    worker_id: Mapped[str] = mapped_column(String(64), default="")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    input_json: Mapped[dict[str, Any]] = mapped_column("input", JSON, default=dict)
+    output_json: Mapped[dict[str, Any]] = mapped_column("output", JSON, default=dict)
+    error_json: Mapped[dict[str, Any]] = mapped_column("error", JSON, default=dict)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="workflow_phase_runs")
+    workflow: Mapped[WorkflowExecution] = relationship(back_populates="phase_runs")
+
+
+class RunCheckpoint(Base):
+    __tablename__ = "run_checkpoints"
+    __table_args__ = (
+        Index("ix_run_checkpoints_run_phase_latest", "run_id", "phase_name", "is_latest"),
+        Index("ix_run_checkpoints_lookup", "workflow_id", "phase_name", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_executions.id"), nullable=True, index=True)
+    phase_name: Mapped[str] = mapped_column(String(64), index=True)
+    phase_attempt: Mapped[int] = mapped_column(Integer, default=1)
+    checkpoint_key: Mapped[str] = mapped_column(String(128), default="state")
+    status: Mapped[str] = mapped_column(String(32), default="ready")
+    payload_json: Mapped[dict[str, Any]] = mapped_column("payload", JSON, default=dict)
+    is_latest: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="run_checkpoints")
+    workflow: Mapped[WorkflowExecution | None] = relationship(back_populates="checkpoints")
+
+
+class WorkerLease(Base):
+    __tablename__ = "worker_leases"
+    __table_args__ = (
+        Index("ix_worker_leases_status_expiry", "status", "lease_expires_at"),
+        Index("ix_worker_leases_worker_heartbeat", "worker_id", "heartbeat_at"),
+        Index("ix_worker_leases_run_phase", "run_id", "phase_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_executions.id"), nullable=True, index=True)
+    phase_name: Mapped[str] = mapped_column(String(64), index=True)
+    phase_run_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_phase_runs.id"), nullable=True, index=True)
+    worker_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="worker_leases")
+    workflow: Mapped[WorkflowExecution | None] = relationship(back_populates="leases")
+
+
+class RunMetric(Base):
+    __tablename__ = "run_metrics"
+    __table_args__ = (
+        Index("ix_run_metrics_run_metric", "run_id", "metric_name"),
+        Index("ix_run_metrics_workflow_phase", "workflow_id", "phase_name"),
+        Index("ix_run_metrics_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_executions.id"), nullable=True, index=True)
+    phase_name: Mapped[str] = mapped_column(String(64), default="")
+    metric_name: Mapped[str] = mapped_column(String(64), index=True)
+    metric_value: Mapped[float] = mapped_column(Float, default=0.0)
+    metric_unit: Mapped[str] = mapped_column(String(32), default="")
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="run_metrics")
+    workflow: Mapped[WorkflowExecution | None] = relationship(back_populates="metrics")
 
 
 class Finding(Base):
