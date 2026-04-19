@@ -111,6 +111,8 @@ class ToolService:
         for args in ([path, "--version"], [path, "version"], [path, "-V"]):
             try:
                 proc = subprocess.run(args, capture_output=True, text=True, check=False, timeout=10)
+            except subprocess.TimeoutExpired:
+                continue
             except OSError:
                 continue
             output = (proc.stdout or proc.stderr or "").strip().splitlines()

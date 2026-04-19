@@ -197,6 +197,17 @@ class Wizard:
         print(f"       [{status}] {elapsed:.1f}s")
         return subprocess.CompletedProcess(command, returncode, "\n".join(lines), "")
 
+    def run_interactive(self, command: list[str], *, label: str, env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        start = time.monotonic()
+        workdir = cwd or self.repo_root
+        print(f"    -> {label}")
+        print(f"       $ {' '.join(shlex.quote(part) for part in command)}")
+        proc = subprocess.run(command, cwd=workdir, env=env, check=False, text=True)
+        elapsed = time.monotonic() - start
+        status = "ok" if proc.returncode == 0 else f"failed rc={proc.returncode}"
+        print(f"       [{status}] {elapsed:.1f}s")
+        return proc
+
     def os_info(self) -> dict[str, Any]:
         return self.tool_service.os_info()
 
@@ -377,6 +388,64 @@ class Wizard:
         configured = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
         return bool(shutil.which(configured) or Path(configured).exists())
 
+    def ensure_codex_cli(self) -> bool:
+        if self.codex_available():
+            print("    Codex CLI: available")
+            return True
+        print("    Codex CLI: missing, attempting install")
+        if not self.ensure_system_packages(["nodejs", "npm"], required=False):
+            print("    [WARN] Could not install Node/npm, skipping Codex CLI install.")
+            return False
+        install = self.run_visible(["npm", "install", "-g", "@openai/codex"], label="Install Codex CLI (@openai/codex)")
+        if install.returncode != 0:
+            install = self.run_visible(["sudo", "npm", "install", "-g", "@openai/codex"], label="Install Codex CLI with sudo")
+            if install.returncode != 0:
+                print("    [WARN] Codex CLI install failed.")
+                print("    [HINT] Try manually: npm install -g @openai/codex")
+                return False
+        codex_bin = shutil.which("codex")
+        if codex_bin:
+            self.env_updates["SECOPS_CODEX_BIN"] = codex_bin
+        return self.codex_available()
+
+    def codex_device_login(self) -> bool:
+        if not self.codex_available():
+            return False
+        codex_bin = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
+        print("    Codex login: starting device auth flow")
+        proc = self.run_interactive([codex_bin, "--device-auth"], label="Sign in Codex CLI (device auth)")
+        if proc.returncode == 0:
+            return True
+        print("    [WARN] codex --device-auth failed, trying codex --login")
+        proc = self.run_interactive([codex_bin, "--login"], label="Sign in Codex CLI (fallback login)")
+        return proc.returncode == 0
+
+    def bootstrap_provider_runtime(self, provider_type: str) -> dict[str, Any]:
+        provider = (provider_type or "").strip().lower()
+        if provider != "ollama":
+            return {"provider_type": provider, "runtime_installed": True, "detail": "no local runtime bootstrap required"}
+        if shutil.which("ollama"):
+            return {"provider_type": provider, "runtime_installed": True, "detail": "ollama already installed"}
+        if not self.ensure_system_packages(["curl"], required=False):
+            return {
+                "provider_type": provider,
+                "runtime_installed": False,
+                "detail": "curl missing; cannot auto-install ollama",
+                "hint": "Install curl and run: curl -fsSL https://ollama.com/install.sh | sh",
+            }
+        proc = self.run_visible(
+            ["bash", "-lc", "curl -fsSL https://ollama.com/install.sh | sh"],
+            label="Install Ollama runtime",
+        )
+        if proc.returncode != 0 or not shutil.which("ollama"):
+            return {
+                "provider_type": provider,
+                "runtime_installed": False,
+                "detail": "ollama install failed",
+                "hint": "Run manually: curl -fsSL https://ollama.com/install.sh | sh",
+            }
+        return {"provider_type": provider, "runtime_installed": True, "detail": "ollama installed"}
+
     def configure_runtime(self) -> None:
         default_runtime = str(self.runtime_root)
         runtime = self.prompt("Runtime root", default_runtime)
@@ -397,8 +466,15 @@ class Wizard:
         )
 
     def configure_provider_flow(self) -> dict[str, Any]:
+        codex_ok = self.ensure_codex_cli()
         codex_ok = self.codex_available()
+        codex_logged_in = False
+        if codex_ok and self.confirm("Authenticate Codex CLI now with device auth", default=True):
+            codex_logged_in = self.codex_device_login()
+            if not codex_logged_in:
+                print("    [WARN] Codex login did not complete. You can run 'codex --device-auth' later.")
         provider_added = False
+        provider_runtime: dict[str, Any] = {"provider_type": "", "runtime_installed": True}
         while True:
             if codex_ok:
                 add_provider = self.confirm("Configure an optional provider record now", default=False)
@@ -428,11 +504,22 @@ class Wizard:
                 }
                 self.write_env()
                 self.bootstrap_provider(payload)
+                provider_runtime = self.bootstrap_provider_runtime(provider_type)
+                if not provider_runtime.get("runtime_installed", True):
+                    print(f"    [WARN] {provider_runtime.get('detail', 'provider bootstrap incomplete')}")
+                    hint = str(provider_runtime.get("hint", "")).strip()
+                    if hint:
+                        print(f"    [HINT] {hint}")
                 provider_added = True
             provider_count = self.provider_count()
             if codex_ok or provider_count > 0 or provider_added:
                 self.env_updates["SECOPS_ENABLE_CODEX_EXECUTION"] = "true" if codex_ok else "false"
-                return {"codex_available": codex_ok, "provider_count": provider_count}
+                return {
+                    "codex_available": codex_ok,
+                    "codex_logged_in": codex_logged_in,
+                    "provider_count": provider_count,
+                    "provider_runtime": provider_runtime,
+                }
             if not self.confirm("No runtime is configured. Retry provider setup", default=True):
                 raise RuntimeError("At least one runtime must be configured before setup can complete")
 
@@ -648,6 +735,17 @@ class Wizard:
             "tool_count": len(tool_statuses),
         }
 
+    def interface_urls(self) -> dict[str, str]:
+        api_host = self.env_updates.get("SECOPS_HOST", "127.0.0.1")
+        api_port = self.env_updates.get("SECOPS_PORT", "8787")
+        ui_host = self.env_updates.get("SECOPS_UI_HOST", "127.0.0.1")
+        ui_port = self.env_updates.get("SECOPS_UI_PORT", "4173")
+        return {
+            "api_base": f"http://{api_host}:{api_port}",
+            "ui_root": f"http://{ui_host}:{ui_port}",
+            "ui_app": f"http://{api_host}:{api_port}/ui",
+        }
+
     def run_wizard(self) -> dict[str, Any]:
         self.print_intro()
         self.section("Host preflight", "Checking the operating system and installer prerequisites.")
@@ -688,6 +786,7 @@ class Wizard:
             "tools": tools,
             "verify": verify,
             "services": services,
+            "interfaces": self.interface_urls(),
         }
         self.state.write(state)
         return state
@@ -709,6 +808,10 @@ def main(argv: list[str] | None = None) -> int:
     print("\n[+] Installation complete")
     print(f"    ready={state.get('ready')}")
     print(f"    runtime_root={state.get('runtime_root')}")
+    interfaces = state.get("interfaces") or {}
+    print(f"    api_url={interfaces.get('api_base', 'http://127.0.0.1:8787')}")
+    print(f"    ui_url={interfaces.get('ui_root', 'http://127.0.0.1:4173')}")
+    print(f"    bundled_ui_url={interfaces.get('ui_app', 'http://127.0.0.1:8787/ui')}")
     services = state.get("services") or {}
     if services.get("mode") == "user-systemd" and services.get("installed"):
         print("    service_mode=user-systemd")

@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+from unittest.mock import patch
 
 from secops.installer import banner_text, default_runtime_root, render_progress_bar, render_user_systemd_unit, write_env_file
 from secops.services.installer_state import InstallerStateService
@@ -136,3 +138,9 @@ suites:
     results = service.install_tools(["apt-tool"], apply=True)
     assert results[0]["ok"] is False
     assert results[0]["reason"] == "apt-sources-missing"
+
+
+def test_binary_version_timeout_is_non_fatal(tmp_path: Path) -> None:
+    service = ToolService(repo_root=tmp_path, runtime_root=tmp_path / "runtime")
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["fake"], timeout=1)):
+        assert service._binary_version("/usr/bin/fake") == ""
