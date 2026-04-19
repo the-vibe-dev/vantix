@@ -17,6 +17,7 @@ import {
   SystemStatus,
   Task,
   Vector,
+  WorkflowState,
   api,
   getApiToken,
   setApiToken,
@@ -50,6 +51,7 @@ export default function App() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [phase, setPhase] = useState<RunPhase | null>(null);
+  const [workflowState, setWorkflowState] = useState<WorkflowState | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentSession[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -105,7 +107,7 @@ export default function App() {
 
   async function refreshRun(runId: string) {
     try {
-      const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runHandoff, chains, planning] = await Promise.all([
+      const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runHandoff, chains, planning, workflow] = await Promise.all([
         api.getRun(runId),
         api.getGraph(runId),
         api.getFacts(runId),
@@ -117,10 +119,12 @@ export default function App() {
         api.getHandoff(runId),
         api.getAttackChains(runId),
         api.getPlanningBundle(runId),
+        api.getWorkflowState(runId),
       ]);
       setSelectedRun(run);
       setRoutedProviderId(String((run.config?.provider_id as string | undefined) || ""));
       setPhase(graph.phase);
+      setWorkflowState(workflow);
       setTasks(graph.tasks);
       setAgents(graph.agents);
       setApprovals(graph.approvals);
@@ -149,6 +153,7 @@ export default function App() {
     setSelectedRun(null);
     setRoutedProviderId("");
     setPhase(null);
+    setWorkflowState(null);
     setTasks([]);
     setAgents([]);
     setApprovals([]);
@@ -298,7 +303,7 @@ export default function App() {
         />
         <section className="command-grid">
           <OrchestratorChat messages={messages} chatText={chatText} setChatText={setChatText} onSend={sendChat} />
-          <RunPhasePanel phase={phase} />
+          <RunPhasePanel phase={phase} workflowState={workflowState} />
           <AgentTimeline agents={agents} tasks={tasks} roles={roles} />
           <TerminalPanel terminalText={terminalText} fallback={terminalFallback} />
           <SkillPanel applications={skillApps} selectedRun={selectedRun} onApply={() => selectedRun && api.applySkills(selectedRun.id).then(() => refreshRun(selectedRun.id))} />

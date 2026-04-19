@@ -462,6 +462,28 @@ class RunMetric(Base):
     workflow: Mapped[WorkflowExecution | None] = relationship(back_populates="metrics")
 
 
+class WorkerRuntimeStatus(Base):
+    __tablename__ = "worker_runtime_status"
+    __table_args__ = (
+        Index("ix_worker_runtime_status_heartbeat", "heartbeat_at"),
+        Index("ix_worker_runtime_status_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    worker_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    hostname: Mapped[str] = mapped_column(String(255), default="")
+    pid: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="idle")
+    current_run_id: Mapped[str] = mapped_column(String(36), default="")
+    current_phase: Mapped[str] = mapped_column(String(64), default="")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Finding(Base):
     __tablename__ = "findings"
 

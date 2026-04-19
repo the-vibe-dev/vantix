@@ -35,6 +35,49 @@ export type RunPhase = {
   history: Array<Record<string, unknown>>;
 };
 
+export type WorkflowState = {
+  run_id: string;
+  workflow?: {
+    id: string;
+    status: string;
+    current_phase: string;
+    attempt_count: number;
+    blocked_reason?: string;
+    error_class?: string;
+  } | null;
+  phases: Array<{
+    id: string;
+    phase_name: string;
+    attempt: number;
+    status: string;
+    retry_class: string;
+    worker_id: string;
+    error: Record<string, unknown>;
+    started_at?: string | null;
+    completed_at?: string | null;
+    lease_expires_at?: string | null;
+  }>;
+  leases: Array<{
+    id: string;
+    worker_id: string;
+    status: string;
+    phase_name: string;
+    lease_expires_at: string;
+    heartbeat_at: string;
+  }>;
+  workers: Array<{
+    worker_id: string;
+    status: string;
+    heartbeat_at: string;
+    current_run_id: string;
+    current_phase: string;
+    lease_expires_at?: string | null;
+    last_error?: string;
+  }>;
+  blocked_reasons: string[];
+  metrics: Record<string, unknown>;
+};
+
 export type Approval = {
   id: string;
   title: string;
@@ -299,6 +342,7 @@ export const api = {
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
   getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
+  getWorkflowState: (runId: string) => request<WorkflowState>(`/api/v1/runs/${runId}/workflow-state`),
   getMessages: (runId: string) => request<RunMessage[]>(`/api/v1/runs/${runId}/messages`),
   getLearning: (runId: string) => request<{ run_id: string; mode: string; results: Array<Record<string, unknown>> }>(`/api/v1/runs/${runId}/learning`),
   getFacts: (runId: string) => request<Fact[]>(`/api/v1/runs/${runId}/facts`),

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from secops.config import settings
 from secops.db import get_db
-from secops.models import ProviderConfig
+from secops.models import ProviderConfig, WorkerRuntimeStatus
 from secops.schemas import InstallerStateRead, SystemStatusRead
 from secops.security import require_api_token
 from secops.services.codex_runner import CodexRunner
@@ -74,6 +74,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     tool_service = ToolService()
     tool_statuses = tool_service.list_tools()
     installed_tools = sum(1 for row in tool_statuses if row.get("installed"))
+    workers = db.query(WorkerRuntimeStatus).order_by(WorkerRuntimeStatus.heartbeat_at.desc()).limit(10).all()
     warnings: list[str] = []
     if not codex_path:
         warnings.append("Codex binary is not available on PATH or SECOPS_CODEX_BIN")
@@ -112,6 +113,18 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "kali": tool_service.os_info().get("kali", False),
         },
         "worker": asdict(worker_runtime.snapshot()),
+        "workers": [
+            {
+                "worker_id": row.worker_id,
+                "status": row.status,
+                "heartbeat_at": row.heartbeat_at.isoformat(),
+                "current_run_id": row.current_run_id,
+                "current_phase": row.current_phase,
+                "lease_expires_at": row.lease_expires_at.isoformat() if row.lease_expires_at else "",
+                "last_error": row.last_error,
+            }
+            for row in workers
+        ],
         "warnings": warnings,
     }
 

@@ -291,6 +291,34 @@ class RunMetricRead(BaseModel):
     created_at: datetime
 
 
+class WorkerRuntimeStatusRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    worker_id: str
+    hostname: str
+    pid: int
+    status: str
+    current_run_id: str
+    current_phase: str
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime
+    last_error: str
+    metadata: dict[str, Any] = Field(validation_alias="metadata_json")
+    started_at: datetime
+    updated_at: datetime
+
+
+class WorkflowStateRead(BaseModel):
+    run_id: str
+    workflow: WorkflowExecutionRead | None = None
+    phases: list[WorkflowPhaseRunRead] = Field(default_factory=list)
+    leases: list[WorkerLeaseRead] = Field(default_factory=list)
+    workers: list[WorkerRuntimeStatusRead] = Field(default_factory=list)
+    blocked_reasons: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
 class ApprovalRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -583,6 +611,8 @@ class SystemStatusRead(BaseModel):
     providers: dict[str, Any]
     installer: dict[str, Any] = Field(default_factory=dict)
     tooling: dict[str, Any] = Field(default_factory=dict)
+    worker: dict[str, Any] = Field(default_factory=dict)
+    workers: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str]
 
 

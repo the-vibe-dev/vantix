@@ -9,7 +9,24 @@ from sqlalchemy.orm import Session
 
 from secops.config import settings
 from secops.db import get_db
-from secops.models import AgentSession, ApprovalRequest, Artifact, Fact, Finding, OperatorNote, ProviderConfig, RunEvent, RunMessage, Task, WorkspaceRun
+from secops.models import (
+    AgentSession,
+    ApprovalRequest,
+    Artifact,
+    Fact,
+    Finding,
+    OperatorNote,
+    ProviderConfig,
+    RunEvent,
+    RunMessage,
+    RunMetric,
+    Task,
+    WorkerLease,
+    WorkerRuntimeStatus,
+    WorkflowExecution,
+    WorkflowPhaseRun,
+    WorkspaceRun,
+)
 from secops.mode_profiles import get_mode_profile
 from secops.schemas import (
     AgentSessionRead,
@@ -36,6 +53,7 @@ from secops.schemas import (
     RunResultsRead,
     RunSkillApplicationRead,
     RunPhaseRead,
+    WorkflowStateRead,
     FindingPromotionCreate,
     FindingRead,
     RunProviderRouteCreate,
@@ -306,6 +324,78 @@ def get_run_phase(run_id: str, db: Session = Depends(get_db)) -> dict:
     phase = RunPhaseService().refresh(db, run, reason="phase-read")
     db.commit()
     return phase
+
+
+@router.get("/{run_id}/workflow-state", response_model=WorkflowStateRead)
+def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    workflow = (
+        db.query(WorkflowExecution)
+        .filter(WorkflowExecution.run_id == run_id)
+        .order_by(WorkflowExecution.created_at.desc())
+        .first()
+    )
+    workflow_id = workflow.id if workflow is not None else None
+    phases = (
+        db.query(WorkflowPhaseRun)
+        .filter(WorkflowPhaseRun.run_id == run_id)
+        .order_by(WorkflowPhaseRun.phase_name.asc(), WorkflowPhaseRun.attempt.asc())
+        .all()
+    )
+    leases = (
+        db.query(WorkerLease)
+        .filter(WorkerLease.run_id == run_id)
+        .order_by(WorkerLease.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    worker_ids = sorted({row.worker_id for row in phases if row.worker_id} | {lease.worker_id for lease in leases if lease.worker_id})
+    workers = (
+        db.query(WorkerRuntimeStatus)
+        .filter(WorkerRuntimeStatus.worker_id.in_(worker_ids))
+        .order_by(WorkerRuntimeStatus.heartbeat_at.desc())
+        .all()
+        if worker_ids
+        else []
+    )
+    metric_rows = (
+        db.query(RunMetric)
+        .filter(RunMetric.run_id == run_id)
+        .order_by(RunMetric.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    blocked_reasons = sorted(
+        {
+            str((phase.error_json or {}).get("message", "")).strip()
+            for phase in phases
+            if phase.status == "blocked" and str((phase.error_json or {}).get("message", "")).strip()
+        }
+    )
+    retry_count = sum(1 for phase in phases if phase.status == "retrying")
+    completed_count = sum(1 for phase in phases if phase.status == "completed")
+    blocked_count = sum(1 for phase in phases if phase.status == "blocked")
+    active_leases = [lease for lease in leases if lease.status == "active"]
+    metrics = {
+        "workflow_id": workflow_id or "",
+        "retry_count": retry_count,
+        "completed_count": completed_count,
+        "blocked_count": blocked_count,
+        "active_lease_count": len(active_leases),
+        "latest_heartbeat_at": workers[0].heartbeat_at.isoformat() if workers else "",
+        "metric_samples": len(metric_rows),
+    }
+    return {
+        "run_id": run_id,
+        "workflow": workflow,
+        "phases": phases,
+        "leases": leases,
+        "workers": workers,
+        "blocked_reasons": blocked_reasons,
+        "metrics": metrics,
+    }
 
 
 @router.post("/{run_id}/vectors", response_model=VectorRead)

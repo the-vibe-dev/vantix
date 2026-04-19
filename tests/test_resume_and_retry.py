@@ -13,7 +13,7 @@ os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 
 from secops.db import Base, SessionLocal, engine
 from secops.models import Engagement, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
-from secops.services.workflows.engine import WorkflowEngine, utcnow
+from secops.services.workflows.engine import WorkflowClaim, WorkflowEngine, utcnow
 from secops.services.workflows.phases import PHASE_SEQUENCE
 from secops.services.workflows.types import PhaseStatus, WorkflowStatus
 
@@ -89,3 +89,45 @@ def test_stale_claim_can_be_recovered_by_other_worker() -> None:
         assert recovered is not None
         assert recovered.phase_run_id == claim.phase_run_id
         assert recovered.worker_id == "worker-b"
+
+
+def test_claim_owner_guard_and_lease_renewal() -> None:
+    reset_db()
+    engine_service = WorkflowEngine()
+    with SessionLocal() as db:
+        run = _seed_run(db)
+        workflow = engine_service.enqueue_run(db, run)
+        db.commit()
+
+        claim = engine_service.claim_next_phase(db, worker_id="worker-a", lease_seconds=20)
+        assert claim is not None
+        assert engine_service.claim_next_phase(db, worker_id="worker-b", lease_seconds=20) is None
+        prior_expiry = claim.lease_expires_at
+        assert engine_service.renew_lease(db, claim, lease_seconds=90) is True
+        db.commit()
+        assert claim.lease_expires_at > prior_expiry
+
+        forged = WorkflowClaim(
+            phase_run_id=claim.phase_run_id,
+            workflow_id=claim.workflow_id,
+            run_id=claim.run_id,
+            phase_name=claim.phase_name,
+            attempt=claim.attempt,
+            lease_id=claim.lease_id,
+            worker_id="worker-b",
+            lease_expires_at=claim.lease_expires_at,
+        )
+        engine_service.mark_phase_completed(db, forged, output={"forged": True})
+        db.commit()
+        phase_row = db.get(WorkflowPhaseRun, claim.phase_run_id)
+        assert phase_row is not None
+        assert phase_row.status == PhaseStatus.CLAIMED.value
+
+        engine_service.mark_phase_completed(db, claim, output={"ok": True})
+        db.commit()
+        phase_row = db.get(WorkflowPhaseRun, claim.phase_run_id)
+        assert phase_row is not None
+        assert phase_row.status == PhaseStatus.COMPLETED.value
+        wf = db.get(WorkflowExecution, workflow.id)
+        assert wf is not None
+        assert wf.current_phase == PHASE_SEQUENCE[1]

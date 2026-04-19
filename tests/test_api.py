@@ -106,8 +106,20 @@ def test_start_run_creates_live_state_and_approval_when_codex_disabled() -> None
 
         assert approvals
         assert status == "blocked"
-        assert "disabled" in approvals[0]["reason"] or "Codex" in approvals[0]["title"]
-        assert "disabled" in terminal["content"].lower()
+        assert (
+            "disabled" in approvals[0]["reason"]
+            or "codex" in approvals[0]["title"].lower()
+            or "recon" in approvals[0]["reason"]
+        )
+        workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
+        assert workflow_state.status_code == 200
+        workflow_payload = workflow_state.json()
+        assert workflow_payload["run_id"] == run_id
+        assert "metrics" in workflow_payload
+        assert isinstance(workflow_payload["phases"], list)
+        events = client.get(f"/api/v1/runs/{run_id}/events")
+        assert events.status_code == 200
+        assert any(event["event_type"] == "policy_decision" for event in events.json())
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)

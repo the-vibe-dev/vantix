@@ -3,16 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from secops.models import WorkerLease, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.models import RunMetric, WorkerLease, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.services.workflows.checkpoints import CheckpointService
 from secops.services.workflows.phases import PHASE_SEQUENCE, next_phase
 from secops.services.workflows.types import PhaseStatus, WorkerLeaseState, WorkflowStatus
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass(slots=True)
@@ -28,6 +35,9 @@ class WorkflowClaim:
 
 
 class WorkflowEngine:
+    def __init__(self) -> None:
+        self.checkpoints = CheckpointService()
+
     def enqueue_run(self, db: Session, run: WorkspaceRun) -> WorkflowExecution:
         workflow = (
             db.query(WorkflowExecution)
@@ -76,36 +86,90 @@ class WorkflowEngine:
 
         run.status = "queued"
         workflow.updated_at = utcnow()
+        self._emit_metric(
+            db,
+            run_id=run.id,
+            workflow_id=workflow.id,
+            phase_name=workflow.current_phase,
+            metric_name="workflow_enqueued_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["workflow", "enqueue"],
+            metadata={"status": workflow.status},
+        )
         return workflow
 
     def claim_next_phase(self, db: Session, *, worker_id: str, lease_seconds: int = 90) -> WorkflowClaim | None:
         now = utcnow()
-        candidate = (
-            db.query(WorkflowPhaseRun)
-            .join(WorkflowExecution, WorkflowExecution.id == WorkflowPhaseRun.workflow_id)
-            .filter(
-                WorkflowExecution.status.in_([WorkflowStatus.QUEUED.value, WorkflowStatus.RUNNING.value]),
-                or_(
-                    WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
-                    and_(
-                        WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
-                        WorkflowPhaseRun.lease_expires_at.is_not(None),
-                        WorkflowPhaseRun.lease_expires_at < now,
+        candidate_ids = (
+            db.execute(
+                select(WorkflowPhaseRun.id)
+                .join(WorkflowExecution, WorkflowExecution.id == WorkflowPhaseRun.workflow_id)
+                .where(
+                    WorkflowExecution.status.in_([WorkflowStatus.QUEUED.value, WorkflowStatus.RUNNING.value]),
+                    or_(
+                        WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
+                        and_(
+                            WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
+                            WorkflowPhaseRun.lease_expires_at.is_not(None),
+                            WorkflowPhaseRun.lease_expires_at < now,
+                        ),
                     ),
-                ),
-                or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
+                    or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
+                )
+                .order_by(WorkflowPhaseRun.created_at.asc())
+                .limit(20)
             )
-            .order_by(WorkflowPhaseRun.created_at.asc())
-            .first()
+            .scalars()
+            .all()
         )
-        if candidate is None:
+        if not candidate_ids:
             return None
 
         lease_until = now + timedelta(seconds=lease_seconds)
-        candidate.status = PhaseStatus.CLAIMED.value
-        candidate.worker_id = worker_id
-        candidate.lease_expires_at = lease_until
-        candidate.started_at = candidate.started_at or now
+        candidate: WorkflowPhaseRun | None = None
+        for phase_run_id in candidate_ids:
+            result = db.execute(
+                update(WorkflowPhaseRun)
+                .where(
+                    WorkflowPhaseRun.id == phase_run_id,
+                    or_(
+                        WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
+                        and_(
+                            WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
+                            WorkflowPhaseRun.lease_expires_at.is_not(None),
+                            WorkflowPhaseRun.lease_expires_at < now,
+                        ),
+                    ),
+                    or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
+                )
+                .values(
+                    status=PhaseStatus.CLAIMED.value,
+                    worker_id=worker_id,
+                    lease_expires_at=lease_until,
+                    started_at=func.coalesce(WorkflowPhaseRun.started_at, now),
+                )
+            )
+            if (result.rowcount or 0) == 1:
+                candidate = db.get(WorkflowPhaseRun, phase_run_id)
+                break
+        if candidate is None:
+            return None
+
+        db.execute(
+            update(WorkerLease)
+            .where(
+                WorkerLease.phase_run_id == candidate.id,
+                WorkerLease.status == WorkerLeaseState.ACTIVE.value,
+                WorkerLease.lease_expires_at < now,
+            )
+            .values(
+                status=WorkerLeaseState.EXPIRED.value,
+                released_at=now,
+                heartbeat_at=now,
+                lease_expires_at=now,
+            )
+        )
 
         workflow = db.get(WorkflowExecution, candidate.workflow_id)
         if workflow is not None:
@@ -131,6 +195,17 @@ class WorkflowEngine:
             metadata_json={},
         )
         db.add(lease)
+        self._emit_metric(
+            db,
+            run_id=candidate.run_id,
+            workflow_id=candidate.workflow_id,
+            phase_name=candidate.phase_name,
+            metric_name="phase_claimed_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["phase", "claim"],
+            metadata={"attempt": candidate.attempt, "worker_id": worker_id},
+        )
         db.flush()
         return WorkflowClaim(
             phase_run_id=candidate.id,
@@ -143,10 +218,42 @@ class WorkflowEngine:
             lease_expires_at=lease_until,
         )
 
+    def renew_lease(self, db: Session, claim: WorkflowClaim, *, lease_seconds: int = 90) -> bool:
+        now = utcnow()
+        lease_until = now + timedelta(seconds=max(10, lease_seconds))
+        phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
+        lease = db.get(WorkerLease, claim.lease_id)
+        if phase_run is None or lease is None:
+            return False
+        if phase_run.status != PhaseStatus.CLAIMED.value or phase_run.worker_id != claim.worker_id:
+            return False
+        if lease.status != WorkerLeaseState.ACTIVE.value or lease.worker_id != claim.worker_id:
+            return False
+        phase_run.lease_expires_at = lease_until
+        lease.heartbeat_at = now
+        lease.lease_expires_at = lease_until
+        claim.lease_expires_at = lease_until
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="lease_renewal_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["lease", "heartbeat"],
+            metadata={"worker_id": claim.worker_id},
+        )
+        return True
+
     def mark_phase_completed(self, db: Session, claim: WorkflowClaim, *, output: dict | None = None) -> None:
         now = utcnow()
         phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
         if phase_run is None:
+            return
+        if phase_run.status == PhaseStatus.COMPLETED.value:
+            return
+        if phase_run.worker_id != claim.worker_id or phase_run.status != PhaseStatus.CLAIMED.value:
             return
         phase_run.status = PhaseStatus.COMPLETED.value
         phase_run.completed_at = now
@@ -188,10 +295,57 @@ class WorkflowEngine:
             run.status = "completed" if workflow.status == WorkflowStatus.COMPLETED.value else "running"
             run.updated_at = now
 
+        self.checkpoints.save(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            phase_attempt=phase_run.attempt,
+            payload={
+                "run_id": claim.run_id,
+                "workflow_id": claim.workflow_id,
+                "phase_name": claim.phase_name,
+                "phase_attempt": phase_run.attempt,
+                "status": PhaseStatus.COMPLETED.value,
+                "output": phase_run.output_json,
+                "metadata": {"worker_id": claim.worker_id},
+            },
+            status="completed",
+        )
+        duration_seconds = 0.0
+        if phase_run.started_at is not None:
+            duration_seconds = max((now - as_utc(phase_run.started_at)).total_seconds(), 0.0)
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="phase_duration_seconds",
+            metric_value=duration_seconds,
+            metric_unit="seconds",
+            tags=["phase", "duration"],
+            metadata={"attempt": phase_run.attempt, "worker_id": claim.worker_id},
+        )
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="phase_completed_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["phase", "completed"],
+            metadata={"attempt": phase_run.attempt},
+        )
+
     def mark_phase_failed(self, db: Session, claim: WorkflowClaim, *, error_class: str, error_message: str) -> None:
         now = utcnow()
         phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
         if phase_run is None:
+            return
+        if phase_run.status == PhaseStatus.FAILED.value:
+            return
+        if phase_run.worker_id != claim.worker_id or phase_run.status != PhaseStatus.CLAIMED.value:
             return
         phase_run.status = PhaseStatus.FAILED.value
         phase_run.completed_at = now
@@ -217,15 +371,47 @@ class WorkflowEngine:
         if run is not None:
             run.status = "failed"
             run.updated_at = now
+        self.checkpoints.save(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            phase_attempt=phase_run.attempt,
+            payload={
+                "run_id": claim.run_id,
+                "workflow_id": claim.workflow_id,
+                "phase_name": claim.phase_name,
+                "phase_attempt": phase_run.attempt,
+                "status": PhaseStatus.FAILED.value,
+                "metadata": {"error_class": error_class, "error_message": error_message},
+            },
+            status="failed",
+        )
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="phase_failed_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["phase", "failed"],
+            metadata={"attempt": phase_run.attempt, "error_class": error_class},
+        )
 
     def mark_phase_blocked(self, db: Session, claim: WorkflowClaim, *, reason: str) -> None:
         now = utcnow()
         phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
-        if phase_run is not None:
-            phase_run.status = PhaseStatus.BLOCKED.value
-            phase_run.completed_at = now
-            phase_run.lease_expires_at = now
-            phase_run.error_json = {"class": "blocked", "message": reason}
+        if phase_run is None:
+            return
+        if phase_run.status == PhaseStatus.BLOCKED.value:
+            return
+        if phase_run.worker_id != claim.worker_id or phase_run.status != PhaseStatus.CLAIMED.value:
+            return
+        phase_run.status = PhaseStatus.BLOCKED.value
+        phase_run.completed_at = now
+        phase_run.lease_expires_at = now
+        phase_run.error_json = {"class": "blocked", "message": reason}
 
         lease = db.get(WorkerLease, claim.lease_id)
         if lease is not None:
@@ -244,6 +430,33 @@ class WorkflowEngine:
         if run is not None:
             run.status = "blocked"
             run.updated_at = now
+        self.checkpoints.save(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            phase_attempt=phase_run.attempt,
+            payload={
+                "run_id": claim.run_id,
+                "workflow_id": claim.workflow_id,
+                "phase_name": claim.phase_name,
+                "phase_attempt": phase_run.attempt,
+                "status": PhaseStatus.BLOCKED.value,
+                "metadata": {"reason": reason},
+            },
+            status="blocked",
+        )
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="phase_blocked_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["phase", "blocked"],
+            metadata={"attempt": phase_run.attempt, "reason": reason[:120]},
+        )
 
     def schedule_retry(
         self,
@@ -257,6 +470,8 @@ class WorkflowEngine:
         now = utcnow()
         phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
         if phase_run is None:
+            return None
+        if phase_run.status != PhaseStatus.CLAIMED.value or phase_run.worker_id != claim.worker_id:
             return None
 
         phase_run.status = PhaseStatus.FAILED.value
@@ -296,6 +511,38 @@ class WorkflowEngine:
         if run is not None and run.status not in {"cancelled", "blocked"}:
             run.status = "running"
             run.updated_at = now
+        self.checkpoints.save(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            phase_attempt=next_attempt.attempt,
+            payload={
+                "run_id": claim.run_id,
+                "workflow_id": claim.workflow_id,
+                "phase_name": claim.phase_name,
+                "phase_attempt": next_attempt.attempt,
+                "status": PhaseStatus.RETRYING.value,
+                "metadata": {
+                    "retry_class": retry_class,
+                    "reason": reason,
+                    "delay_seconds": delay_seconds,
+                    "retry_from_phase_run_id": phase_run.id,
+                },
+            },
+            status="retrying",
+        )
+        self._emit_metric(
+            db,
+            run_id=claim.run_id,
+            workflow_id=claim.workflow_id,
+            phase_name=claim.phase_name,
+            metric_name="phase_retry_scheduled_total",
+            metric_value=1.0,
+            metric_unit="count",
+            tags=["phase", "retry"],
+            metadata={"retry_class": retry_class, "attempt": next_attempt.attempt, "delay_seconds": delay_seconds},
+        )
         return next_attempt
 
     def block_run(self, db: Session, run: WorkspaceRun, reason: str) -> None:
@@ -327,3 +574,29 @@ class WorkflowEngine:
             workflow.blocked_reason = reason[:255]
             workflow.updated_at = now
             workflow.completed_at = now
+
+    def _emit_metric(
+        self,
+        db: Session,
+        *,
+        run_id: str,
+        workflow_id: str | None,
+        phase_name: str,
+        metric_name: str,
+        metric_value: float,
+        metric_unit: str,
+        tags: list[str],
+        metadata: dict | None = None,
+    ) -> None:
+        db.add(
+            RunMetric(
+                run_id=run_id,
+                workflow_id=workflow_id,
+                phase_name=phase_name,
+                metric_name=metric_name,
+                metric_value=float(metric_value),
+                metric_unit=metric_unit,
+                tags=tags,
+                metadata_json=metadata or {},
+            )
+        )

@@ -203,6 +203,41 @@ class ExecutionManager:
                     command = ["nmap", "-Pn", "-sT", "-p", ports, "--open", recon_target]
                 else:
                     command = ["nmap", "-Pn", "-sT", "--top-ports", "100", "--open", recon_target]
+            action_kind = "script" if run.config_json.get("ports") else "recon_high_noise"
+            decision = self.policies.evaluate(run, action_kind=action_kind)
+            self._emit_policy_decision(
+                db,
+                run_id=run.id,
+                action_kind=action_kind,
+                verdict=decision.verdict,
+                reason=decision.reason,
+                audit=decision.audit,
+            )
+            if decision.verdict in {"block", "require_approval"}:
+                task.status = "blocked"
+                task.result_json = {"reason": decision.reason, "verdict": decision.verdict, "action_kind": action_kind}
+                run.status = "blocked"
+                session.status = "blocked"
+                session.completed_at = datetime.now(timezone.utc)
+                self._create_approval(
+                    db,
+                    run.id,
+                    title="Recon policy blocked run",
+                    detail=decision.reason,
+                    reason=f"{action_kind}-policy",
+                )
+                self.events.emit(db, run.id, "phase", f"Recon blocked by policy: {decision.reason}", level="warning", agent_session_id=session.id)
+                self._write_memory(
+                    db,
+                    run,
+                    mode="handoff",
+                    phase="recon-blocked",
+                    issues=[decision.reason],
+                    files=[str(session.log_path)],
+                    next_action="review approval and retry",
+                )
+                db.commit()
+                return
             output = self._run_command(command, session.log_path, run=run) if command else "No target supplied; recon skipped.\n"
             paths.write_text(Path(session.log_path), output)
             discovered = self._parse_nmap(output)
@@ -300,6 +335,16 @@ class ExecutionManager:
 
             log_path = Path(session.log_path)
             codex_policy = self.policies.evaluate(run, action_kind="codex")
+            with SessionLocal() as inner_db:
+                self._emit_policy_decision(
+                    inner_db,
+                    run_id=run.id,
+                    action_kind="codex",
+                    verdict=codex_policy.verdict,
+                    reason=codex_policy.reason,
+                    audit=codex_policy.audit,
+                )
+                inner_db.commit()
             if codex_policy.verdict in {"block", "require_approval"}:
                 simulated = (
                     f"Codex execution policy verdict: {codex_policy.verdict}.\n"
@@ -557,10 +602,29 @@ class ExecutionManager:
         record = self.policies.run_subprocess(command, timeout_seconds=120, redactions=[settings.secret_key])
         output = (record.stdout or "") + ("\n" + record.stderr if record.stderr else "")
         if record.timed_out:
-            return output + "\nCommand timed out.\n"
+            return output + f"\nCommand timed out after {record.duration_seconds:.1f}s.\n"
         if record.error_class and record.returncode != 0:
-            return output + f"\nCommand failed ({record.error_class}) rc={record.returncode}.\n"
+            return output + f"\nCommand failed ({record.error_class}) rc={record.returncode} after {record.duration_seconds:.1f}s.\n"
         return output
+
+    def _emit_policy_decision(
+        self,
+        db,
+        *,
+        run_id: str,
+        action_kind: str,
+        verdict: str,
+        reason: str,
+        audit: bool,
+    ) -> None:
+        self.events.emit(
+            db,
+            run_id,
+            "policy_decision",
+            f"policy:{action_kind}:{verdict}",
+            level="warning" if verdict in {"block", "require_approval"} else "info",
+            payload={"action_kind": action_kind, "verdict": verdict, "reason": reason, "audit": audit},
+        )
 
     def _parse_nmap(self, output: str) -> dict[str, list[str]]:
         ports = re.findall(r"(?m)^(\d{1,5})/tcp\s+open", output)
