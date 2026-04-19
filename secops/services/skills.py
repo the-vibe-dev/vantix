@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import re
 
 import yaml
 from sqlalchemy.orm import Session
 
 from secops.config import settings
-from secops.models import AgentSession, Fact, Finding, RunEvent, WorkspaceRun
+from secops.models import AgentSession, Fact, Finding, ProviderConfig, RunEvent, WorkspaceRun
 from secops.services.events import RunEventService
 from secops.services.storage import StorageLayout
 
@@ -27,6 +28,7 @@ class SkillPack:
     requires_scope: bool
     forbidden: list[str]
     body: str
+    editable: bool = False
 
     def public(self, reason: str = "") -> dict[str, Any]:
         return {
@@ -42,6 +44,7 @@ class SkillPack:
             "requires_scope": self.requires_scope,
             "forbidden": self.forbidden,
             "reason": reason,
+            "editable": self.editable,
         }
 
 
@@ -157,6 +160,7 @@ class SkillRegistry:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or settings.skills_root).resolve()
         self.registry_path = self.root / "registry.yaml"
+        self.local_root = self.root / "packs" / "local"
         self.shared_paths: list[Path] = []
         self._packs: dict[str, SkillPack] = {}
         self._load()
@@ -169,22 +173,34 @@ class SkillRegistry:
         for item in data.get("packs", []):
             meta_path = self.root / item["metadata"]
             skill_path = self.root / item["skill"]
-            meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
-            pack = SkillPack(
-                id=str(meta["id"]),
-                name=str(meta["name"]),
-                version=int(meta.get("version", 1)),
-                summary=str(meta.get("summary", "")),
-                roles=list(meta.get("roles", [])),
-                modes=list(meta.get("modes", [])),
-                execution_level=str(meta.get("execution_level", "advisory")),
-                safety_level=str(meta.get("safety_level", "active")),
-                tags=list(meta.get("tags", [])),
-                requires_scope=bool(meta.get("requires_scope", False)),
-                forbidden=list(meta.get("forbidden", [])),
-                body=skill_path.read_text(encoding="utf-8"),
-            )
+            pack = self._pack_from_files(meta_path, skill_path, editable=False)
             self._packs[pack.id] = pack
+        if self.local_root.exists():
+            for directory in sorted(path for path in self.local_root.iterdir() if path.is_dir()):
+                meta_path = directory / "metadata.yaml"
+                skill_path = directory / "SKILL.md"
+                if not meta_path.exists() or not skill_path.exists():
+                    continue
+                pack = self._pack_from_files(meta_path, skill_path, editable=True)
+                self._packs[pack.id] = pack
+
+    def _pack_from_files(self, meta_path: Path, skill_path: Path, *, editable: bool) -> SkillPack:
+        meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        return SkillPack(
+            id=str(meta["id"]),
+            name=str(meta["name"]),
+            version=int(meta.get("version", 1)),
+            summary=str(meta.get("summary", "")),
+            roles=list(meta.get("roles", [])),
+            modes=list(meta.get("modes", [])),
+            execution_level=str(meta.get("execution_level", "advisory")),
+            safety_level=str(meta.get("safety_level", "active")),
+            tags=list(meta.get("tags", [])),
+            requires_scope=bool(meta.get("requires_scope", False)),
+            forbidden=list(meta.get("forbidden", [])),
+            body=skill_path.read_text(encoding="utf-8"),
+            editable=editable,
+        )
 
     def all(self) -> list[SkillPack]:
         return sorted(self._packs.values(), key=lambda item: item.id)
@@ -198,6 +214,83 @@ class SkillRegistry:
             if path.exists():
                 chunks.append(path.read_text(encoding="utf-8"))
         return "\n\n".join(chunks)
+
+    def reload(self) -> list[SkillPack]:
+        self._packs = {}
+        self._load()
+        return self.all()
+
+    def create_local(self, payload: dict[str, Any]) -> SkillPack:
+        skill_id = self._normalize_id(str(payload.get("id") or ""))
+        if not skill_id:
+            raise ValueError("Skill id is required")
+        existing = self.get(skill_id)
+        if existing is not None:
+            raise ValueError("Skill id already exists")
+        directory = self.local_root / skill_id
+        directory.mkdir(parents=True, exist_ok=True)
+        meta_path = directory / "metadata.yaml"
+        skill_path = directory / "SKILL.md"
+        meta = self._metadata_from_payload(skill_id, payload, version=int(payload.get("version") or 1))
+        meta_path.write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
+        skill_path.write_text(str(payload.get("body") or "").strip() + "\n", encoding="utf-8")
+        pack = self._pack_from_files(meta_path, skill_path, editable=True)
+        self._packs[pack.id] = pack
+        return pack
+
+    def update_local(self, skill_id: str, payload: dict[str, Any]) -> SkillPack:
+        pack = self.get(skill_id)
+        if pack is None:
+            raise ValueError("Skill pack not found")
+        if not pack.editable:
+            raise ValueError("Built-in skill packs are read-only")
+        directory = self.local_root / skill_id
+        meta_path = directory / "metadata.yaml"
+        skill_path = directory / "SKILL.md"
+        existing = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        version = int(payload.get("version") or int(existing.get("version", 1)) + 1)
+        meta = self._metadata_from_payload(skill_id, {**existing, **payload}, version=version)
+        meta_path.write_text(yaml.safe_dump(meta, sort_keys=False), encoding="utf-8")
+        if "body" in payload:
+            skill_path.write_text(str(payload.get("body") or "").strip() + "\n", encoding="utf-8")
+        updated = self._pack_from_files(meta_path, skill_path, editable=True)
+        self._packs[updated.id] = updated
+        return updated
+
+    def delete_local(self, skill_id: str) -> None:
+        pack = self.get(skill_id)
+        if pack is None:
+            raise ValueError("Skill pack not found")
+        if not pack.editable:
+            raise ValueError("Built-in skill packs are read-only")
+        directory = self.local_root / skill_id
+        for path in sorted(directory.glob("**/*"), reverse=True):
+            if path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                path.rmdir()
+        if directory.exists():
+            directory.rmdir()
+        self._packs.pop(skill_id, None)
+
+    def _normalize_id(self, raw: str) -> str:
+        candidate = re.sub(r"[^a-z0-9_\\-]+", "_", raw.strip().lower())
+        return candidate.strip("_")
+
+    def _metadata_from_payload(self, skill_id: str, payload: dict[str, Any], *, version: int) -> dict[str, Any]:
+        return {
+            "id": skill_id,
+            "name": str(payload.get("name") or skill_id.replace("_", " ").title()),
+            "version": version,
+            "summary": str(payload.get("summary") or ""),
+            "roles": list(payload.get("roles") or ["orchestrator"]),
+            "modes": list(payload.get("modes") or ["pentest"]),
+            "execution_level": str(payload.get("execution_level") or "advisory"),
+            "safety_level": str(payload.get("safety_level") or "active"),
+            "tags": list(payload.get("tags") or []),
+            "requires_scope": bool(payload.get("requires_scope", True)),
+            "forbidden": list(payload.get("forbidden") or []),
+        }
 
 
 class SkillSelector:
@@ -277,6 +370,8 @@ class SkillApplicationService:
     def apply_to_run(self, db: Session, run: WorkspaceRun) -> list[dict[str, Any]]:
         facts = db.query(Fact).filter(Fact.run_id == run.id).order_by(Fact.created_at.asc()).all()
         agents = db.query(AgentSession).filter(AgentSession.run_id == run.id).all()
+        provider_id = str((run.config_json or {}).get("provider_id") or "")
+        provider = db.get(ProviderConfig, provider_id) if provider_id else None
         paths = self.storage.for_workspace(run.workspace_id)
         applications: list[dict[str, Any]] = []
         for agent in agents:
@@ -284,6 +379,13 @@ class SkillApplicationService:
             metadata = dict(agent.metadata_json or {})
             metadata["selected_skills"] = selected
             metadata["skill_count"] = len(selected)
+            metadata["runtime_route"] = {
+                "runtime": "provider" if provider else "codex",
+                "provider_id": provider.id if provider else "",
+                "provider_type": provider.provider_type if provider else "",
+                "provider_name": provider.name if provider else "",
+            }
+            metadata["default_runtime"] = provider.provider_type if provider else "codex"
             agent.metadata_json = metadata
             prompt = self.assembler.assemble(run, agent.role, selected, facts)
             prompt_path = paths.prompts / f"{agent.role}.txt"

@@ -219,6 +219,7 @@ button:hover { filter: brightness(1.08); }
 .approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .provider-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
 .provider-form button { grid-column: span 2; }
+.provider-route { display: grid; gap: 10px; margin-top: 12px; margin-bottom: 12px; }
 .installer-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

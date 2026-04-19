@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from secops.config import settings
 from secops.db import get_db
-from secops.models import AgentSession, ApprovalRequest, Artifact, Fact, Finding, OperatorNote, RunEvent, RunMessage, Task, WorkspaceRun
+from secops.models import AgentSession, ApprovalRequest, Artifact, Fact, Finding, OperatorNote, ProviderConfig, RunEvent, RunMessage, Task, WorkspaceRun
 from secops.mode_profiles import get_mode_profile
 from secops.schemas import (
     AgentSessionRead,
@@ -35,11 +35,17 @@ from secops.schemas import (
     VectorRead,
     RunResultsRead,
     RunSkillApplicationRead,
+    RunPhaseRead,
+    FindingPromotionCreate,
+    FindingRead,
+    RunProviderRouteCreate,
 )
 from secops.security import require_api_token
 from secops.services.context_builder import ContextBuilder
 from secops.services.execution import execution_manager
+from secops.services.finding_promotion import FindingPromotionService
 from secops.services.learning import LearningService
+from secops.services.phase_state import RunPhaseService
 from secops.services.storage import StorageLayout
 from secops.services.run_service import RunService
 from secops.services.skills import (
@@ -184,7 +190,9 @@ def get_run_graph(run_id: str, db: Session = Depends(get_db)) -> RunGraphRead:
     tasks = db.query(Task).filter(Task.run_id == run_id).order_by(Task.sequence.asc()).all()
     agents = db.query(AgentSession).filter(AgentSession.run_id == run_id).order_by(AgentSession.started_at.asc()).all()
     approvals = db.query(ApprovalRequest).filter(ApprovalRequest.run_id == run_id).order_by(ApprovalRequest.created_at.asc()).all()
-    return RunGraphRead(run_id=run_id, status=run.status, tasks=tasks, agents=agents, approvals=approvals)
+    phase = RunPhaseService().refresh(db, run, reason="graph-read")
+    db.commit()
+    return RunGraphRead(run_id=run_id, status=run.status, phase=phase, tasks=tasks, agents=agents, approvals=approvals)
 
 
 @router.get("/{run_id}/agents", response_model=list[AgentSessionRead])
@@ -287,6 +295,16 @@ def list_run_vectors(run_id: str, db: Session = Depends(get_db)) -> list[dict]:
     return [vector_from_fact(fact) for fact in facts]
 
 
+@router.get("/{run_id}/phase", response_model=RunPhaseRead)
+def get_run_phase(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    phase = RunPhaseService().refresh(db, run, reason="phase-read")
+    db.commit()
+    return phase
+
+
 @router.post("/{run_id}/vectors", response_model=VectorRead)
 def create_run_vector(run_id: str, payload: VectorCreate, db: Session = Depends(get_db)) -> dict:
     run = db.get(WorkspaceRun, run_id)
@@ -315,10 +333,57 @@ def select_run_vector(run_id: str, vector_id: str, db: Session = Depends(get_db)
     metadata.setdefault("safety_notes", "Selected vectors must remain inside authorized scope and require evidence capture.")
     fact.metadata_json = metadata
     fact.tags = sorted(set([*fact.tags, "planned"]))
+    RunPhaseService().transition(run, "development", reason="vector-selected", details={"vector_id": vector_id})
     VantixScheduler().replan(db, run, reason="vector-selected")
     db.commit()
     db.refresh(fact)
     return vector_from_fact(fact)
+
+
+@router.get("/{run_id}/findings", response_model=list[FindingRead])
+def list_run_findings(run_id: str, db: Session = Depends(get_db)) -> list[Finding]:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return db.query(Finding).filter(Finding.run_id == run_id).order_by(Finding.created_at.asc()).all()
+
+
+@router.post("/{run_id}/findings/promote", response_model=FindingRead)
+def promote_finding(run_id: str, payload: FindingPromotionCreate, db: Session = Depends(get_db)) -> Finding:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    try:
+        finding = FindingPromotionService().promote(db, run, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    RunPhaseService().transition(run, "reporting", reason="finding-promoted", details={"finding_id": finding.id})
+    db.commit()
+    db.refresh(finding)
+    return finding
+
+
+@router.post("/{run_id}/provider-route", response_model=RunRead)
+def set_run_provider_route(run_id: str, payload: RunProviderRouteCreate, db: Session = Depends(get_db)) -> WorkspaceRun:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    config = dict(run.config_json or {})
+    provider_id = str(payload.provider_id or "").strip()
+    if provider_id:
+        provider = db.get(ProviderConfig, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="Provider not found")
+        config["provider_id"] = provider.id
+        config["runtime_route"] = {"runtime": "provider", "provider_id": provider.id, "provider_type": provider.provider_type}
+    else:
+        config.pop("provider_id", None)
+        config["runtime_route"] = {"runtime": "codex", "provider_id": "", "provider_type": ""}
+    run.config_json = config
+    SkillApplicationService().apply_to_run(db, run)
+    db.commit()
+    db.refresh(run)
+    return run
 
 
 @router.get("/{run_id}/results", response_model=RunResultsRead)

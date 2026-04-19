@@ -136,10 +136,15 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         graph = client.get(f"/api/v1/runs/{run_id}/graph")
         assert graph.status_code == 200
         graph_payload = graph.json()
+        assert graph_payload["phase"]["current"] in {"knowledge-load", "research", "recon", "planning"}
         task_kinds = [task["kind"] for task in graph_payload["tasks"]]
         assert "vantix-recon" in task_kinds
         assert "vector-store" in task_kinds
         assert {agent["role"] for agent in graph_payload["agents"]} >= {"orchestrator", "recon", "researcher", "executor"}
+
+        phase = client.get(f"/api/v1/runs/{run_id}/phase")
+        assert phase.status_code == 200
+        assert phase.json()["current"] in {"knowledge-load", "research", "recon", "planning"}
 
         vectors = client.get(f"/api/v1/runs/{run_id}/vectors")
         assert vectors.status_code == 200
@@ -183,6 +188,24 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         selected = client.post(f"/api/v1/runs/{run_id}/vectors/{created.json()['id']}/select")
         assert selected.status_code == 200
         assert selected.json()["status"] == "planned"
+
+        promoted = client.post(
+            f"/api/v1/runs/{run_id}/findings/promote",
+            json={"source_kind": "vector", "source_id": created.json()["id"], "title": "Manual vector finding"},
+        )
+        assert promoted.status_code == 200
+        assert promoted.json()["title"] == "Manual vector finding"
+
+        chain_promoted = client.post(
+            f"/api/v1/runs/{run_id}/findings/promote",
+            json={"source_kind": "attack_chain", "source_id": chain.json()["id"]},
+        )
+        assert chain_promoted.status_code == 200
+        assert chain_promoted.json()["severity"] in {"medium", "high", "critical", "low"}
+
+        findings = client.get(f"/api/v1/runs/{run_id}/findings")
+        assert findings.status_code == 200
+        assert len(findings.json()) >= 2
 
         results = client.get(f"/api/v1/runs/{run_id}/results")
         assert results.status_code == 200
@@ -245,5 +268,55 @@ def test_vantix_system_status_and_provider_secret_handling() -> None:
         stored_payload = stored.json()
         assert stored_payload["has_key"] is True
         assert "sk-test" not in str(stored_payload)
+
+        engagement = client.post("/api/v1/engagements", json={"name": "Route Test", "mode": "pentest", "target": "10.10.10.10"}).json()
+        run = client.post("/api/v1/runs", json={"engagement_id": engagement["id"], "objective": "Route provider", "target": "10.10.10.10"}).json()
+        routed = client.post(f"/api/v1/runs/{run['id']}/provider-route", json={"provider_id": stored_payload["id"]})
+        assert routed.status_code == 200
+        assert routed.json()["config"]["provider_id"] == stored_payload["id"]
+
+        reset_route = client.post(f"/api/v1/runs/{run['id']}/provider-route", json={"provider_id": ""})
+        assert reset_route.status_code == 200
+        assert reset_route.json()["config"]["runtime_route"]["runtime"] == "codex"
     finally:
         object.__setattr__(settings, "secret_key", old_secret)
+
+
+def test_skill_pack_crud_and_reload() -> None:
+    reset_db()
+    client = TestClient(create_app())
+
+    created = client.post(
+        "/api/v1/skills",
+        json={
+            "id": "local_test_pack",
+            "name": "Local Test Pack",
+            "summary": "operator managed",
+            "roles": ["orchestrator"],
+            "modes": ["pentest"],
+            "tags": ["local"],
+            "body": "# Local Test Pack\n\nUse local extension.",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["editable"] is True
+
+    updated = client.put(
+        "/api/v1/skills/local_test_pack",
+        json={"summary": "updated summary", "body": "# Local Test Pack\n\nUpdated body."},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["summary"] == "updated summary"
+    assert updated.json()["version"] >= 2
+
+    listing = client.get("/api/v1/skills")
+    assert listing.status_code == 200
+    assert any(item["id"] == "local_test_pack" and item["editable"] for item in listing.json())
+
+    reloaded = client.post("/api/v1/skills/reload")
+    assert reloaded.status_code == 200
+    assert reloaded.json()["count"] >= 1
+    assert any(item["id"] == "local_test_pack" for item in reloaded.json()["skills"])
+
+    deleted = client.delete("/api/v1/skills/local_test_pack")
+    assert deleted.status_code == 204

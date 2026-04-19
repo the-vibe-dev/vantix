@@ -271,6 +271,7 @@ class FactRead(BaseModel):
 class RunGraphRead(BaseModel):
     run_id: str
     status: str
+    phase: dict[str, Any] = Field(default_factory=dict)
     tasks: list[TaskRead]
     agents: list[AgentSessionRead]
     approvals: list[ApprovalRead]
@@ -350,6 +351,15 @@ class RunResultsRead(BaseModel):
     report_path: str | None = None
 
 
+class RunPhaseRead(BaseModel):
+    current: str
+    completed: list[str] = Field(default_factory=list)
+    pending: list[str] = Field(default_factory=list)
+    updated_at: str = ""
+    reason: str = ""
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class SkillPackRead(BaseModel):
     id: str
     name: str
@@ -363,6 +373,40 @@ class SkillPackRead(BaseModel):
     requires_scope: bool
     forbidden: list[str]
     reason: str = ""
+    editable: bool = False
+
+
+class SkillPackCreate(BaseModel):
+    id: str
+    name: str
+    summary: str = ""
+    roles: list[str] = Field(default_factory=list)
+    modes: list[str] = Field(default_factory=list)
+    execution_level: str = "advisory"
+    safety_level: str = "active"
+    tags: list[str] = Field(default_factory=list)
+    requires_scope: bool = True
+    forbidden: list[str] = Field(default_factory=list)
+    body: str
+
+
+class SkillPackUpdate(BaseModel):
+    name: str | None = None
+    summary: str | None = None
+    roles: list[str] | None = None
+    modes: list[str] | None = None
+    execution_level: str | None = None
+    safety_level: str | None = None
+    tags: list[str] | None = None
+    requires_scope: bool | None = None
+    forbidden: list[str] | None = None
+    body: str | None = None
+    version: int | None = None
+
+
+class SkillRegistryReloadRead(BaseModel):
+    count: int
+    skills: list[SkillPackRead]
 
 
 class RunSkillApplicationRead(BaseModel):
@@ -389,6 +433,19 @@ class AttackChainRead(BaseModel):
     mitre_ids: list[str]
     notes: str
     created_at: datetime
+
+
+class FindingPromotionCreate(BaseModel):
+    source_kind: str
+    source_id: str
+    title: str = ""
+    severity: str = ""
+    status: str = "draft"
+    summary: str = ""
+    evidence: str = ""
+    reproduction: str = ""
+    remediation: str = ""
+    confidence: float | None = None
 
 
 class HandoffRead(BaseModel):
@@ -486,3 +543,7 @@ class ProviderConfigRead(BaseModel):
     metadata: dict[str, Any] = Field(validation_alias="metadata_json")
     created_at: datetime
     updated_at: datetime
+
+
+class RunProviderRouteCreate(BaseModel):
+    provider_id: str = ""

@@ -26,6 +26,15 @@ export type Task = {
   result: Record<string, unknown>;
 };
 
+export type RunPhase = {
+  current: string;
+  completed: string[];
+  pending: string[];
+  updated_at: string;
+  reason: string;
+  history: Array<Record<string, unknown>>;
+};
+
 export type Approval = {
   id: string;
   title: string;
@@ -128,6 +137,7 @@ export type SkillPack = {
   requires_scope: boolean;
   forbidden: string[];
   reason: string;
+  editable: boolean;
 };
 
 export type RunSkillApplication = {
@@ -268,17 +278,25 @@ export const api = {
   submitChat: (payload: { message: string; run_id?: string; mode?: string; target?: string; metadata?: Record<string, unknown> }) =>
     request<{ run: Run; message: RunMessage; started: boolean; scheduler_status: string }>("/api/v1/chat", { method: "POST", body: JSON.stringify(payload) }),
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
-  getGraph: (runId: string) => request<{ run_id: string; status: string; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
+  getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
+  getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
   getMessages: (runId: string) => request<RunMessage[]>(`/api/v1/runs/${runId}/messages`),
   getLearning: (runId: string) => request<{ run_id: string; mode: string; results: Array<Record<string, unknown>> }>(`/api/v1/runs/${runId}/learning`),
   getFacts: (runId: string) => request<Fact[]>(`/api/v1/runs/${runId}/facts`),
   getVectors: (runId: string) => request<Vector[]>(`/api/v1/runs/${runId}/vectors`),
+  getFindings: (runId: string) => request<Finding[]>(`/api/v1/runs/${runId}/findings`),
   createVector: (runId: string, payload: Partial<Vector>) =>
     request<Vector>(`/api/v1/runs/${runId}/vectors`, { method: "POST", body: JSON.stringify(payload) }),
   selectVector: (runId: string, vectorId: string) =>
     request<Vector>(`/api/v1/runs/${runId}/vectors/${vectorId}/select`, { method: "POST" }),
+  promoteFinding: (runId: string, payload: Record<string, unknown>) =>
+    request<Finding>(`/api/v1/runs/${runId}/findings/promote`, { method: "POST", body: JSON.stringify(payload) }),
   getResults: (runId: string) => request<RunResults>(`/api/v1/runs/${runId}/results`),
   listSkills: () => request<SkillPack[]>("/api/v1/skills"),
+  createSkill: (payload: Record<string, unknown>) => request<SkillPack>("/api/v1/skills", { method: "POST", body: JSON.stringify(payload) }),
+  updateSkill: (skillId: string, payload: Record<string, unknown>) => request<SkillPack>(`/api/v1/skills/${skillId}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteSkill: (skillId: string) => request<void>(`/api/v1/skills/${skillId}`, { method: "DELETE" }),
+  reloadSkills: () => request<{ count: number; skills: SkillPack[] }>("/api/v1/skills/reload", { method: "POST" }),
   getSkills: (runId: string) => request<RunSkillApplication[]>(`/api/v1/runs/${runId}/skills`),
   applySkills: (runId: string) => request<RunSkillApplication[]>(`/api/v1/runs/${runId}/skills/apply`, { method: "POST" }),
   getHandoff: (runId: string) => request<Handoff>(`/api/v1/runs/${runId}/handoff`),
@@ -301,4 +319,6 @@ export const api = {
   saveProvider: (payload: Record<string, unknown>) =>
     request<ProviderConfig>("/api/v1/providers", { method: "POST", body: JSON.stringify(payload) }),
   testProvider: (providerId: string) => request<Record<string, unknown>>(`/api/v1/providers/${providerId}/test`, { method: "POST" }),
+  routeRunProvider: (runId: string, provider_id: string) =>
+    request<Run>(`/api/v1/runs/${runId}/provider-route`, { method: "POST", body: JSON.stringify({ provider_id }) }),
 };

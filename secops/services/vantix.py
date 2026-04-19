@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from secops.config import settings
 from secops.models import Action, AgentSession, Engagement, Fact, OperatorNote, RunMessage, Task, WorkspaceRun
 from secops.services.events import RunEventService
+from secops.services.phase_state import RunPhaseService
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 from secops.services.run_service import RunService
@@ -48,11 +49,14 @@ class VantixScheduler:
         self.memory = MemoryWriteService()
         self.skills = SkillApplicationService()
         self.storage = StorageLayout()
+        self.phases = RunPhaseService()
 
     def bootstrap(self, db: Session, run: WorkspaceRun, *, reason: str = "chat") -> str:
         self._seed_tasks(db, run)
         self._seed_agents(db, run)
         self._seed_initial_vector(db, run)
+        self._set_agent_states(db, run, current_role="recon")
+        self.phases.initialize(run, reason=reason)
         db.flush()
         self.skills.apply_to_run(db, run)
         self._message(db, run.id, "orchestrator", "Vantix", self._orchestrator_summary(run, reason), {"reason": reason})
@@ -64,6 +68,10 @@ class VantixScheduler:
         self._seed_tasks(db, run)
         self._seed_agents(db, run)
         self._seed_initial_vector(db, run)
+        target_phase = "development" if reason == "vector-selected" else "planning"
+        active_role = "developer" if reason == "vector-selected" else "orchestrator"
+        self._set_agent_states(db, run, current_role=active_role)
+        self.phases.transition(run, target_phase, reason=reason)
         db.flush()
         self.skills.apply_to_run(db, run)
         self._message(db, run.id, "orchestrator", "Vantix", f"Replan queued from {reason}. Current target: {run.target or 'unknown'}. Objective remains: {run.objective}", {"reason": reason})
@@ -110,6 +118,11 @@ class VantixScheduler:
                     metadata_json={"scheduler": "vantix", "default_runtime": "codex"},
                 )
             )
+
+    def _set_agent_states(self, db: Session, run: WorkspaceRun, *, current_role: str) -> None:
+        agents = db.execute(select(AgentSession).where(AgentSession.run_id == run.id)).scalars().all()
+        for agent in agents:
+            agent.status = "running" if agent.role == current_role else "pending"
 
     def _seed_initial_vector(self, db: Session, run: WorkspaceRun) -> None:
         exists = db.execute(select(Fact).where(Fact.run_id == run.id, Fact.kind == "vector")).first()
@@ -264,6 +277,7 @@ def create_vector_fact(db: Session, run_id: str, payload: dict[str, Any]) -> Fac
             "status": payload.get("status", "candidate"),
             "evidence": payload.get("evidence", ""),
             "next_action": payload.get("next_action", ""),
+            "remediation": payload.get("remediation", ""),
         }
     )
     fact = Fact(
