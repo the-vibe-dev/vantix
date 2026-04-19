@@ -1,253 +1,256 @@
 :root {
   color-scheme: dark;
-  --bg: #090d10;
-  --ink: #eef6f2;
-  --muted: #90a49c;
-  --panel: rgba(15, 24, 24, 0.88);
-  --panel-2: rgba(21, 34, 32, 0.94);
-  --line: rgba(154, 190, 175, 0.18);
+  --bg: #070c0e;
+  --panel: rgba(11, 19, 21, 0.92);
+  --line: rgba(140, 185, 165, 0.13);
   --accent: #19c37d;
   --accent-2: #f4b860;
-  --warn: #f97316;
-  --danger: #ef4444;
-  --shadow: 0 22px 70px rgba(0, 0, 0, 0.36);
-  font-family: "Aptos", "IBM Plex Sans", "Segoe UI", sans-serif;
+  --ink: #e8f4ee;
+  --muted: #7a9e92;
+  --mono: "IBM Plex Mono", "Cascadia Mono", monospace;
+  --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
-* { box-sizing: border-box; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
-  min-width: 320px;
-  background:
-    radial-gradient(circle at 15% 5%, rgba(25, 195, 125, 0.18), transparent 26%),
-    radial-gradient(circle at 90% 20%, rgba(244, 184, 96, 0.12), transparent 22%),
-    linear-gradient(135deg, #080b0d 0%, #0b1514 52%, #14130d 100%);
-  color: var(--ink);
+  padding: 0;
+  height: 100%;
 }
-button, input, textarea, select { font: inherit; }
-button { cursor: pointer; }
 
-.vantix-shell {
-  display: grid;
-  grid-template-columns: 340px 1fr;
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(25, 195, 125, 0.14) 0%, transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(244, 184, 96, 0.09) 0%, transparent 24%),
+    linear-gradient(160deg, #060a0c 0%, #091412 50%, #0e110a 100%);
+  background-attachment: fixed;
   min-height: 100vh;
 }
 
-.sidebar {
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  outline: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: rgba(25, 195, 125, 0.4) !important;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 185, 165, 0.18);
+  border-radius: 99px;
+}
+
+@keyframes vx-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.1;
+    transform: scale(2.4);
+  }
+}
+
+@keyframes vx-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes vx-fadein {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.vx-shell {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+}
+
+.vx-sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow: auto;
+  overflow-y: auto;
   border-right: 1px solid var(--line);
-  padding: 24px;
-  background: rgba(6, 10, 10, 0.9);
-  backdrop-filter: blur(18px);
+  background: rgba(5, 9, 10, 0.93);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
 }
 
-.brand-block h1 {
-  margin: 8px 0 4px;
-  font-size: clamp(2.4rem, 5vw, 4.5rem);
-  letter-spacing: 0.12em;
-  line-height: 0.9;
-}
-.brand-block p, .topbar p, .hint, .empty, .panel span, .panel p { color: var(--muted); }
-.eyebrow {
-  color: var(--accent-2);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+.vx-sidebar-inner {
+  padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
-.card, .panel {
+.vx-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 22px;
-  box-shadow: var(--shadow);
-}
-
-.launch, .run-list {
-  margin-top: 18px;
+  border-radius: 16px;
   padding: 16px;
-  display: grid;
-  gap: 12px;
+  backdrop-filter: blur(12px);
+  animation: vx-fadein 0.22s ease both;
 }
 
-label { display: grid; gap: 7px; color: var(--muted); }
-input, textarea, select {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(6, 12, 12, 0.88);
-  color: var(--ink);
-  padding: 11px 12px;
-}
-textarea { min-height: 96px; resize: vertical; }
-
-button {
-  border: 0;
-  border-radius: 14px;
-  padding: 10px 14px;
-  color: #06100c;
-  background: linear-gradient(135deg, var(--accent), #b2f2d1);
-  font-weight: 700;
-}
-button:hover { filter: brightness(1.08); }
-
-.run-card {
-  width: 100%;
-  display: grid;
-  gap: 5px;
-  text-align: left;
-  margin-top: 10px;
-  color: var(--ink);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-}
-.run-card.active { outline: 2px solid rgba(25, 195, 125, 0.55); }
-.run-card small { color: var(--muted); }
-
-.workspace { padding: 24px; min-width: 0; }
-.topbar {
+.vx-topbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 18px;
-  padding: 18px 20px;
-  margin-bottom: 18px;
-}
-.topbar h2 { margin: 4px 0; }
-.status-stack { display: grid; gap: 12px; justify-items: end; }
-.status-line { color: var(--accent-2) !important; }
-.controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.pill {
-  display: inline-flex;
-  border-radius: 999px;
-  padding: 6px 10px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  margin-bottom: 12px;
+  background: var(--panel);
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--muted);
+  border-radius: 16px;
+  backdrop-filter: blur(16px);
 }
-.pill.ok { color: var(--accent); }
-.pill.warn { color: var(--warn); }
 
-.command-grid {
+.vx-riskbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  margin-bottom: 12px;
+  background: rgba(8, 15, 16, 0.85);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  flex-wrap: wrap;
+}
+
+.vx-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 14px;
 }
-.panel { padding: 16px; min-width: 0; }
-.panel header {
+
+.vx-tabs {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.panel h3 { margin: 0; }
-.chat-panel { grid-column: span 2; grid-row: span 2; }
-.terminal { grid-column: span 2; }
-.settings-panel { grid-column: span 2; }
-
-.messages {
-  display: grid;
-  gap: 10px;
-  max-height: 360px;
-  overflow: auto;
-  padding-right: 4px;
-}
-.message {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
-}
-.message.user { border-color: rgba(244, 184, 96, 0.42); }
-.message.orchestrator { border-color: rgba(25, 195, 125, 0.5); }
-.message p { margin: 6px 0 0; color: var(--ink); }
-.chat-input { display: grid; gap: 10px; margin-top: 12px; }
-
-.agent-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.agent {
-  display: grid;
   gap: 4px;
-  padding: 11px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.035);
-  text-transform: capitalize;
-}
-.agent.completed { border-color: rgba(25, 195, 125, 0.5); }
-.agent.running { border-color: rgba(244, 184, 96, 0.55); }
-.agent.blocked, .agent.failed { border-color: rgba(239, 68, 68, 0.55); }
-
-.panel pre {
-  white-space: pre-wrap;
-  min-height: 260px;
-  max-height: 450px;
-  overflow: auto;
-  margin: 0;
-  padding: 14px;
-  border-radius: 14px;
-  background: #050908;
-  border: 1px solid var(--line);
-  font-family: "Cascadia Mono", "IBM Plex Mono", monospace;
-  font-size: 0.86rem;
-}
-
-.panel ul {
-  display: grid;
-  gap: 10px;
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.panel li {
-  display: grid;
-  gap: 5px;
-  padding: 11px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.035);
-}
-.panel li p { margin: 0; }
-.skill-list small { color: var(--muted); overflow-wrap: anywhere; }
-.chain-list strong { color: var(--accent-2); }
-.approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.provider-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
-.provider-form button { grid-column: span 2; }
-.provider-route { display: grid; gap: 10px; margin-top: 12px; margin-bottom: 12px; }
-.installer-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.installer-summary, .installer-actions {
-  display: grid;
-  gap: 8px;
-  align-content: start;
-  padding: 12px;
-  border-radius: 16px;
-  border: 1px solid var(--line);
+  padding: 4px;
   background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  margin-bottom: 16px;
 }
-.installer-summary p, .installer-actions p { margin: 0; }
+
+.vx-tab {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: none;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: transparent;
+  color: var(--muted);
+  transition: all 0.15s;
+  cursor: pointer;
+}
+
+.vx-tab.active {
+  background: rgba(25, 195, 125, 0.12);
+  color: var(--accent);
+}
+
+.vx-tab:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+}
+
+.vx-run-card {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.vx-run-card:hover {
+  border-color: rgba(140, 185, 165, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.vx-run-card.active {
+  border-color: rgba(25, 195, 125, 0.45);
+  background: rgba(25, 195, 125, 0.06);
+}
 
 @media (max-width: 1300px) {
-  .command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vx-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
+
 @media (max-width: 900px) {
-  .vantix-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
-  .topbar { align-items: flex-start; flex-direction: column; }
-  .status-stack { justify-items: start; }
-  .command-grid { grid-template-columns: 1fr; }
-  .chat-panel, .terminal, .settings-panel { grid-column: span 1; }
-  .provider-form { grid-template-columns: 1fr; }
-  .provider-form button { grid-column: span 1; }
-  .installer-grid { grid-template-columns: 1fr; }
+  .vx-shell {
+    grid-template-columns: 1fr;
+  }
+  .vx-sidebar {
+    position: static;
+    height: auto;
+  }
+  .vx-grid {
+    grid-template-columns: 1fr;
+  }
 }
