@@ -53,6 +53,10 @@ artifacts/
 *.out
 *.err
 
+# Local planning scratch
+/PLAN*.md
+/plan*.md
+
 # Runtime memory and reports
 memory/.memory.lock
 memory/archive/
