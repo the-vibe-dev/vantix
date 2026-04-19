@@ -1,34 +1,52 @@
 # Architecture
 
-## Layers
+## Control Plane
 
-- UI: React/Vite dashboard in `frontend/`.
-- API: FastAPI routers in `secops/routers/`.
-- Persistence: SQLAlchemy models in `secops/models.py`.
-- Orchestration: Vantix scheduler and chat services in `secops/services/vantix.py`.
-- Skills: registry, selector, prompt assembler, handoff helpers in `secops/services/skills.py` and `agent_skills/`.
-- Runtime: Codex/script execution controls in `secops/services/execution.py` and adapters.
-- Memory: dense JSONL writer plus DB mirror in `secops/services/memory_writer.py` and `scripts/memory-write.py`.
-- CVE/MCP: local CVE APIs and optional MCP server under `secops/mcp/`.
+- API routers: `secops/routers/*`.
+- Chat entrypoint: `/api/v1/chat` (preserved contract).
+- Scheduler: `secops/services/vantix.py` seeds tasks, roles, vectors, and notes.
+- System status: `secops/routers/system.py` includes runtime, tooling, and worker state.
 
-## Request Path
+## Durable Workflow Layer
 
-1. UI posts chat to `/api/v1/chat`.
-2. `VantixChatService` creates or loads a run and records the operator message.
-3. `VantixScheduler` seeds tasks, agents, vectors, events, and memory checkpoints.
-4. `SkillApplicationService` applies role/mode/context skills and writes prompts.
-5. UI refreshes graph, messages, vectors, results, skills, handoff, and attack chains.
+- Engine: `secops/services/workflows/engine.py`.
+- Phase sequence metadata: `secops/services/workflows/phases.py`.
+- Retry classifier: `secops/services/workflows/retries.py`.
+- Checkpoint handling: `secops/services/workflows/checkpoints.py`.
+- DB entities in `secops/models.py`:
+  - `WorkflowExecution`
+  - `WorkflowPhaseRun`
+  - `RunCheckpoint`
+  - `WorkerLease`
+  - `RunMetric`
 
-## Storage
+The API enqueues work. Worker runtime claims phase attempts from DB and executes them with lease records.
 
-Runtime data defaults to:
+## Worker Runtime
 
-```text
-${XDG_STATE_HOME:-$HOME/.local/state}/ctf-security-ops/<repo-name>-<repo-hash>
-```
+- Module: `secops/services/worker_runtime.py`.
+- Single-host compatibility worker thread exists by default.
+- Worker claims a phase, executes it, and writes completion/retry/blocked/failure updates.
+- Stale lease recovery is supported by claim logic on expired leases.
 
-This keeps generated prompts, handoffs, artifacts, reports, SQLite DBs, and logs under the current user. Shared/NFS storage is optional and should not be required for normal development.
+## Execution And Safety Adapters
 
-## Internal Names
+- Dispatcher/compat layer: `secops/services/execution.py`.
+- Execution policies + subprocess hardening: `secops/services/policies.py`.
+- Reporting synthesis: `secops/services/reporting.py`.
 
-The Python package and many env vars still use `secops` for compatibility. Product-facing docs and UI should use Vantix. A deep rename should be a separate migration after API and DB compatibility are planned.
+## Product Strengths Preserved
+
+- vectors and attack chains
+- approvals and handoffs
+- skill packs and operator notes
+- user-owned runtime storage
+- chat-first operator flow
+
+## Storage Model
+
+Runtime data remains user-owned under local state roots (`StorageLayout`) and includes prompts, artifacts, reports, logs, handoffs, and memory files.
+
+## Compatibility Note
+
+Internal package naming remains `secops` for compatibility. Product-facing behavior remains Vantix.

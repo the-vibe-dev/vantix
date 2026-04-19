@@ -23,6 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2.0,<9.0.0",
+  "ruff>=0.6.0,<1.0.0",
+  "mypy>=1.10.0,<2.0.0",
+  "bandit>=1.7.9,<2.0.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -30,3 +33,34 @@ include = ["secops*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+exclude = ["tools", "frontend/dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+  "secops.services.workflows.*",
+  "secops.services.worker_runtime",
+  "secops.services.policies",
+  "secops.services.reporting",
+]
+disallow_untyped_defs = true
+
+[tool.bandit]
+exclude_dirs = ["tests", "tools"]
+skips = ["B101"]
