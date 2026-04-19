@@ -439,6 +439,7 @@ class RunResultsRead(BaseModel):
     vectors: list[VectorRead]
     terminal_summary: str
     report_path: str | None = None
+    report_json_path: str | None = None
 
 
 class RunPhaseRead(BaseModel):
@@ -512,6 +513,10 @@ class AttackChainCreate(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     mitre_ids: list[str] = Field(default_factory=list)
     notes: str = ""
+    facts: list[str] = Field(default_factory=list)
+    cves: list[str] = Field(default_factory=list)
+    learning_hits: list[str] = Field(default_factory=list)
+    operator_notes: list[str] = Field(default_factory=list)
 
 
 class AttackChainRead(BaseModel):
@@ -522,7 +527,17 @@ class AttackChainRead(BaseModel):
     steps: list[dict[str, Any]]
     mitre_ids: list[str]
     notes: str
+    provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+
+class PlanningBundleRead(BaseModel):
+    run_id: str
+    workflow_status: str
+    best_vectors: list[VectorRead]
+    best_chains: list[AttackChainRead]
+    ranking_rationale: list[dict[str, Any]]
+    missing_evidence: list[str]
 
 
 class FindingPromotionCreate(BaseModel):

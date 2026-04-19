@@ -28,6 +28,7 @@ from secops.services.events import RunEventService
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 from secops.services.policies import ExecutionPolicyService
+from secops.services.reporting import ReportingService
 from secops.services.storage import StorageLayout
 from secops.services.worker_runtime import worker_runtime
 from secops.services.workflows.engine import WorkflowEngine
@@ -45,6 +46,7 @@ class ExecutionManager:
         self.cve = CVESearchService()
         self.memory = MemoryWriteService()
         self.policies = ExecutionPolicyService()
+        self.reporting = ReportingService()
         self.workflow_engine = WorkflowEngine()
         self.worker_runtime = worker_runtime
 
@@ -471,30 +473,20 @@ class ExecutionManager:
             task = self._task_by_kind(db, run.id, "report")
             if task.status == "completed":
                 return
-            paths = self.nas.for_workspace(run.workspace_id)
-            facts = db.execute(select(Fact).where(Fact.run_id == run.id)).scalars().all()
-            events = db.execute(select(Artifact).where(Artifact.run_id == run.id)).scalars().all()
-            report = [
-                f"# Run Summary: {run.workspace_id}",
-                "",
-                f"- Mode: {run.mode}",
-                f"- Target: {run.target}",
-                f"- Objective: {run.objective}",
-                "",
-                "## Facts",
-            ]
-            for fact in facts[:50]:
-                report.append(f"- [{fact.kind}] {fact.value} (confidence={fact.confidence})")
-            report.extend(["", "## Artifacts"])
-            for artifact in events:
-                report.append(f"- {artifact.kind}: {artifact.path}")
-            report_path = paths.artifacts / "run_summary.md"
-            paths.write_text(report_path, "\n".join(report) + "\n")
+            generated = self.reporting.generate(db, run)
             task.status = "completed"
-            task.result_json = {"report_path": str(report_path)}
-            db.add(Artifact(run_id=run.id, kind="report", path=str(report_path), metadata_json={}))
+            task.result_json = {"report_path": generated["markdown_path"], "report_json_path": generated["json_path"]}
+            db.add(
+                Artifact(
+                    run_id=run.id,
+                    kind="report",
+                    path=str(generated["markdown_path"]),
+                    metadata_json={"report_json_path": generated["json_path"]},
+                )
+            )
+            db.add(Artifact(run_id=run.id, kind="report-json", path=str(generated["json_path"]), metadata_json={}))
             self.events.emit(db, run.id, "phase", "Report generated")
-            self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(report_path)], next_action="close run")
+            self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(generated["markdown_path"]), str(generated["json_path"])], next_action="close run")
             db.commit()
 
     def _task_by_kind(self, db, run_id: str, kind: str) -> Task:

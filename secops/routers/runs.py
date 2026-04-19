@@ -39,6 +39,7 @@ from secops.schemas import (
     FindingPromotionCreate,
     FindingRead,
     RunProviderRouteCreate,
+    PlanningBundleRead,
 )
 from secops.security import require_api_token
 from secops.services.context_builder import ContextBuilder
@@ -55,7 +56,7 @@ from secops.services.skills import (
     create_attack_chain_fact,
     list_attack_chains,
 )
-from secops.services.vantix import create_vector_fact, summarize_terminal, vector_from_fact, VantixScheduler
+from secops.services.vantix import build_planning_bundle, create_vector_fact, summarize_terminal, vector_from_fact, VantixScheduler
 
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"], dependencies=[Depends(require_api_token)])
@@ -291,8 +292,10 @@ def list_run_vectors(run_id: str, db: Session = Depends(get_db)) -> list[dict]:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    facts = db.query(Fact).filter(Fact.run_id == run_id, Fact.kind == "vector").order_by(Fact.confidence.desc(), Fact.created_at.asc()).all()
-    return [vector_from_fact(fact) for fact in facts]
+    facts = db.query(Fact).filter(Fact.run_id == run_id, Fact.kind == "vector").order_by(Fact.created_at.asc()).all()
+    vectors = [vector_from_fact(fact) for fact in facts]
+    vectors.sort(key=lambda row: float((row.get("metadata") or {}).get("score", 0.0)), reverse=True)
+    return vectors
 
 
 @router.get("/{run_id}/phase", response_model=RunPhaseRead)
@@ -396,6 +399,7 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
     events = db.query(RunEvent).filter(RunEvent.run_id == run_id).order_by(RunEvent.sequence.asc()).all()
     vectors = list_run_vectors(run_id, db)
     report = next((artifact.path for artifact in artifacts if artifact.kind == "report"), None)
+    report_json = next((artifact.path for artifact in artifacts if artifact.kind == "report-json"), None)
     return {
         "run_id": run.id,
         "status": run.status,
@@ -404,6 +408,7 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
         "vectors": vectors,
         "terminal_summary": summarize_terminal(events),
         "report_path": report,
+        "report_json_path": report_json,
     }
 
 
@@ -453,6 +458,14 @@ def create_attack_chain(run_id: str, payload: AttackChainCreate, db: Session = D
     db.commit()
     db.refresh(fact)
     return attack_chain_from_fact(fact)
+
+
+@router.get("/{run_id}/planning-bundle", response_model=PlanningBundleRead)
+def get_planning_bundle(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return build_planning_bundle(db, run)
 
 
 @router.get("/{run_id}/stream")

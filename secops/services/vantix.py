@@ -148,6 +148,12 @@ class VantixScheduler:
                     "next_action": "run Vantix Recon and correlate memory/CVE intel",
                     "noise_level": "quiet",
                     "requires_approval": False,
+                    "evidence_quality": 0.4,
+                    "source_credibility": 0.5,
+                    "novelty": 0.5,
+                    "noise_level_score": 0.2,
+                    "prerequisites_satisfied": 0.3,
+                    "provenance": {"facts": [], "cves": [], "learning_hits": [], "operator_notes": []},
                     "skill_id": "recon_advisor",
                     "scope_check": "pending",
                     "safety_notes": "No exploit execution until scope and evidence are confirmed.",
@@ -249,19 +255,38 @@ def extract_target(message: str) -> str:
     return match.group(1).rstrip(".,;") if match else ""
 
 
+def _vector_score(meta: dict[str, Any], confidence: float) -> float:
+    evidence_quality = float(meta.get("evidence_quality", 0.5))
+    source_credibility = float(meta.get("source_credibility", 0.5))
+    novelty = float(meta.get("novelty", 0.5))
+    prereq = float(meta.get("prerequisites_satisfied", 0.5))
+    noise_penalty = float(meta.get("noise_level_score", 0.4))
+    score = (
+        confidence * 0.40
+        + evidence_quality * 0.20
+        + source_credibility * 0.15
+        + novelty * 0.15
+        + prereq * 0.20
+        - noise_penalty * 0.10
+    )
+    return max(0.0, round(score, 4))
+
+
 def vector_from_fact(fact: Fact) -> dict[str, Any]:
     meta = fact.metadata_json or {}
+    confidence = float(fact.confidence or meta.get("confidence") or 0.0)
+    score = _vector_score(meta, confidence)
     return {
         "id": fact.id,
         "title": str(meta.get("title") or fact.value or "Candidate vector"),
         "summary": str(meta.get("summary") or ""),
         "source": str(meta.get("source") or fact.source or "manual"),
-        "confidence": float(fact.confidence or meta.get("confidence") or 0.0),
+        "confidence": confidence,
         "severity": str(meta.get("severity") or "info"),
         "status": str(meta.get("status") or "candidate"),
         "evidence": str(meta.get("evidence") or ""),
         "next_action": str(meta.get("next_action") or ""),
-        "metadata": meta,
+        "metadata": {**meta, "score": score},
         "created_at": fact.created_at,
     }
 
@@ -278,6 +303,17 @@ def create_vector_fact(db: Session, run_id: str, payload: dict[str, Any]) -> Fac
             "evidence": payload.get("evidence", ""),
             "next_action": payload.get("next_action", ""),
             "remediation": payload.get("remediation", ""),
+            "evidence_quality": float(payload.get("evidence_quality", 0.5)),
+            "source_credibility": float(payload.get("source_credibility", 0.5)),
+            "novelty": float(payload.get("novelty", 0.5)),
+            "noise_level_score": float(payload.get("noise_level_score", 0.4)),
+            "prerequisites_satisfied": float(payload.get("prerequisites_satisfied", 0.5)),
+            "provenance": {
+                "facts": list(payload.get("facts") or []),
+                "cves": list(payload.get("cves") or []),
+                "learning_hits": list(payload.get("learning_hits") or []),
+                "operator_notes": list(payload.get("operator_notes") or []),
+            },
         }
     )
     fact = Fact(
@@ -309,3 +345,36 @@ def recent_learning_for_run(run: WorkspaceRun, limit: int = 5) -> list[dict[str,
         ports=run.config_json.get("ports", []),
         tags=run.config_json.get("tags", []),
     )[:limit]
+
+
+def build_planning_bundle(db: Session, run: WorkspaceRun) -> dict[str, Any]:
+    from secops.services.skills import list_attack_chains
+
+    vectors = [vector_from_fact(fact) for fact in db.execute(select(Fact).where(Fact.run_id == run.id, Fact.kind == "vector")).scalars().all()]
+    vectors = sorted(vectors, key=lambda row: float((row.get("metadata") or {}).get("score", 0.0)), reverse=True)
+    chains = list_attack_chains(db, run.id)
+    chains = sorted(chains, key=lambda row: int(row.get("score") or 0), reverse=True)
+    missing_evidence: list[str] = []
+    if not vectors:
+        missing_evidence.append("No vectors available; add candidate vectors from recon/CVE/learning evidence.")
+    if not chains:
+        missing_evidence.append("No attack chains available; add chain steps with preconditions and proof requirements.")
+    for vector in vectors[:5]:
+        if not vector.get("evidence"):
+            missing_evidence.append(f"Vector '{vector.get('title')}' has missing evidence details.")
+    rationale = [
+        {
+            "vector_id": row["id"],
+            "score": (row.get("metadata") or {}).get("score", 0.0),
+            "why": "weighted by confidence/evidence/credibility/novelty/prerequisites minus noise",
+        }
+        for row in vectors[:5]
+    ]
+    return {
+        "run_id": run.id,
+        "workflow_status": run.status,
+        "best_vectors": vectors[:5],
+        "best_chains": chains[:5],
+        "ranking_rationale": rationale,
+        "missing_evidence": sorted(set(missing_evidence)),
+    }

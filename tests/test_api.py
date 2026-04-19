@@ -179,6 +179,14 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         chains = client.get(f"/api/v1/runs/{run_id}/attack-chains")
         assert chains.status_code == 200
         assert any(item["name"] == "Recon to validated finding" for item in chains.json())
+        assert "provenance" in chains.json()[0]
+
+        planning = client.get(f"/api/v1/runs/{run_id}/planning-bundle")
+        assert planning.status_code == 200
+        planning_payload = planning.json()
+        assert planning_payload["run_id"] == run_id
+        assert "best_vectors" in planning_payload
+        assert "missing_evidence" in planning_payload
 
         created = client.post(
             f"/api/v1/runs/{run_id}/vectors",

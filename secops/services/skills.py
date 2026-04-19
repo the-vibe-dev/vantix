@@ -414,27 +414,58 @@ def list_attack_chains(db: Session, run_id: str) -> list[dict[str, Any]]:
 
 def attack_chain_from_fact(fact: Fact) -> dict[str, Any]:
     meta = fact.metadata_json or {}
+    normalized_steps = []
+    for step in list(meta.get("steps") or []):
+        entry = dict(step)
+        normalized_steps.append(
+            {
+                "name": str(entry.get("name") or entry.get("phase") or "step"),
+                "preconditions": list(entry.get("preconditions") or []),
+                "expected_outcome": str(entry.get("expected_outcome") or ""),
+                "proof_required": list(entry.get("proof_required") or []),
+                "stop_conditions": list(entry.get("stop_conditions") or []),
+            }
+        )
     return {
         "id": fact.id,
         "name": str(meta.get("name") or fact.value),
         "score": int(meta.get("score") or round((fact.confidence or 0) * 100)),
         "status": str(meta.get("status") or "identified"),
-        "steps": list(meta.get("steps") or []),
+        "steps": normalized_steps,
         "mitre_ids": list(meta.get("mitre_ids") or []),
         "notes": str(meta.get("notes") or ""),
+        "provenance": dict(meta.get("provenance") or {}),
         "created_at": fact.created_at,
     }
 
 
 def create_attack_chain_fact(db: Session, run_id: str, payload: dict[str, Any]) -> Fact:
     score = int(payload.get("score") or 0)
+    normalized_steps = []
+    for step in list(payload.get("steps") or []):
+        row = dict(step)
+        normalized_steps.append(
+            {
+                "name": str(row.get("name") or row.get("phase") or "step"),
+                "preconditions": list(row.get("preconditions") or []),
+                "expected_outcome": str(row.get("expected_outcome") or ""),
+                "proof_required": list(row.get("proof_required") or []),
+                "stop_conditions": list(row.get("stop_conditions") or []),
+            }
+        )
     metadata = {
         "name": payload.get("name", "Attack chain"),
         "score": score,
         "status": payload.get("status", "identified"),
-        "steps": payload.get("steps", []),
+        "steps": normalized_steps,
         "mitre_ids": payload.get("mitre_ids", []),
         "notes": payload.get("notes", ""),
+        "provenance": {
+            "facts": list(payload.get("facts") or []),
+            "cves": list(payload.get("cves") or []),
+            "learning_hits": list(payload.get("learning_hits") or []),
+            "operator_notes": list(payload.get("operator_notes") or []),
+        },
     }
     fact = Fact(
         run_id=run_id,
