@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -28,6 +27,7 @@ from secops.services.cve_search import CVESearchService
 from secops.services.events import RunEventService
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
+from secops.services.policies import ExecutionPolicyService
 from secops.services.storage import StorageLayout
 from secops.services.worker_runtime import worker_runtime
 from secops.services.workflows.engine import WorkflowEngine
@@ -44,6 +44,7 @@ class ExecutionManager:
         self.learning = LearningService()
         self.cve = CVESearchService()
         self.memory = MemoryWriteService()
+        self.policies = ExecutionPolicyService()
         self.workflow_engine = WorkflowEngine()
         self.worker_runtime = worker_runtime
 
@@ -200,7 +201,7 @@ class ExecutionManager:
                     command = ["nmap", "-Pn", "-sT", "-p", ports, "--open", recon_target]
                 else:
                     command = ["nmap", "-Pn", "-sT", "--top-ports", "100", "--open", recon_target]
-            output = self._run_command(command, session.log_path) if command else "No target supplied; recon skipped.\n"
+            output = self._run_command(command, session.log_path, run=run) if command else "No target supplied; recon skipped.\n"
             paths.write_text(Path(session.log_path), output)
             discovered = self._parse_nmap(output)
             if discovered["ports"]:
@@ -296,6 +297,35 @@ class ExecutionManager:
             db.commit()
 
             log_path = Path(session.log_path)
+            codex_policy = self.policies.evaluate(run, action_kind="codex")
+            if codex_policy.verdict in {"block", "require_approval"}:
+                simulated = (
+                    f"Codex execution policy verdict: {codex_policy.verdict}.\n"
+                    f"Reason: {codex_policy.reason}\n"
+                    "Review policy status, then retry/replan.\n"
+                )
+                paths.write_text(log_path, simulated)
+                with SessionLocal() as inner_db:
+                    inner_run = inner_db.get(WorkspaceRun, run.id)
+                    if inner_run is not None:
+                        inner_run.status = "blocked"
+                    refreshed = inner_db.get(AgentSession, session.id)
+                    refreshed.status = "blocked"
+                    refreshed.completed_at = datetime.now(timezone.utc)
+                    task = self._task_by_kind(inner_db, run.id, "orchestrate")
+                    task.status = "blocked"
+                    task.result_json = {"reason": codex_policy.reason, "verdict": codex_policy.verdict}
+                    self.events.emit(inner_db, run.id, "terminal", simulated.strip(), level="warning", agent_session_id=session.id)
+                    self._write_memory(inner_db, inner_db.get(WorkspaceRun, run.id), mode="handoff", phase="orchestrate-blocked", issues=[codex_policy.reason], files=[str(log_path)], next_action="review approval/policy and retry")
+                    self._create_approval(
+                        inner_db,
+                        run.id,
+                        title="Codex execution policy blocked run",
+                        detail=codex_policy.reason,
+                        reason="codex-policy",
+                    )
+                    inner_db.commit()
+                return
             if settings.enable_codex_execution:
                 runner = CodexRunner(workspace_dir=Path(session.workspace_path))
                 if not runner.is_available():
@@ -382,32 +412,6 @@ class ExecutionManager:
                             reason="codex-failure",
                         )
                     inner_db.add(Artifact(run_id=run.id, kind="terminal-log", path=str(log_path), metadata_json={"agent_session_id": session.id}))
-                    inner_db.commit()
-            else:
-                simulated = (
-                    "SECOPS_ENABLE_CODEX_EXECUTION is disabled.\n"
-                    "Review the assembled prompt and use retry/replan after enabling Codex execution.\n"
-                )
-                paths.write_text(log_path, simulated)
-                with SessionLocal() as inner_db:
-                    inner_run = inner_db.get(WorkspaceRun, run.id)
-                    if inner_run is not None:
-                        inner_run.status = "blocked"
-                    refreshed = inner_db.get(AgentSession, session.id)
-                    refreshed.status = "blocked"
-                    refreshed.completed_at = datetime.now(timezone.utc)
-                    task = self._task_by_kind(inner_db, run.id, "orchestrate")
-                    task.status = "blocked"
-                    task.result_json = {"reason": "codex-disabled"}
-                    self.events.emit(inner_db, run.id, "terminal", simulated.strip(), level="warning", agent_session_id=session.id)
-                    self._write_memory(inner_db, inner_db.get(WorkspaceRun, run.id), mode="handoff", phase="orchestrate-blocked", issues=["codex execution disabled"], files=[str(log_path)], next_action="enable Codex execution or run manually")
-                    self._create_approval(
-                        inner_db,
-                        run.id,
-                        title="Codex execution disabled",
-                        detail="Enable SECOPS_ENABLE_CODEX_EXECUTION to run the primary orchestrator.",
-                        reason="codex-disabled",
-                    )
                     inner_db.commit()
 
     def _phase_learn_ingest(self, run_id: str) -> None:
@@ -551,16 +555,20 @@ class ExecutionManager:
         except Exception as exc:  # noqa: BLE001
             self.events.emit(db, run.id, "memory_error", f"Memory write failed: {exc}", level="warning")
 
-    def _run_command(self, command: list[str], log_path: str) -> str:
+    def _run_command(self, command: list[str], log_path: str, *, run: WorkspaceRun | None = None) -> str:
         if not command:
             return ""
-        if not settings.enable_script_execution:
-            return "Script execution disabled.\n"
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=120)
-            return (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
-        except Exception as exc:  # noqa: BLE001
-            return f"Command failed: {exc}\n"
+        if run is not None:
+            decision = self.policies.evaluate(run, action_kind="script")
+            if decision.verdict in {"block", "require_approval"}:
+                return f"Command blocked by policy: {decision.reason}\n"
+        record = self.policies.run_subprocess(command, timeout_seconds=120, redactions=[settings.secret_key])
+        output = (record.stdout or "") + ("\n" + record.stderr if record.stderr else "")
+        if record.timed_out:
+            return output + "\nCommand timed out.\n"
+        if record.error_class and record.returncode != 0:
+            return output + f"\nCommand failed ({record.error_class}) rc={record.returncode}.\n"
+        return output
 
     def _parse_nmap(self, output: str) -> dict[str, list[str]]:
         ports = re.findall(r"(?m)^(\d{1,5})/tcp\s+open", output)

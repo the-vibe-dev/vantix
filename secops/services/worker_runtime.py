@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from secops.db import SessionLocal
 from secops.services.workflows.engine import WorkflowEngine, WorkflowClaim
+from secops.services.workflows.retries import classify_retry
 
 
 def utcnow() -> datetime:
@@ -96,12 +97,22 @@ class WorkerRuntime:
                     if "Blocked" in error_class:
                         self._engine.mark_phase_blocked(db, claim, reason=str(exc))
                     else:
-                        self._engine.mark_phase_failed(
-                            db,
-                            claim,
-                            error_class=error_class,
-                            error_message=str(exc),
-                        )
+                        decision = classify_retry(error_class)
+                        if decision.retryable:
+                            self._engine.schedule_retry(
+                                db,
+                                claim,
+                                retry_class=decision.retry_class.value,
+                                delay_seconds=decision.delay_seconds,
+                                reason=decision.reason or str(exc),
+                            )
+                        else:
+                            self._engine.mark_phase_failed(
+                                db,
+                                claim,
+                                error_class=decision.retry_class.value or error_class,
+                                error_message=decision.reason or str(exc),
+                            )
                     db.commit()
             finally:
                 self._heartbeat_at = utcnow()

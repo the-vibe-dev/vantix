@@ -245,6 +245,59 @@ class WorkflowEngine:
             run.status = "blocked"
             run.updated_at = now
 
+    def schedule_retry(
+        self,
+        db: Session,
+        claim: WorkflowClaim,
+        *,
+        retry_class: str,
+        delay_seconds: int,
+        reason: str,
+    ) -> WorkflowPhaseRun | None:
+        now = utcnow()
+        phase_run = db.get(WorkflowPhaseRun, claim.phase_run_id)
+        if phase_run is None:
+            return None
+
+        phase_run.status = PhaseStatus.FAILED.value
+        phase_run.completed_at = now
+        phase_run.lease_expires_at = now
+        phase_run.retry_class = retry_class
+        phase_run.error_json = {"class": retry_class, "message": reason}
+
+        lease = db.get(WorkerLease, claim.lease_id)
+        if lease is not None:
+            lease.status = WorkerLeaseState.RELEASED.value
+            lease.released_at = now
+            lease.heartbeat_at = now
+            lease.lease_expires_at = now
+
+        next_attempt = WorkflowPhaseRun(
+            run_id=phase_run.run_id,
+            workflow_id=phase_run.workflow_id,
+            phase_name=phase_run.phase_name,
+            attempt=phase_run.attempt + 1,
+            status=PhaseStatus.RETRYING.value,
+            retry_class=retry_class,
+            next_attempt_at=now + timedelta(seconds=max(1, delay_seconds)),
+            metadata_json={"retry_from_phase_run_id": phase_run.id},
+        )
+        db.add(next_attempt)
+        db.flush()
+
+        workflow = db.get(WorkflowExecution, phase_run.workflow_id)
+        if workflow is not None:
+            workflow.status = WorkflowStatus.RUNNING.value
+            workflow.current_phase = phase_run.phase_name
+            workflow.attempt_count = max(workflow.attempt_count, next_attempt.attempt)
+            workflow.updated_at = now
+
+        run = db.get(WorkspaceRun, phase_run.run_id)
+        if run is not None and run.status not in {"cancelled", "blocked"}:
+            run.status = "running"
+            run.updated_at = now
+        return next_attempt
+
     def block_run(self, db: Session, run: WorkspaceRun, reason: str) -> None:
         run.status = "blocked"
         run.updated_at = utcnow()
