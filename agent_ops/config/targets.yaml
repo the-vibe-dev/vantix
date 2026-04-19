@@ -1,0 +1,12 @@
+# Local target declarations. Replace with your own authorized assets.
+# Keep real client/program data out of public commits.
+defaults:
+  artifacts_root: ${SECOPS_ARTIFACTS_ROOT:-artifacts}
+
+targets:
+  - target_id: example-lab
+    target: 192.0.2.10
+    platform: lab
+    authorized: false
+    owner: operator
+    notes: "Example only. Set authorized=true only for in-scope assets."

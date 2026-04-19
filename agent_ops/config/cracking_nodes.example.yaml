@@ -1,0 +1,16 @@
+cracking_nodes:
+  - id: gpu-primary
+    host: <CRACK_NODE_HOST>
+    user: <CRACK_NODE_USER>
+    ssh_key: ~/.ssh/<LAB_KEY>
+    work_dir: ~/ctf_crack
+    staging: scp
+    hashcat_bin: hashcat
+    enabled: true
+    notes: "Example GPU worker. Replace with your own host."
+defaults:
+  wordlists:
+    - ${CTF_ROOT}/wordlists/rockyou.txt
+  rules:
+    - /usr/share/hashcat/rules/best64.rule
+  session_name: ctf-crack

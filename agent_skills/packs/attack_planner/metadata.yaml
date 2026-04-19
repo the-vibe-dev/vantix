@@ -1,0 +1,24 @@
+id: attack_planner
+name: Attack Planner
+version: 1
+summary: correlates findings into scored attack paths
+roles:
+- orchestrator
+- vector_store
+- researcher
+modes:
+- pentest
+- bugbounty
+- ctf
+- koth
+execution_level: advisory
+safety_level: active
+tags:
+- attack-chain
+- planning
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

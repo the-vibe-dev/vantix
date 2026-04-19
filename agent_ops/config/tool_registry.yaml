@@ -1,0 +1,179 @@
+tools:
+  - id: nmap
+    name: Nmap
+    binaries: [nmap]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [nmap]
+  - id: curl
+    name: curl
+    binaries: [curl]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [curl]
+  - id: jq
+    name: jq
+    binaries: [jq]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [jq]
+  - id: ffuf
+    name: ffuf
+    binaries: [ffuf]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [ffuf]
+  - id: sqlmap
+    name: sqlmap
+    binaries: [sqlmap]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [sqlmap]
+  - id: whatweb
+    name: WhatWeb
+    binaries: [whatweb]
+    suites: [minimal, common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [whatweb]
+  - id: dnsutils
+    name: dnsutils
+    binaries: [dig, nslookup]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [dnsutils]
+  - id: whois
+    name: whois
+    binaries: [whois]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [whois]
+  - id: nikto
+    name: Nikto
+    binaries: [nikto]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [nikto]
+  - id: amass
+    name: Amass
+    binaries: [amass]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [amass]
+  - id: hydra
+    name: Hydra
+    binaries: [hydra]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [hydra]
+  - id: wfuzz
+    name: Wfuzz
+    binaries: [wfuzz]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [wfuzz]
+  - id: wpscan
+    name: WPScan
+    binaries: [wpscan]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [wpscan]
+  - id: gobuster
+    name: Gobuster
+    binaries: [gobuster]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [gobuster]
+  - id: feroxbuster
+    name: Feroxbuster
+    binaries: [feroxbuster]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [feroxbuster]
+  - id: hashcat
+    name: Hashcat
+    binaries: [hashcat]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [hashcat]
+  - id: subfinder
+    name: Subfinder
+    binaries: [subfinder]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: go
+      package: github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+      binary: subfinder
+      prereq_packages: [golang-go]
+  - id: httpx
+    name: httpx
+    binaries: [httpx]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: go
+      package: github.com/projectdiscovery/httpx/cmd/httpx@latest
+      binary: httpx
+      prereq_packages: [golang-go]
+  - id: nuclei
+    name: Nuclei
+    binaries: [nuclei]
+    suites: [common, full]
+    allow_auto_install: true
+    install:
+      method: go
+      package: github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+      binary: nuclei
+      prereq_packages: [golang-go]
+  - id: naabu
+    name: Naabu
+    binaries: [naabu]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: go
+      package: github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+      binary: naabu
+      prereq_packages: [golang-go]
+  - id: dalfox
+    name: Dalfox
+    binaries: [dalfox]
+    suites: [full]
+    allow_auto_install: true
+    install:
+      method: go
+      package: github.com/hahwul/dalfox/v2@latest
+      binary: dalfox
+      prereq_packages: [golang-go]

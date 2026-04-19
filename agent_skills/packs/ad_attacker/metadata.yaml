@@ -1,0 +1,23 @@
+id: ad_attacker
+name: Active Directory Security
+version: 1
+summary: AD enumeration and attack-path analysis
+roles:
+- researcher
+- developer
+- executor
+modes:
+- pentest
+- windows-ctf
+- windows-koth
+execution_level: gated
+safety_level: active
+tags:
+- active-directory
+- windows
+requires_scope: true
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

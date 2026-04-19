@@ -1,0 +1,21 @@
+id: cicd_redteam
+name: CI/CD Red Team
+version: 1
+summary: pipeline, runner, artifact, and secret-flow review
+roles:
+- researcher
+- developer
+modes:
+- pentest
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- cicd
+- supply-chain
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

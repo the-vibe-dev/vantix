@@ -1,0 +1,169 @@
+program_id: uber
+platform: hackerone
+program_url: https://hackerone.com/uber
+last_updated: "2025-12-12"
+
+# ── Scope ────────────────────────────────────────────────────────────────────
+scope:
+  # Uber provides live asset lists — always query these before assuming scope.
+  # Supports ?offset=N&limit=N pagination.
+  asset_recon_api:
+    domains: https://appsec-analysis.uber.com/public/bugbounty/ListDomains
+    ips:     https://appsec-analysis.uber.com/public/bugbounty/ListIPs
+    cache_ttl_minutes: 60
+
+  # Known wildcard patterns inferred from the program (real list comes from API).
+  wildcard_in_scope:
+    - "*.uber.com"
+    - "*.ubereats.com"
+    - "*.uber.net"
+
+  # Explicit in-scope is populated dynamically from the API at runtime.
+  explicit_in_scope: []
+
+  # Explicit OOS domains (not targets we ever touch).
+  explicit_out_of_scope_domains:
+    - twitter.com
+    - facebook.com
+    - linkedin.com
+    - instagram.com
+
+  # OOS vuln type identifiers (checked before filing any report).
+  out_of_scope_vuln_types:
+    - self_xss
+    - dos_ddos
+    - rate_limiting_without_impact
+    - csrf_low_impact
+    - csrf_logout
+    - ssl_tls_scan
+    - banner_grabbing
+    - open_redirect_low_impact
+    - credential_stuffing
+    - social_engineering
+    - missing_cookie_flags_non_auth
+    - stack_traces_path_disclosure
+    - directory_listing
+    - csv_injection
+    - theoretical_no_poc
+    - content_injection
+    - content_spoofing
+    - dangling_ips
+    - missing_headers_without_poc
+    - exposed_login_panel_without_poc
+    - open_ports_without_poc
+    - third_party_services_not_owned_by_uber
+    - account_enumeration_known_uuid_list
+    - invite_promo_code_enumeration
+    - push_notification_without_content_control
+    - outdated_browser_only
+    - automated_scan_no_analysis
+    - physical_access_required
+    - mitm_non_mobile
+    - compromised_credential_dependency
+
+# ── Special testing infrastructure ───────────────────────────────────────────
+special_endpoints:
+  # Use this URL for ALL SSRF testing against Uber production.
+  # Replace {handle} with your HackerOne @wearehackerone.com handle.
+  # The sheriff returns a secret token in headers + body on successful SSRF.
+  ssrf_sheriff: "http://dca11-pra.prod.uber.internal:31084/{handle}@wearehackerone.com"
+  ssrf_extensions:
+    - xml
+    - json
+    - gif
+    - png
+    - jpg
+    - html
+    - txt
+    - mp4
+    - csv
+  # Append extension to path, e.g.: /foobar.json, /probe.xml
+  ssrf_sheriff_source: https://github.com/teknogeek/ssrf-sheriff
+
+# ── Program rules ─────────────────────────────────────────────────────────────
+rules:
+  use_own_accounts_only: true          # Only test with your own personal/test accounts
+  h1_email_in_reports: true            # Always reference @wearehackerone.com address
+  no_brute_force: true                 # No credential/ID brute forcing
+  no_dos: true                         # No DoS/DDoS of any kind
+  no_social_engineering: true          # No SE of Uber employees/customers
+  no_target_specific_employees: true   # Do not target specific individuals
+  stop_at_minimal_poc: true            # Stop once you have adequate PoC — no further extraction
+  keep_data_confidential: true         # Do not save/copy/store user data encountered
+  no_public_disclosure: true           # No disclosure without Uber written consent
+  no_password_changes: true            # Never change account passwords that aren't yours
+  no_destructive_actions: true         # Leave systems as found
+  report_if_unsure: true               # When in doubt, stop and report what you have
+
+  cve_policy:
+    min_age_days: 60                   # CVE must be public for ≥60 days
+    exception_types:                   # Exceptions reviewed case-by-case
+      - unauthenticated_rce
+      - critical_privilege_escalation
+      - direct_sensitive_data_access
+      - immediate_severe_risk
+
+# ── Reward tiers ──────────────────────────────────────────────────────────────
+reward_tiers:
+  low:      { avg: 300,    range: "$300" }
+  medium:   { avg: 1076,   range: "$500–$2,500" }
+  high:     { avg: 5289,   range: "$4,000–$11,000" }
+  critical: { avg: 13368,  range: "$11,000–$15,000" }
+
+  fixed_rewards:
+    subdomain_takeover: 500
+    broken_url_uber_com: 100        # case-by-case ($0 or $100)
+    third_party_info_disclosure: 0  # case-by-case
+
+  impact_buckets:
+    exposure_of_user_data:               { max: 10000 }
+    unauthorized_requests_user_employee: { max: 10000 }
+    monetary_impact:                     { max: 10000 }
+    phishing:                            { max: 5000  }
+    safety:                              { max: 10000 }
+
+  cvss_scoring: "3.1"
+  cvss_ref: https://nvd.nist.gov/vuln-metrics/cvss/v3-calculator
+  authenticated_reports: "Set PR:L (Privileges Required: Low) for any auth-required finding"
+  pay_at_triage: true    # Minimum bounty paid at triage; full bounty at resolution
+
+# ── Priority vulnerability types (ordered by expected value) ─────────────────
+priority_vuln_types:
+  - ssrf              # Medium–Critical; SSRF Sheriff available; $500–$15k
+  - idor              # Low–Critical; high Uber attack surface; $300–$15k
+  - auth_bypass       # Medium–Critical
+  - business_logic    # especially financial fraud chains
+  - xss               # Medium–High; stored XSS focus; $500–$2500
+  - info_disclosure   # Low–Critical depending on data
+  - sqli              # Medium–Critical
+  - subdomain_takeover # Fixed $500
+  - oauth_jwt_issues  # Medium–High
+  - financial_fraud   # Bonus payments; must chain with technical vuln
+
+# ── Multiplying/mitigating factors (from Uber's own scoring rubric) ──────────
+impact_multiplying_factors:
+  - sensitivity_of_user_data_exposed
+  - scale_of_exposure
+  - severity_of_forged_actions    # e.g. changing payment info vs. last name
+  - forge_communication_from_uber # control content of official push notifications
+
+impact_mitigating_factors:
+  - requires_user_interaction
+  - authorized_relationship
+  - requires_brute_force
+  - rate_limiting_present
+  - physical_access_required
+  - noticeable_to_victim
+  - account_put_in_arrears_or_banned
+  - social_engineering_required
+  - requires_privileged_network_position
+  - requires_multiple_accounts
+
+# ── Report quality requirements ───────────────────────────────────────────────
+report_requirements:
+  must_have_poc: true
+  video_poc_requires_full_report: true   # standalone video PoC auto-closed
+  must_include_security_impact: true
+  must_be_reproducible: true
+  no_automated_scan_only: true           # raw scanner output without analysis = N/A
+  reference_h1_email: true

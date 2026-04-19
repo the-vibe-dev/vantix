@@ -1,0 +1,26 @@
+id: ctf_solver
+name: CTF Solver
+version: 1
+summary: CTF methodology across web, pwn, rev, crypto, forensics
+roles:
+- orchestrator
+- researcher
+- developer
+- executor
+- reporter
+modes:
+- ctf
+- koth
+- windows-ctf
+- windows-koth
+execution_level: gated
+safety_level: lab
+tags:
+- ctf
+- learning
+requires_scope: true
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

@@ -1,0 +1,85 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.ssh/
+
+# Python build and cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+
+# Node and frontend build
+.pnpm-store/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local runtime, databases, and logs
+.runtime/
+artifacts/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+*.out
+*.err
+
+# Runtime memory and reports
+memory/.memory.lock
+memory/archive/
+memory/reports/*
+!memory/reports/.gitkeep
+memory/sessions/*
+!memory/sessions/.gitkeep
+memory/local/*
+!memory/local/MEM.local.example.md
+memory/compaction_handoffs.md
+memory/session_index.jsonl
+memory/session_journal.md
+memory/learning/*.jsonl
+memory/learning/*.bak
+memory/learning/index.json
+
+# Local operator configuration
+agent_ops/config/cracking_nodes.yaml
+
+# CVE local deployment state
+tools/cve-search/.env
+tools/cve-search/.venv/
+tools/cve-search/etc/auth.txt
+tools/cve-search/etc/configuration.ini
+tools/cve-search/etc/sources.ini
+!tools/cve-search/.gitignore
+
+# Tool-specific local outputs
+tools/**/.cache/
+tools/**/logs/

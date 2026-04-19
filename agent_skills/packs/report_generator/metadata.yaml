@@ -1,0 +1,24 @@
+id: report_generator
+name: Report Generator
+version: 1
+summary: evidence-backed report and executive summary writing
+roles:
+- reporter
+modes:
+- pentest
+- bugbounty
+- ctf
+- koth
+- windows-ctf
+- windows-koth
+execution_level: advisory
+safety_level: active
+tags:
+- reporting
+- evidence
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

@@ -1,0 +1,23 @@
+id: poc_validator
+name: PoC Validator
+version: 1
+summary: non-destructive vulnerability confirmation
+roles:
+- developer
+- executor
+- researcher
+modes:
+- pentest
+- bugbounty
+- ctf
+execution_level: gated
+safety_level: active
+tags:
+- poc
+- validation
+requires_scope: true
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

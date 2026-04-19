@@ -1,0 +1,21 @@
+id: osint_collector
+name: OSINT Collector
+version: 1
+summary: passive domain, certificate, leak, and public exposure research
+roles:
+- recon
+- researcher
+modes:
+- pentest
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- osint
+- passive
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

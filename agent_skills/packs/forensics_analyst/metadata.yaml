@@ -1,0 +1,21 @@
+id: forensics_analyst
+name: Forensics Analyst
+version: 1
+summary: forensic artifact, timeline, disk, memory, and packet analysis
+roles:
+- researcher
+- reporter
+modes:
+- ctf
+- pentest
+execution_level: advisory
+safety_level: active
+tags:
+- forensics
+- timeline
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

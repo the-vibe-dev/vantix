@@ -1,0 +1,25 @@
+id: web_hunter
+name: Web Hunter
+version: 1
+summary: web application discovery, fuzzing, and validation guidance
+roles:
+- recon
+- researcher
+- developer
+- executor
+modes:
+- pentest
+- bugbounty
+- ctf
+execution_level: gated
+safety_level: active
+tags:
+- web
+- http
+- fuzzing
+requires_scope: true
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

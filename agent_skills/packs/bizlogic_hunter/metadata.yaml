@@ -1,0 +1,21 @@
+id: bizlogic_hunter
+name: Business Logic Hunter
+version: 1
+summary: workflow, authorization, and abuse-case analysis
+roles:
+- researcher
+- developer
+modes:
+- pentest
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- business-logic
+- authz
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

@@ -1,0 +1,21 @@
+id: bug_bounty
+name: Bug Bounty
+version: 1
+summary: program-scope triage and report-quality validation
+roles:
+- orchestrator
+- researcher
+- reporter
+modes:
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- bugbounty
+- scope
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

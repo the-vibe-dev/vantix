@@ -1,0 +1,20 @@
+id: engagement_planner
+name: Engagement Planner
+version: 1
+summary: defines scope, constraints, phases, and success criteria
+roles:
+- orchestrator
+modes:
+- pentest
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- planning
+- scope
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

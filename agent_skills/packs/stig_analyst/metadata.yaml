@@ -1,0 +1,20 @@
+id: stig_analyst
+name: STIG Analyst
+version: 1
+summary: configuration compliance and hardening analysis
+roles:
+- researcher
+- reporter
+modes:
+- pentest
+execution_level: advisory
+safety_level: active
+tags:
+- stig
+- compliance
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

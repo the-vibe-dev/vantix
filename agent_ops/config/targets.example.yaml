@@ -1,0 +1,10 @@
+defaults:
+  artifacts_root: ${SECOPS_ARTIFACTS_ROOT:-artifacts}
+
+targets:
+  - target_id: lab-web-01
+    target: <TARGET_IP_OR_HOSTNAME>
+    platform: <ctf|pentest|bugbounty|koth>
+    authorized: true
+    owner: <OPERATOR_OR_TEAM>
+    notes: "Document scope, rules, and stop conditions here."

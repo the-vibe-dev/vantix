@@ -1,0 +1,21 @@
+id: detection_engineer
+name: Detection Engineer
+version: 1
+summary: detection ideas and blue-team validation outputs
+roles:
+- reporter
+- researcher
+modes:
+- pentest
+execution_level: advisory
+safety_level: active
+tags:
+- detection
+- sigma
+- yara
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope

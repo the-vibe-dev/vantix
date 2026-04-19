@@ -1,0 +1,10 @@
+suites:
+  minimal:
+    description: Core host recon and validation tools.
+    tools: [nmap, curl, jq, ffuf, sqlmap, whatweb]
+  common:
+    description: Broader web, DNS, and discovery toolchain for most Vantix runs.
+    tools: [nmap, curl, jq, ffuf, sqlmap, whatweb, dnsutils, whois, nikto, amass, gobuster, feroxbuster, subfinder, httpx, nuclei]
+  full:
+    description: Extended host suite including brute force, WordPress, cracking, and extra Go tooling.
+    tools: [nmap, curl, jq, ffuf, sqlmap, whatweb, dnsutils, whois, nikto, amass, gobuster, feroxbuster, hydra, wfuzz, wpscan, hashcat, subfinder, httpx, nuclei, naabu, dalfox]

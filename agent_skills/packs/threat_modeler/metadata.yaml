@@ -1,0 +1,22 @@
+id: threat_modeler
+name: Threat Modeler
+version: 1
+summary: architecture threat modeling and risk narratives
+roles:
+- orchestrator
+- researcher
+- reporter
+modes:
+- pentest
+- bugbounty
+execution_level: advisory
+safety_level: active
+tags:
+- threat-model
+- risk
+requires_scope: false
+forbidden:
+- destructive
+- dos
+- persistence
+- out_of_scope
