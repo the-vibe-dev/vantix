@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import threading
-import time
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -32,134 +29,43 @@ from secops.services.events import RunEventService
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 from secops.services.storage import StorageLayout
+from secops.services.worker_runtime import worker_runtime
+from secops.services.workflows.engine import WorkflowEngine
 
 
-@dataclass
-class RuntimeHandle:
-    run_id: str
-    thread: threading.Thread
-    stop_event: threading.Event = field(default_factory=threading.Event)
-    pause_requested: bool = False
+class PhaseBlockedError(Exception):
+    pass
 
 
 class ExecutionManager:
     def __init__(self) -> None:
-        self._handles: dict[str, RuntimeHandle] = {}
-        self._lock = threading.Lock()
         self.events = RunEventService()
         self.nas = StorageLayout()
         self.learning = LearningService()
         self.cve = CVESearchService()
         self.memory = MemoryWriteService()
+        self.workflow_engine = WorkflowEngine()
+        self.worker_runtime = worker_runtime
 
     def start(self, run_id: str) -> str:
-        with self._lock:
-            handle = self._handles.get(run_id)
-            if handle and handle.thread.is_alive():
-                return "Run already active"
-            thread = threading.Thread(target=self._execute_run, args=(run_id,), daemon=True, name=f"secops-run-{run_id}")
-            self._handles[run_id] = RuntimeHandle(run_id=run_id, thread=thread)
-            thread.start()
-            return "Run started"
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None:
+                return "Run not found"
+            self.workflow_engine.enqueue_run(db, run)
+            self.events.emit(db, run.id, "run_status", "Run queued", payload={"status": "queued"})
+            self._write_memory(db, run, mode="startup", phase="run-queued", done=["run queued"], next_action="worker claim")
+            db.commit()
+        self.worker_runtime.ensure_running(self)
+        return "Run queued"
 
     def pause(self, run_id: str) -> str:
-        with self._lock:
-            handle = self._handles.get(run_id)
-            if handle is None:
-                return "Run not active"
-            handle.pause_requested = True
-            return "Pause requested"
-
-    def cancel(self, run_id: str) -> str:
-        with self._lock:
-            handle = self._handles.get(run_id)
-            if handle is None:
-                return "Run not active"
-            handle.stop_event.set()
-            return "Cancel requested"
-
-    def _handle(self, run_id: str) -> RuntimeHandle | None:
-        with self._lock:
-            return self._handles.get(run_id)
-
-    def _finish(self, run_id: str) -> None:
-        with self._lock:
-            self._handles.pop(run_id, None)
-
-    def _execute_run(self, run_id: str) -> None:
-        try:
-            with SessionLocal() as db:
-                run = db.get(WorkspaceRun, run_id)
-                if run is None:
-                    return
-                run.status = "running"
-                run.updated_at = datetime.now(timezone.utc)
-                db.flush()
-
-                paths = self.nas.for_workspace(run.workspace_id)
-                self.events.emit(db, run.id, "run_status", "Run started", payload={"status": run.status})
-                self._write_memory(db, run, mode="startup", phase="run-start", done=["run started"], next_action="context-bootstrap")
-                paths.write_json(
-                    paths.root / "manifest.json",
-                    {
-                        "run_id": run.id,
-                        "workspace_id": run.workspace_id,
-                        "mode": run.mode,
-                        "target": run.target,
-                        "objective": run.objective,
-                        "config": run.config_json,
-                    },
-                )
-                db.commit()
-
-            self._phase_context(run_id)
-            self._phase_learning(run_id)
-            self._phase_recon(run_id)
-            self._phase_cve(run_id)
-            self._phase_orchestrate(run_id)
-            self._phase_learn_ingest(run_id)
-            self._phase_report(run_id)
-
-            with SessionLocal() as db:
-                run = db.get(WorkspaceRun, run_id)
-                if run is not None and run.status not in {"blocked", "cancelled", "failed"}:
-                    run.status = "completed"
-                    self.events.emit(db, run.id, "run_status", "Run completed", payload={"status": run.status})
-                    self._write_memory(db, run, mode="close", phase="completed", done=["run completed"], next_action="review report and learning output")
-                    db.commit()
-        except Exception as exc:  # noqa: BLE001
-            with SessionLocal() as db:
-                run = db.get(WorkspaceRun, run_id)
-                if run is not None:
-                    run.status = "failed"
-                    self.events.emit(db, run.id, "error", f"Run failed: {exc}", level="error")
-                    self._write_memory(db, run, mode="failure", phase="exception", issues=[str(exc)], next_action="review failure event and retry or replan")
-                    self._create_approval(
-                        db,
-                        run.id,
-                        title="Run failed",
-                        detail=str(exc),
-                        reason="execution-error",
-                    )
-                    db.commit()
-        finally:
-            self._finish(run_id)
-
-    def _check_controls(self, db, run: WorkspaceRun) -> bool:
-        handle = self._handle(run.id)
-        if handle is None:
-            return False
-        if handle.stop_event.is_set():
-            run.status = "cancelled"
-            self.events.emit(db, run.id, "run_status", "Run cancelled", payload={"status": run.status}, level="warning")
-            self._write_memory(db, run, mode="handoff", phase="cancel", issues=["run cancelled"], next_action="review latest events before resuming")
-            db.commit()
-            return False
-        if handle.pause_requested:
-            handle.pause_requested = False
-            run.status = "blocked"
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None:
+                return "Run not found"
+            self.workflow_engine.block_run(db, run, "paused-by-operator")
             self.events.emit(db, run.id, "run_status", "Run paused by operator", payload={"status": run.status}, level="warning")
-            self._write_memory(db, run, mode="handoff", phase="pause", issues=["operator pause"], next_action="add operator note, then retry or replan")
             self._create_approval(
                 db,
                 run.id,
@@ -167,9 +73,47 @@ class ExecutionManager:
                 detail="Operator requested pause. Add a note and use retry/replan/resume.",
                 reason="operator-pause",
             )
+            self._write_memory(db, run, mode="handoff", phase="pause", issues=["operator pause"], next_action="add operator note, then retry or replan")
             db.commit()
-            return False
-        return True
+        return "Pause requested"
+
+    def cancel(self, run_id: str) -> str:
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None:
+                return "Run not found"
+            self.workflow_engine.cancel_run(db, run, reason="cancelled-by-operator")
+            self.events.emit(db, run.id, "run_status", "Run cancelled", payload={"status": run.status}, level="warning")
+            self._write_memory(db, run, mode="handoff", phase="cancel", issues=["run cancelled"], next_action="review latest events before resuming")
+            db.commit()
+        return "Cancel requested"
+
+    def execute_phase(self, run_id: str, phase_name: str) -> dict:
+        handlers = {
+            "context-bootstrap": self._phase_context,
+            "learning-recall": self._phase_learning,
+            "recon-sidecar": self._phase_recon,
+            "cve-analysis": self._phase_cve,
+            "orchestrate": self._phase_orchestrate,
+            "learn-ingest": self._phase_learn_ingest,
+            "report": self._phase_report,
+        }
+        handler = handlers.get(phase_name)
+        if handler is None:
+            raise ValueError(f"Unknown phase: {phase_name}")
+        handler(run_id)
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None:
+                raise ValueError(f"Run not found: {run_id}")
+            if run.status == "blocked":
+                raise PhaseBlockedError(f"Run blocked during phase {phase_name}")
+            if run.status == "failed":
+                raise RuntimeError(f"Run failed during phase {phase_name}")
+        return {"phase": phase_name, "status": "completed"}
+
+    def _check_controls(self, db, run: WorkspaceRun) -> bool:
+        return run.status not in {"blocked", "cancelled", "failed"}
 
     def _phase_context(self, run_id: str) -> None:
         with SessionLocal() as db:
@@ -180,6 +124,17 @@ class ExecutionManager:
             if task.status == "completed":
                 return
             paths = self.nas.for_workspace(run.workspace_id)
+            paths.write_json(
+                paths.root / "manifest.json",
+                {
+                    "run_id": run.id,
+                    "workspace_id": run.workspace_id,
+                    "mode": run.mode,
+                    "target": run.target,
+                    "objective": run.objective,
+                    "config": run.config_json,
+                },
+            )
             profile = get_mode_profile(run.mode)
             bundle = ContextBuilder().build(
                 profile,
@@ -397,7 +352,7 @@ class ExecutionManager:
                             )
                             inner_db.commit()
 
-                    result = runner.execute_streaming(plan, on_line=on_line, stop_event=(self._handle(run.id) or RuntimeHandle(run.id, threading.current_thread())).stop_event)
+                    result = runner.execute_streaming(plan, on_line=on_line, stop_event=None)
                 with SessionLocal() as inner_db:
                     inner_run = inner_db.get(WorkspaceRun, run.id)
                     if inner_run is not None and result.returncode != 0:

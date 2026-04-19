@@ -14,6 +14,7 @@ class WorkflowStatus(StrEnum):
 
 
 class PhaseStatus(StrEnum):
+    WAITING = "waiting"
     PENDING = "pending"
     CLAIMED = "claimed"
     RUNNING = "running"

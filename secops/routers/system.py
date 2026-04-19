@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from secops.services.codex_runner import CodexRunner
 from secops.services.installer_state import InstallerStateService
 from secops.services.memory_writer import MemoryWriteService
 from secops.services.tools import ToolService
+from secops.services.worker_runtime import worker_runtime
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(require_api_token)])
 
@@ -109,6 +111,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "debian_family": tool_service.os_info().get("debian_family", False),
             "kali": tool_service.os_info().get("kali", False),
         },
+        "worker": asdict(worker_runtime.snapshot()),
         "warnings": warnings,
     }
 

@@ -1,4 +1,5 @@
 from secops.services.workflows.checkpoints import CheckpointService
+from secops.services.workflows.engine import WorkflowClaim, WorkflowEngine
 from secops.services.workflows.errors import (
     WorkflowBlockedError,
     WorkflowError,
@@ -17,6 +18,8 @@ from secops.services.workflows.types import (
 __all__ = [
     "CheckpointPayload",
     "CheckpointService",
+    "WorkflowClaim",
+    "WorkflowEngine",
     "PhaseStatus",
     "RetryClass",
     "WorkerLeaseState",
