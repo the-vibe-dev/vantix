@@ -175,6 +175,25 @@ class ToolService:
                 available.append(package)
         return available
 
+    def _apt_sources_configured(self) -> bool:
+        paths = [Path("/etc/apt/sources.list"), *Path("/etc/apt/sources.list.d").glob("*.list"), *Path("/etc/apt/sources.list.d").glob("*.sources")]
+        for path in paths:
+            if not path.exists():
+                continue
+            for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("deb ") or line.startswith("deb-src ") or line.startswith("URIs:"):
+                    return True
+        return False
+
+    def _apt_recovery_hint(self) -> str:
+        return (
+            "echo \"deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware\" "
+            "| sudo tee /etc/apt/sources.list && sudo apt-get update"
+        )
+
     def install_tools(self, tool_ids: list[str], *, apply: bool = True) -> list[dict[str, Any]]:
         os_info = self.os_info()
         if not os_info["debian_family"]:
@@ -198,6 +217,19 @@ class ToolService:
             reason = ""
             outputs: list[str] = []
             if method == "apt":
+                if not self._apt_sources_configured():
+                    reason = "apt-sources-missing"
+                    payload = {
+                        "tool_id": tool.id,
+                        "method": method,
+                        "ok": False,
+                        "reason": reason,
+                        "commands": [],
+                        "output_tail": self._apt_recovery_hint(),
+                    }
+                    self.state.append_tool_history(payload)
+                    results.append(payload)
+                    continue
                 packages = self._apt_available_package([str(item) for item in install.get("packages", [])])
                 if not packages:
                     reason = "no-apt-package"
@@ -212,6 +244,19 @@ class ToolService:
             elif method == "go":
                 prereqs = self._apt_available_package([str(item) for item in install.get("prereq_packages", [])])
                 if prereqs and apply and not self.locate_binary("go"):
+                    if not self._apt_sources_configured():
+                        reason = "apt-sources-missing"
+                        payload = {
+                            "tool_id": tool.id,
+                            "method": method,
+                            "ok": False,
+                            "reason": reason,
+                            "commands": [],
+                            "output_tail": self._apt_recovery_hint(),
+                        }
+                        self.state.append_tool_history(payload)
+                        results.append(payload)
+                        continue
                     if not apt_updated:
                         proc = self._run(["sudo", "apt-get", "update"])
                         outputs.append((proc.stdout or "") + (proc.stderr or ""))
@@ -226,6 +271,19 @@ class ToolService:
             elif method == "pipx":
                 prereqs = self._apt_available_package([str(item) for item in install.get("prereq_packages", ["pipx"])])
                 if prereqs and apply and not self.locate_binary("pipx"):
+                    if not self._apt_sources_configured():
+                        reason = "apt-sources-missing"
+                        payload = {
+                            "tool_id": tool.id,
+                            "method": method,
+                            "ok": False,
+                            "reason": reason,
+                            "commands": [],
+                            "output_tail": self._apt_recovery_hint(),
+                        }
+                        self.state.append_tool_history(payload)
+                        results.append(payload)
+                        continue
                     if not apt_updated:
                         proc = self._run(["sudo", "apt-get", "update"])
                         outputs.append((proc.stdout or "") + (proc.stderr or ""))

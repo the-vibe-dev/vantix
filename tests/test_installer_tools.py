@@ -101,3 +101,38 @@ suites:
     assert results[0]["ok"] is True
     assert results[0]["status"] == "planned"
     assert results[0]["commands"]
+
+
+def test_tool_service_reports_missing_apt_sources(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / "agent_ops" / "config").mkdir(parents=True)
+    (repo_root / "agent_ops" / "config" / "tool_registry.yaml").write_text(
+        """
+tools:
+  - id: apt-tool
+    name: Apt Tool
+    binaries: [missing-apt-tool]
+    suites: [minimal]
+    allow_auto_install: true
+    install:
+      method: apt
+      packages: [curl]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (repo_root / "agent_ops" / "config" / "tool_suites.yaml").write_text(
+        """
+suites:
+  minimal:
+    tools: [apt-tool]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    service = ToolService(repo_root=repo_root, runtime_root=tmp_path / "runtime")
+    service.os_info = lambda: {"debian_family": True, "kali": True}  # type: ignore[method-assign]
+    service._apt_sources_configured = lambda: False  # type: ignore[method-assign]
+    results = service.install_tools(["apt-tool"], apply=True)
+    assert results[0]["ok"] is False
+    assert results[0]["reason"] == "apt-sources-missing"

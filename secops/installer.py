@@ -200,27 +200,89 @@ class Wizard:
     def os_info(self) -> dict[str, Any]:
         return self.tool_service.os_info()
 
-    def ensure_system_packages(self, packages: list[str]) -> None:
+    def _apt_sources_configured(self) -> bool:
+        sources_paths = [Path("/etc/apt/sources.list"), *Path("/etc/apt/sources.list.d").glob("*.list"), *Path("/etc/apt/sources.list.d").glob("*.sources")]
+        for path in sources_paths:
+            if not path.exists():
+                continue
+            for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("deb ") or line.startswith("deb-src ") or line.startswith("URIs:"):
+                    return True
+        return False
+
+    def _apt_recovery_hint(self) -> str:
+        return (
+            "echo \"deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware\" "
+            "| sudo tee /etc/apt/sources.list\n"
+            "sudo apt-get update"
+        )
+
+    def _repair_apt_sources(self) -> bool:
+        if self._apt_sources_configured():
+            return True
+        os_info = self.os_info()
+        if not os_info.get("kali", False):
+            print("    [WARN] APT sources are missing and automatic repair is only enabled for Kali hosts.")
+            print("    [HINT] Add package sources, then rerun package install steps:")
+            print(self._apt_recovery_hint())
+            return False
+        print("    [WARN] No APT sources configured. Attempting automatic Kali repository repair.")
+        line = "deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware"
+        proc = self.run_visible(
+            ["sudo", "bash", "-lc", f"printf '%s\\n' {shlex.quote(line)} > /etc/apt/sources.list"],
+            label="Repair /etc/apt/sources.list for Kali rolling",
+        )
+        if proc.returncode != 0:
+            print("    [WARN] Automatic APT source repair failed.")
+            print("    [HINT] Run these commands manually:")
+            print(self._apt_recovery_hint())
+            return False
+        return True
+
+    def ensure_system_packages(self, packages: list[str], *, required: bool = True) -> bool:
         packages = [pkg for pkg in packages if pkg]
         if not packages:
-            return
+            return True
         missing = []
         for pkg in packages:
             proc = self.run(["bash", "-lc", f"dpkg -s {pkg} >/dev/null 2>&1"])
             if proc.returncode != 0:
                 missing.append(pkg)
         if not missing:
-            return
+            return True
         print(f"    Missing system packages: {' '.join(missing)}")
+        if not self._apt_sources_configured() and not self._repair_apt_sources():
+            if required:
+                raise RuntimeError("APT sources are not configured; cannot install required system packages")
+            print("    [WARN] Skipping optional package install because APT sources are unavailable.")
+            return False
         update = self.run_visible(["sudo", "apt-get", "update"], label="Refresh apt package metadata")
         if update.returncode != 0:
-            raise RuntimeError("Failed to refresh apt package metadata")
+            repaired = self._repair_apt_sources()
+            if repaired:
+                update = self.run_visible(["sudo", "apt-get", "update"], label="Retry apt metadata refresh after source repair")
+            if update.returncode != 0:
+                if required:
+                    raise RuntimeError("Failed to refresh apt package metadata")
+                print("    [WARN] Skipping optional package install; apt metadata refresh failed.")
+                print("    [HINT] Recovery commands:")
+                print(self._apt_recovery_hint())
+                return False
         proc = self.run_visible(["sudo", "apt-get", "install", "-y", *missing], label=f"Install {' '.join(missing)}")
         if proc.returncode != 0:
-            raise RuntimeError(f"Failed to install packages: {' '.join(missing)}")
+            if required:
+                raise RuntimeError(f"Failed to install packages: {' '.join(missing)}")
+            print(f"    [WARN] Skipping optional package install: {' '.join(missing)}")
+            print("    [HINT] Verify apt sources and package availability:")
+            print("    apt-cache policy " + " ".join(missing))
+            return False
+        return True
 
     def ensure_backend(self) -> None:
-        self.ensure_system_packages(["python3", "python3-venv", "python3-pip", "git"])
+        self.ensure_system_packages(["python3", "python3-venv", "python3-pip", "git"], required=True)
         if not self.venv_python.exists():
             proc = self.run_visible(["python3", "-m", "venv", str(self.repo_root / ".venv")], label="Create Python virtual environment")
             if proc.returncode != 0:
@@ -244,17 +306,25 @@ class Wizard:
             raise RuntimeError("Failed to install corepack with npm")
 
     def ensure_frontend(self, build: bool = True) -> dict[str, Any]:
-        self.ensure_system_packages(["nodejs", "npm"])
-        self.ensure_corepack()
+        if not self.ensure_system_packages(["nodejs", "npm"], required=False):
+            print("    [WARN] Frontend bootstrap skipped because Node/npm could not be installed.")
+            return {"installed": False, "built": False, "skipped_reason": "missing-nodejs-npm"}
+        try:
+            self.ensure_corepack()
+        except RuntimeError as exc:
+            print(f"    [WARN] Frontend bootstrap skipped: {exc}")
+            return {"installed": False, "built": False, "skipped_reason": "corepack-unavailable"}
         frontend_root = self.repo_root / "frontend"
         proc = self.run_visible(["corepack", "pnpm", "install"], cwd=frontend_root, label="Install frontend dependencies")
         if proc.returncode != 0:
-            raise RuntimeError("Failed frontend dependency install")
+            print("    [WARN] Frontend dependency install failed. Continuing in degraded mode.")
+            return {"installed": False, "built": False, "skipped_reason": "frontend-install-failed"}
         built = False
         if build:
             proc = self.run_visible(["corepack", "pnpm", "build"], cwd=frontend_root, label="Build frontend")
             if proc.returncode != 0:
-                raise RuntimeError("Failed frontend build")
+                print("    [WARN] Frontend build failed. Continuing with backend-ready install state.")
+                return {"installed": True, "built": False, "skipped_reason": "frontend-build-failed"}
             built = True
         return {"installed": True, "built": built}
 
