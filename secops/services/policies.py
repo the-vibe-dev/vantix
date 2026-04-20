@@ -30,7 +30,22 @@ class SubprocessRecord:
 
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{10,}"),
-    re.compile(r"(?i)(api[_-]?key|token|secret)\s*[:=]\s*([^\s]+)"),
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*[^\s\"']{4,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{36}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"gho_[A-Za-z0-9]{36}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ASIA[0-9A-Z]{16}"),
+    re.compile(r"xox[pbaros]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)Bearer\s+[A-Za-z0-9._\-+/=]{8,}"),
+    re.compile(r"(?i)Authorization:\s*Basic\s+[A-Za-z0-9+/=]+"),
+    re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]+?-----END[^-]+-----"),
+    re.compile(r"(?i)cookie:\s*[^\r\n]+"),
+    re.compile(r"(?i)set-cookie:\s*[^\r\n]+"),
+    re.compile(r"https?://[^\s:/@]+:[^\s@/]+@[^\s]+"),
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
+    re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),
 ]
 
 
@@ -128,7 +143,8 @@ class ExecutionPolicyService:
     def _redact(self, text: str, *, redactions: Iterable[str] | None = None) -> str:
         if not text:
             return ""
-        cleaned = text
+        MAX_OUTPUT = 16 * 1024
+        cleaned = text if len(text) <= MAX_OUTPUT else text[:MAX_OUTPUT] + f"\n...[TRUNCATED {len(text) - MAX_OUTPUT} bytes]"
         for pattern in SECRET_PATTERNS:
             cleaned = pattern.sub("[REDACTED]", cleaned)
         for token in redactions or []:

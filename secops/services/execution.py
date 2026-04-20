@@ -339,12 +339,46 @@ class ExecutionManager:
             command = []
             recon_target = self._recon_target(run.target)
             if recon_target:
+                scope_verdict = self._enforce_scope(db, run, recon_target)
+                if not scope_verdict.allowed:
+                    task.status = "blocked"
+                    task.result_json = {"reason": scope_verdict.reason, "verdict": "out_of_scope", "target": recon_target}
+                    run.status = "blocked"
+                    session.status = "blocked"
+                    session.completed_at = datetime.now(timezone.utc)
+                    self._set_role_status(db, run.id, "recon", "blocked")
+                    self.events.emit(
+                        db,
+                        run.id,
+                        "terminal",
+                        f"[recon] blocked: target {recon_target} out of engagement scope — {scope_verdict.reason}",
+                        level="warning",
+                        payload={"agent": "recon", "action_kind": "scope", "target": recon_target},
+                        agent_session_id=session.id,
+                    )
+                    self._create_approval(
+                        db,
+                        run.id,
+                        title="Target out of scope",
+                        detail=f"{recon_target}: {scope_verdict.reason}",
+                        reason="scope-policy",
+                    )
+                    self._write_memory(
+                        db,
+                        run,
+                        mode="handoff",
+                        phase="recon-blocked",
+                        issues=[f"scope: {scope_verdict.reason}"],
+                        next_action="update engagement scope allowlist",
+                    )
+                    db.commit()
+                    return
                 if run.config_json.get("ports"):
                     ports = ",".join(run.config_json["ports"])
                     command = ["nmap", "-Pn", "-sT", "-p", ports, "--open", recon_target]
                 else:
                     command = ["nmap", "-Pn", "-sT", "--top-ports", "100", "--open", recon_target]
-            action_kind = "script" if run.config_json.get("ports") else "recon_high_noise"
+            action_kind = "recon_high_noise"
             decision = self.policies.evaluate(run, action_kind=action_kind)
             self._emit_policy_decision(
                 db,
@@ -710,6 +744,28 @@ class ExecutionManager:
         if parsed.scheme and parsed.hostname:
             return parsed.hostname
         return target
+
+    def _enforce_scope(self, db: "Session", run: "WorkspaceRun", target: str) -> "ScopeVerdict":
+        """Resolve engagement scope metadata and validate target.
+
+        Returns a ScopeVerdict; callers must block when not allowed.
+        """
+        from secops.models import Engagement
+        from secops.services.scope import ScopeVerdict, is_scope_allowed
+
+        engagement = db.get(Engagement, run.engagement_id) if run.engagement_id else None
+        scope = {}
+        if engagement is not None and isinstance(engagement.metadata_json, dict):
+            raw = engagement.metadata_json.get("scope")
+            if isinstance(raw, dict):
+                scope = raw
+        allowed = scope.get("allowed") or []
+        excludes = scope.get("excludes") or []
+        allow_private = bool(scope.get("allow_private", False))
+        # Permit the engagement's own target as an implicit allow-entry.
+        if engagement and engagement.target and engagement.target not in allowed:
+            allowed = list(allowed) + [engagement.target]
+        return is_scope_allowed(target, allowed=allowed, excludes=excludes, allow_private=allow_private)
 
     def _learning_block(self, paths: StorageLayout) -> str:
         learning_path = paths.facts / "learning_hits.json"

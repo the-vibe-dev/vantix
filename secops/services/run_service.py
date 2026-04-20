@@ -7,7 +7,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from secops.config import settings
-from secops.models import Action, Artifact, Engagement, Task, WorkspaceRun
+from secops.models import (
+    Action,
+    Artifact,
+    Engagement,
+    Task,
+    WorkerLease,
+    WorkflowExecution,
+    WorkflowPhaseRun,
+    WorkspaceRun,
+)
 from secops.mode_profiles import get_mode_profile
 from secops.services.codex_runner import CodexRunner
 from secops.services.context_builder import ContextBuilder
@@ -105,6 +114,66 @@ class RunService:
         self.db.commit()
         self.db.refresh(new_run)
         return new_run
+
+    def retry_run(self, run_id: str, *, replan: bool = False) -> WorkspaceRun:
+        """Reset workflow + phase + lease state so the engine can re-run this run.
+
+        - Marks pending/running phases as cancelled.
+        - Finalizes active leases as released.
+        - Flips the latest WorkflowExecution back to queued.
+        - For replan: clears Task rows and re-seeds the default task plan.
+        """
+        run = self.db.get(WorkspaceRun, run_id)
+        if run is None:
+            raise ValueError(f"Run not found: {run_id}")
+
+        # Release active leases (worker stale / current).
+        leases = (
+            self.db.query(WorkerLease)
+            .filter(WorkerLease.run_id == run_id, WorkerLease.status == "active")
+            .all()
+        )
+        for lease in leases:
+            lease.status = "released"
+
+        # Cancel any phases still in-flight or queued.
+        phases = (
+            self.db.query(WorkflowPhaseRun)
+            .filter(
+                WorkflowPhaseRun.run_id == run_id,
+                WorkflowPhaseRun.status.in_(["pending", "claimed", "retrying", "blocked"]),
+            )
+            .all()
+        )
+        for phase in phases:
+            phase.status = "cancelled"
+
+        # Reset the active workflow execution back to queued so the engine picks it up.
+        workflow = (
+            self.db.query(WorkflowExecution)
+            .filter(WorkflowExecution.run_id == run_id)
+            .order_by(WorkflowExecution.created_at.desc())
+            .first()
+        )
+        if workflow is not None:
+            workflow.status = "queued"
+            workflow.current_phase = ""
+
+        if replan:
+            self.db.query(Task).filter(Task.run_id == run_id).delete(synchronize_session=False)
+            self.db.flush()
+            self._seed_default_tasks(run)
+            self._materialize_context_artifact(
+                run,
+                ports=list(run.config_json.get("ports", [])),
+                services=list(run.config_json.get("services", [])),
+                tags=list(run.config_json.get("tags", [])),
+            )
+
+        run.status = "queued"
+        self.db.commit()
+        self.db.refresh(run)
+        return run
 
     def _seed_default_tasks(self, run: WorkspaceRun) -> None:
         tasks = [

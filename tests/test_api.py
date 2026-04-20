@@ -78,7 +78,13 @@ def test_start_run_creates_live_state_and_approval_when_codex_disabled() -> None
     try:
         engagement = client.post(
             "/api/v1/engagements",
-            json={"name": "Live Run", "mode": "ctf", "target": "10.10.10.10", "tags": ["ctf"]},
+            json={
+                "name": "Live Run",
+                "mode": "ctf",
+                "target": "10.10.10.10",
+                "tags": ["ctf"],
+                "metadata": {"scope": {"allowed": ["10.10.10.10"], "allow_private": True}},
+            },
         )
         engagement_id = engagement.json()["id"]
         run = client.post(

@@ -158,8 +158,9 @@ def create_run(payload: RunCreate, db: Session = Depends(get_db)) -> WorkspaceRu
 
 
 @router.get("", response_model=list[RunRead])
-def list_runs(db: Session = Depends(get_db)) -> list[WorkspaceRun]:
-    return db.query(WorkspaceRun).order_by(WorkspaceRun.started_at.desc()).all()
+def list_runs(limit: int = 100, db: Session = Depends(get_db)) -> list[WorkspaceRun]:
+    limit = max(1, min(int(limit), 500))
+    return db.query(WorkspaceRun).order_by(WorkspaceRun.started_at.desc()).limit(limit).all()
 
 
 @router.get("/{run_id}", response_model=RunRead)
@@ -289,22 +290,22 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> RunControlResponse
 
 @router.post("/{run_id}/retry", response_model=RunControlResponse)
 def retry_run(run_id: str, db: Session = Depends(get_db)) -> RunControlResponse:
-    run = db.get(WorkspaceRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    run.status = "queued"
-    db.commit()
+    service = RunService(db)
+    try:
+        run = service.retry_run(run_id, replan=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     message = execution_manager.start(run_id)
     return RunControlResponse(run_id=run_id, status=run.status, message=message)
 
 
 @router.post("/{run_id}/replan", response_model=RunControlResponse)
 def replan_run(run_id: str, db: Session = Depends(get_db)) -> RunControlResponse:
-    run = db.get(WorkspaceRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    run.status = "queued"
-    db.commit()
+    service = RunService(db)
+    try:
+        run = service.retry_run(run_id, replan=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     message = execution_manager.start(run_id)
     return RunControlResponse(run_id=run_id, status=run.status, message=f"Replan requested. {message}")
 
@@ -340,19 +341,37 @@ def list_run_facts(run_id: str, db: Session = Depends(get_db)) -> list[Fact]:
 
 
 @router.get("/{run_id}/events", response_model=list[RunEventRead])
-def list_run_events(run_id: str, db: Session = Depends(get_db)) -> list[RunEvent]:
+def list_run_events(
+    run_id: str,
+    since_sequence: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+) -> list[RunEvent]:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return db.query(RunEvent).filter(RunEvent.run_id == run_id).order_by(RunEvent.sequence.asc()).all()
+    limit = max(1, min(int(limit), 2000))
+    q = db.query(RunEvent).filter(RunEvent.run_id == run_id)
+    if since_sequence > 0:
+        q = q.filter(RunEvent.sequence > int(since_sequence))
+    return q.order_by(RunEvent.sequence.asc()).limit(limit).all()
 
 
 @router.get("/{run_id}/terminal", response_model=TerminalRead)
-def get_run_terminal(run_id: str, db: Session = Depends(get_db)) -> TerminalRead:
+def get_run_terminal(
+    run_id: str,
+    since_sequence: int = 0,
+    limit: int = 500,
+    db: Session = Depends(get_db),
+) -> TerminalRead:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    events = db.query(RunEvent).filter(RunEvent.run_id == run_id, RunEvent.event_type == "terminal").order_by(RunEvent.sequence.asc()).all()
+    limit = max(1, min(int(limit), 2000))
+    q = db.query(RunEvent).filter(RunEvent.run_id == run_id, RunEvent.event_type == "terminal")
+    if since_sequence > 0:
+        q = q.filter(RunEvent.sequence > int(since_sequence))
+    events = q.order_by(RunEvent.sequence.asc()).limit(limit).all()
     content = "\n".join(event.message for event in events)
     return TerminalRead(run_id=run_id, content=content)
 
@@ -407,11 +426,23 @@ def get_run_learning(run_id: str, db: Session = Depends(get_db)) -> RunLearningR
 
 
 @router.get("/{run_id}/messages", response_model=list[RunMessageRead])
-def list_run_messages(run_id: str, db: Session = Depends(get_db)) -> list[RunMessage]:
+def list_run_messages(
+    run_id: str,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> list[RunMessage]:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return db.query(RunMessage).filter(RunMessage.run_id == run_id).order_by(RunMessage.created_at.asc()).all()
+    limit = max(1, min(int(limit), 1000))
+    rows = (
+        db.query(RunMessage)
+        .filter(RunMessage.run_id == run_id)
+        .order_by(RunMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return list(reversed(rows))
 
 
 @router.get("/{run_id}/vectors", response_model=list[VectorRead])

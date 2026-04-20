@@ -204,7 +204,7 @@ function Spinner() {
   );
 }
 
-type BtnVariant = "primary" | "ghost" | "danger" | "amber" | "green";
+type BtnVariant = "primary" | "ghost" | "danger" | "amber" | "green" | "blue";
 type BtnSize = "xs" | "sm" | "md" | "lg";
 
 function Btn({
@@ -230,6 +230,7 @@ function Btn({
     danger: { background: "rgba(239,68,68,.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,.3)" },
     amber: { background: "rgba(244,184,96,.1)", color: "#f4b860", border: "1px solid rgba(244,184,96,.3)" },
     green: { background: "rgba(25,195,125,.1)", color: "#19c37d", border: "1px solid rgba(25,195,125,.3)" },
+    blue: { background: "rgba(96,165,250,.1)", color: "#60a5fa", border: "1px solid rgba(96,165,250,.3)" },
   };
   const ss: Record<BtnSize, CSSProperties> = {
     xs: { padding: "3px 8px", fontSize: ".68rem", borderRadius: 6 },
@@ -973,7 +974,7 @@ function PhasePanel({ phase }: { phase: RunPhase | null }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {DISPLAY_PHASES.map((p, i) => {
           const done = completed.includes(p);
-          const active = p === currentDisplay && currentDisplay !== "completed";
+          const active = p === currentDisplay && (currentDisplay as string) !== "completed";
           return (
             <div key={p} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div
@@ -2174,19 +2175,30 @@ export default function App() {
   const refreshRun = useCallback(
     async (runId: string) => {
       try {
+        const failures: string[] = [];
+        const track = <T,>(label: string, fallback: T) =>
+          (err: unknown) => {
+            failures.push(label);
+            // eslint-disable-next-line no-console
+            console.warn(`[refreshRun] ${label} failed:`, err);
+            return fallback;
+          };
         const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runChains, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
-            api.getFacts(runId).catch(() => [] as Fact[]),
-            api.getLearning(runId).catch(() => ({ run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> })),
-            api.getMessages(runId).catch(() => [] as RunMessage[]),
-            api.getVectors(runId).catch(() => [] as Vector[]),
-            api.getResults(runId).catch(() => null as RunResults | null),
-            api.getSkills(runId).catch(() => [] as RunSkillApplication[]),
-            api.getAttackChains(runId).catch(() => [] as AttackChain[]),
-            api.getTerminal(runId).catch(() => ({ run_id: runId, content: "" })),
+            api.getFacts(runId).catch(track<Fact[]>("facts", [])),
+            api.getLearning(runId).catch(track("learning", { run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> })),
+            api.getMessages(runId).catch(track<RunMessage[]>("messages", [])),
+            api.getVectors(runId).catch(track<Vector[]>("vectors", [])),
+            api.getResults(runId).catch(track<RunResults | null>("results", null)),
+            api.getSkills(runId).catch(track<RunSkillApplication[]>("skills", [])),
+            api.getAttackChains(runId).catch(track<AttackChain[]>("chains", [])),
+            api.getTerminal(runId).catch(track("terminal", { run_id: runId, content: "" })),
           ]);
+        if (failures.length > 0) {
+          flash(`Partial load: ${failures.join(", ")} unavailable`);
+        }
         setSelectedRun(run);
         setPhase(graph.phase);
         setAgents(graph.agents);

@@ -53,6 +53,8 @@ class Settings:
     enable_codex_execution: bool
     enable_script_execution: bool
     default_stream_poll_interval: float
+    dev_mode: bool
+    cors_allow_origins: list[str]
 
 
 def _env_list(name: str, default: list[str]) -> list[str]:
@@ -112,8 +114,10 @@ settings = Settings(
     source_allowed_roots=[Path(value).expanduser().resolve() for value in _env_list("SECOPS_SOURCE_ALLOWED_ROOTS", [str(repo_root)])],
     source_upload_max_mb=int(os.getenv("SECOPS_SOURCE_UPLOAD_MAX_MB", "500")),
     source_upload_ttl_hours=int(os.getenv("SECOPS_SOURCE_UPLOAD_TTL_HOURS", "24")),
-    enable_write_execution=_env_bool("SECOPS_ENABLE_WRITE_EXECUTION", default=True),
-    enable_codex_execution=_env_bool("SECOPS_ENABLE_CODEX_EXECUTION", default=True),
-    enable_script_execution=_env_bool("SECOPS_ENABLE_SCRIPT_EXECUTION", default=True),
+    enable_write_execution=_env_bool("SECOPS_ENABLE_WRITE_EXECUTION", default=False),
+    enable_codex_execution=_env_bool("SECOPS_ENABLE_CODEX_EXECUTION", default=False),
+    enable_script_execution=_env_bool("SECOPS_ENABLE_SCRIPT_EXECUTION", default=False),
     default_stream_poll_interval=float(os.getenv("SECOPS_STREAM_POLL_INTERVAL", "0.5")),
+    dev_mode=_env_bool("SECOPS_DEV_MODE", default=False),
+    cors_allow_origins=_env_list("SECOPS_CORS_ALLOW_ORIGINS", ["http://127.0.0.1:4173", "http://localhost:4173"]),
 )

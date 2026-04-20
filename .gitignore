@@ -102,3 +102,12 @@ tools/cve-search/etc/sources.ini
 # Tool-specific local outputs
 tools/**/.cache/
 tools/**/logs/
+
+# Handoff / ops bundle zips (local only, never committed)
+/pentagi.zip
+/shannon.zip
+/strix.zip
+/vantix.zip
+/vantix_upgrade_kit.zip
+/*.handoff.zip
+planning/upgrade_kit/

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import threading
 import time
+
+_logger = logging.getLogger("secops.worker_runtime")
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -151,8 +154,9 @@ class WorkerRuntime:
                 finally:
                     heartbeat_stop.set()
                     heartbeat_thread.join(timeout=2)
-            except Exception:  # noqa: BLE001
-                self._last_error = "worker loop error"
+            except Exception as exc:  # noqa: BLE001
+                self._last_error = f"worker loop error: {exc.__class__.__name__}: {exc}"
+                _logger.exception("worker loop error worker_id=%s", self._worker_id)
                 self._upsert_worker_status(
                     status="error",
                     current_run_id=self._claimed_run_id,
@@ -243,6 +247,7 @@ class WorkerRuntime:
                 row.metadata_json = {"thread_alive": bool(self._thread and self._thread.is_alive())}
                 db.commit()
         except Exception:
+            _logger.exception("worker status upsert failed worker_id=%s", self._worker_id)
             return
 
 

@@ -129,6 +129,11 @@ class AgentSession(Base):
 
 class RunEvent(Base):
     __tablename__ = "run_events"
+    __table_args__ = (
+        Index("ix_run_events_run_sequence", "run_id", "sequence"),
+        Index("ix_run_events_run_created", "run_id", "created_at"),
+        Index("ix_run_events_run_type_seq", "run_id", "event_type", "sequence"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
@@ -175,6 +180,9 @@ class OperatorNote(Base):
 
 class RunMessage(Base):
     __tablename__ = "run_messages"
+    __table_args__ = (
+        Index("ix_run_messages_run_created", "run_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
@@ -189,6 +197,10 @@ class RunMessage(Base):
 
 class Fact(Base):
     __tablename__ = "facts"
+    __table_args__ = (
+        Index("ix_facts_run_kind_created", "run_id", "kind", "created_at"),
+        Index("ix_facts_run_created", "run_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
@@ -500,3 +512,22 @@ class Finding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[WorkspaceRun] = relationship(back_populates="findings")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("ix_audit_log_route_created", "route", "created_at"),
+        Index("ix_audit_log_actor_created", "actor", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    method: Mapped[str] = mapped_column(String(16), default="")
+    route: Mapped[str] = mapped_column(String(255), default="")
+    object_id: Mapped[str] = mapped_column(String(128), default="")
+    verdict: Mapped[str] = mapped_column(String(32), default="")
+    remote_addr: Mapped[str] = mapped_column(String(64), default="")
+    payload_json: Mapped[dict[str, Any]] = mapped_column("payload", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

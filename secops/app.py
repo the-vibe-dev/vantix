@@ -1,20 +1,61 @@
 from __future__ import annotations
 
+import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from secops.config import settings
 from secops.db import Base, engine
+from secops.middleware import AuditMiddleware, RateLimitMiddleware, RequestIdMiddleware
 from secops.routers import approvals, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, sources, system, tasks, tools
+
+
+logger = logging.getLogger("secops")
+
+
+def _check_startup_config() -> None:
+    if not settings.api_token and not settings.dev_mode:
+        sys.stderr.write(
+            "FATAL: SECOPS_API_TOKEN is empty. Set it, or set SECOPS_DEV_MODE=1 for development.\n"
+        )
+        raise SystemExit(2)
+    if any([settings.enable_write_execution, settings.enable_codex_execution, settings.enable_script_execution]):
+        logger.warning(
+            "Execution enabled: write=%s codex=%s script=%s",
+            settings.enable_write_execution,
+            settings.enable_codex_execution,
+            settings.enable_script_execution,
+        )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _check_startup_config()
     Base.metadata.create_all(bind=engine)
-    yield
+    try:
+        yield
+    finally:
+        try:
+            from secops.services.worker_runtime import worker_runtime
+            worker_runtime.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("worker_runtime shutdown failed")
+        try:
+            from secops.db import SessionLocal
+            from secops.models import WorkerLease
+            with SessionLocal() as db:
+                active = db.query(WorkerLease).filter(WorkerLease.status == "active").all()
+                for lease in active:
+                    lease.status = "released"
+                db.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("lease release on shutdown failed")
 
 
 def create_app() -> FastAPI:
@@ -24,6 +65,29 @@ def create_app() -> FastAPI:
         description="Codex-native Vantix backend for authorized CTF, KoTH, pentest, and bug bounty workflows.",
         lifespan=lifespan,
     )
+
+    # Order matters: AuditMiddleware wraps innermost (runs last, sees final status);
+    # RateLimitMiddleware next; RequestIdMiddleware outermost so all layers see request_id.
+    app.add_middleware(AuditMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+    )
+
+    @app.exception_handler(Exception)
+    async def _generic_exception_handler(request: Request, exc: Exception):
+        request_id = getattr(request.state, "request_id", "-")
+        logger.exception("unhandled exception request_id=%s path=%s", request_id, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "internal error", "request_id": request_id},
+            headers={"x-request-id": request_id},
+        )
 
     app.include_router(health.router)
     app.include_router(system.router)
