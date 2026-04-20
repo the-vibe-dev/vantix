@@ -47,6 +47,29 @@ def _sanitize_headers(headers: dict[str, str] | None) -> dict[str, str]:
     return out
 
 
+STATIC_EXTENSIONS = (
+    ".css",
+    ".js",
+    ".mjs",
+    ".map",
+    ".ico",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".pdf",
+    ".zip",
+    ".txt",
+    ".xml",
+)
+
+
 @dataclass(slots=True)
 class BrowserPolicy:
     allowed_origins: list[str]
@@ -106,6 +129,14 @@ class BrowserAssessmentResult:
 
 
 class BrowserRuntimeService:
+    def _is_navigation_candidate(self, url: str) -> bool:
+        parsed = urlparse(url)
+        scheme = str(parsed.scheme or "").lower()
+        if scheme not in {"http", "https"}:
+            return False
+        path = str(parsed.path or "").lower()
+        return not path.endswith(STATIC_EXTENSIONS)
+
     def _default_policy(self, run_config: dict[str, Any], entry_url: str) -> BrowserPolicy:
         browser_cfg = dict(run_config.get("browser") or {})
         entry_origin = ""
@@ -164,6 +195,9 @@ class BrowserRuntimeService:
     def _extract_links(self, html: str, current_url: str) -> list[str]:
         links: list[str] = []
         for match in re.findall(r"""href=["']([^"']+)["']""", html or "", flags=re.IGNORECASE):
+            raw = str(match or "").strip()
+            if not raw or raw.startswith(("javascript:", "mailto:", "tel:", "data:")):
+                continue
             joined = urljoin(current_url, match)
             normalized = _normalize_url(joined)
             if normalized:
@@ -176,6 +210,25 @@ class BrowserRuntimeService:
             seen.add(item)
             deduped.append(item)
         return deduped
+
+    def _navigate(self, page: Any, normalized: str) -> bool:
+        parsed = urlparse(normalized)
+        try:
+            if parsed.fragment:
+                page.goto(normalized, wait_until="commit", timeout=8000)
+            else:
+                page.goto(normalized, wait_until="domcontentloaded", timeout=15000)
+            return True
+        except Exception:  # noqa: BLE001
+            if not parsed.fragment:
+                return False
+            try:
+                # SPA hash-route fallback where full navigation events may not fire.
+                page.evaluate("(fragment) => { window.location.hash = fragment; }", f"#{parsed.fragment}")
+                page.wait_for_timeout(500)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
 
     def _extract_forms(self, html: str) -> list[dict[str, Any]]:
         forms: list[dict[str, Any]] = []
@@ -480,6 +533,8 @@ class BrowserRuntimeService:
                 requests_seen += 1
                 if requests_seen > policy.max_requests:
                     return
+                if not self._is_allowed_url(str(req.url or ""), policy):
+                    return
                 parsed = urlparse(req.url)
                 network_rows.append(
                     {
@@ -598,10 +653,16 @@ class BrowserRuntimeService:
                 if self._is_sensitive_route(normalized) and not policy.allow_sensitive_routes:
                     blocked_actions.append(f"blocked-sensitive-route:{normalized}")
                     continue
-                try:
-                    page.goto(normalized, wait_until="domcontentloaded", timeout=15000)
-                except Exception:  # noqa: BLE001
+                if not self._navigate(page, normalized):
                     blocked_actions.append(f"navigation-failed:{normalized}")
+                    continue
+                final_url = _normalize_url(page.url)
+                if final_url and not self._is_allowed_url(final_url, policy):
+                    blocked_actions.append(f"blocked-out-of-origin-final:{final_url}")
+                    try:
+                        page.goto(entry_url, wait_until="domcontentloaded", timeout=8000)
+                    except Exception:  # noqa: BLE001
+                        pass
                     continue
                 visited.add(normalized)
                 current_url = page.url
@@ -639,7 +700,7 @@ class BrowserRuntimeService:
                 for link in links:
                     if _same_origin(current_url, link):
                         route_nodes[current_url]["children"].add(link)
-                        if link not in visited and len(queue) < policy.max_pages * 4:
+                        if self._is_navigation_candidate(link) and link not in visited and len(queue) < policy.max_pages * 4:
                             queue.append((link, depth + 1, current_url))
 
                 slug = re.sub(r"[^a-zA-Z0-9]+", "-", current_url).strip("-")[:80] or f"page-{len(observations)}"

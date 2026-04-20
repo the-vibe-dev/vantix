@@ -432,6 +432,7 @@ export const api = {
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
   getSourceStatus: (runId: string) => request<SourceStatus>(`/api/v1/runs/${runId}/source-status`),
   getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
+  getApprovals: (runId: string) => request<Approval[]>(`/api/v1/runs/${runId}/approvals`),
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
   getWorkflowState: (runId: string) => request<WorkflowState>(`/api/v1/runs/${runId}/workflow-state`),
   getMessages: (runId: string) => request<RunMessage[]>(`/api/v1/runs/${runId}/messages`),

@@ -10,6 +10,8 @@ _logger = logging.getLogger("secops.worker_runtime")
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.exc import OperationalError
+
 from secops.db import SessionLocal
 from secops.models import WorkerRuntimeStatus
 from secops.services.workflows.engine import WorkflowEngine, WorkflowClaim
@@ -44,6 +46,8 @@ class WorkerRuntime:
         self._claimed_phase = ""
         self._lease_expires_at = utcnow()
         self._last_error = ""
+        self._last_status_signature: tuple[str, str, str, str] | None = None
+        self._last_status_write_ts = 0.0
 
     def ensure_running(self, execution_manager) -> None:
         with self._lock:
@@ -212,6 +216,18 @@ class WorkerRuntime:
                             last_error="lease renewal failed",
                         )
                         break
+            except OperationalError as exc:
+                if self._is_sqlite_locked(exc):
+                    # Transient sqlite writer contention. Keep worker alive and retry next heartbeat tick.
+                    continue
+                self._upsert_worker_status(
+                    status="error",
+                    current_run_id=claim.run_id,
+                    current_phase=claim.phase_name,
+                    lease_expires_at=claim.lease_expires_at,
+                    last_error=f"lease heartbeat db error: {exc.__class__.__name__}",
+                )
+                break
             except Exception:  # noqa: BLE001
                 self._upsert_worker_status(
                     status="error",
@@ -233,30 +249,53 @@ class WorkerRuntime:
     ) -> None:
         now = utcnow()
         self._heartbeat_at = now
+        signature = (status, current_run_id or "", current_phase or "", (last_error or "")[:2000])
+        should_force = status in {"claimed", "running", "error", "stale", "stopping"}
+        if (
+            not should_force
+            and self._last_status_signature == signature
+            and (time.monotonic() - self._last_status_write_ts) < 5.0
+        ):
+            return
         try:
-            with SessionLocal() as db:
-                row = db.query(WorkerRuntimeStatus).filter(WorkerRuntimeStatus.worker_id == self._worker_id).first()
-                if row is None:
-                    row = WorkerRuntimeStatus(
-                        worker_id=self._worker_id,
-                        hostname=self._hostname,
-                        pid=self._pid,
-                        started_at=now,
-                    )
-                    db.add(row)
-                row.hostname = self._hostname
-                row.pid = self._pid
-                row.status = status
-                row.current_run_id = current_run_id or ""
-                row.current_phase = current_phase or ""
-                row.lease_expires_at = lease_expires_at
-                row.heartbeat_at = now
-                row.last_error = (last_error or "")[:2000]
-                row.metadata_json = {"thread_alive": bool(self._thread and self._thread.is_alive())}
-                db.commit()
+            for delay in (0.0, 0.05, 0.15):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    with SessionLocal() as db:
+                        row = db.query(WorkerRuntimeStatus).filter(WorkerRuntimeStatus.worker_id == self._worker_id).first()
+                        if row is None:
+                            row = WorkerRuntimeStatus(
+                                worker_id=self._worker_id,
+                                hostname=self._hostname,
+                                pid=self._pid,
+                                started_at=now,
+                            )
+                            db.add(row)
+                        row.hostname = self._hostname
+                        row.pid = self._pid
+                        row.status = status
+                        row.current_run_id = current_run_id or ""
+                        row.current_phase = current_phase or ""
+                        row.lease_expires_at = lease_expires_at
+                        row.heartbeat_at = now
+                        row.last_error = (last_error or "")[:2000]
+                        row.metadata_json = {"thread_alive": bool(self._thread and self._thread.is_alive())}
+                        db.commit()
+                        self._last_status_signature = signature
+                        self._last_status_write_ts = time.monotonic()
+                        return
+                except OperationalError as exc:
+                    if self._is_sqlite_locked(exc):
+                        continue
+                    raise
+            return
         except Exception:
             _logger.exception("worker status upsert failed worker_id=%s", self._worker_id)
             return
+
+    def _is_sqlite_locked(self, exc: BaseException) -> bool:
+        return "database is locked" in str(exc).lower()
 
 
 worker_runtime = WorkerRuntime()

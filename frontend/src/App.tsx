@@ -1606,7 +1606,7 @@ function BrowserPanel({
           <Badge variant="blue">routes: {state.routes_discovered}</Badge>
           <Badge variant="amber">forms: {state.forms.length}</Badge>
           <Badge variant="ok">screenshots: {state.screenshots.length}</Badge>
-          <Badge variant="ghost">signals: {jsSignals.length}</Badge>
+          <Badge variant="default">signals: {jsSignals.length}</Badge>
         </div>
         <div style={{ fontSize: ".72rem", color: "#7a9e92", lineHeight: 1.45 }}>
           <div>Entry: {state.entry_url || "(none)"}</div>
@@ -2763,10 +2763,11 @@ export default function App() {
             console.warn(`[refreshRun] ${label} failed:`, err);
             return fallback;
           };
-        const [run, graph, workflow, runSourceStatus, runReplay, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
+        const [run, graph, runApprovals, workflow, runSourceStatus, runReplay, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
+            api.getApprovals(runId).catch(track<Approval[]>("approvals", [])),
             api.getWorkflowState(runId).catch(track<WorkflowState | null>("workflow", null)),
             api.getSourceStatus(runId).catch(track<SourceStatus | null>("source", null)),
             api.getReplay(runId).catch(track<ReplayState | null>("replay", null)),
@@ -2795,7 +2796,7 @@ export default function App() {
         setReplayState(runReplay);
         setAgents(graph.agents);
         setTasks(graph.tasks);
-        setApprovals(graph.approvals);
+        setApprovals(runApprovals.length ? runApprovals : graph.approvals);
         setFacts(runFacts);
         setLearning(learningHits.results);
         setEvents(runEvents);
@@ -2847,8 +2848,13 @@ export default function App() {
     selectedRunRef.current = selectedRun.id;
     terminalSequenceRef.current[selectedRun.id] = 0;
     refreshRun(selectedRun.id, { incrementalTerminal: false });
+    const pollHandle = window.setInterval(() => {
+      if (selectedRunRef.current !== selectedRun.id) return;
+      refreshRun(selectedRun.id, { incrementalTerminal: true });
+    }, 2000);
+    let source: EventSource | null = null;
     try {
-      const source = new EventSource(`/api/v1/runs/${selectedRun.id}/stream`);
+      source = new EventSource(`/api/v1/runs/${selectedRun.id}/stream`);
       source.onmessage = (event) => {
         if (selectedRunRef.current !== selectedRun.id) return;
         try {
@@ -2864,14 +2870,17 @@ export default function App() {
         }
       };
       source.onerror = () => {
-        source.close();
+        source?.close();
         refreshRun(selectedRun.id, { incrementalTerminal: true });
       };
       streamRef.current = source;
-      return () => source.close();
     } catch {
       // EventSource unavailable — silent
     }
+    return () => {
+      window.clearInterval(pollHandle);
+      source?.close();
+    };
   }, [connected, selectedRun?.id, refreshRun]);
 
   function buildSourceInput(): SourceInput {
@@ -2958,6 +2967,12 @@ export default function App() {
     if (selectedRun) {
       await refreshRun(selectedRun.id, { incrementalTerminal: true });
       await refreshRuns();
+      try {
+        const rows = await api.getApprovals(selectedRun.id);
+        setApprovals(rows);
+      } catch {
+        // ignore; refreshRun already attempted
+      }
     }
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "approved" } : x)));
     flash(`Approved: ${a.title}`);
@@ -2972,6 +2987,12 @@ export default function App() {
     if (selectedRun) {
       await refreshRun(selectedRun.id, { incrementalTerminal: true });
       await refreshRuns();
+      try {
+        const rows = await api.getApprovals(selectedRun.id);
+        setApprovals(rows);
+      } catch {
+        // ignore; refreshRun already attempted
+      }
     }
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "rejected" } : x)));
     flash(`Rejected: ${a.title}`);

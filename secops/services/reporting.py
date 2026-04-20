@@ -396,6 +396,8 @@ class ReportingService:
             ("xss", "Cross-Site Scripting (XSS) Vulnerabilities"),
             ("injection", "SQL/Command Injection Vulnerabilities"),
             ("ssrf", "Server-Side Request Forgery (SSRF) Vulnerabilities"),
+            ("exposure", "Sensitive Exposure & Security Misconfiguration"),
+            ("network", "Network Service Exposure"),
         ]
         category_summary: dict[str, Any] = {}
         grouped_findings: dict[str, list[Finding]] = {key: [] for key, _ in categories}
@@ -486,17 +488,23 @@ class ReportingService:
                 str(finding.evidence or ""),
             ]
         ).lower()
-        if any(token in text for token in ["auth", "login", "jwt", "session", "password"]):
-            return "authentication"
-        if any(token in text for token in ["idor", "authorization", "access control", "privilege", "admin"]):
-            return "authorization"
-        if any(token in text for token in ["xss", "cross-site"]):
-            return "xss"
-        if any(token in text for token in ["sql", "injection", "command injection", "nosql", "xxe", "yaml"]):
-            return "injection"
-        if "ssrf" in text:
+        if any(token in text for token in ["ssrf", "server-side request forgery"]):
             return "ssrf"
-        return "injection"
+        if any(token in text for token in ["xss", "cross-site", "jsonp", "callback execution"]):
+            return "xss"
+        if any(token in text for token in ["sql injection", "command injection", "nosql", "xxe", "yaml", "injection bypass", "database error"]):
+            return "injection"
+        if any(token in text for token in ["rpcbind", "portmapper", "jetdirect", "raw print", "tcp/9100", "ssh"]):
+            return "network"
+        if any(token in text for token in ["admin configuration", "/rest/admin/application-configuration", "sensitive endpoint"]):
+            return "authorization"
+        if any(token in text for token in ["metrics", "version", "cors", "content-security-policy", "swagger", "api documentation", "telemetry", "header"]):
+            return "exposure"
+        if any(token in text for token in ["idor", "authorization", "access control", "privilege", "unauthenticated", "object-level", "admin configuration", "sensitive endpoint"]):
+            return "authorization"
+        if any(token in text for token in ["login", "jwt", "session", "password", "token replay", "brute force", "credential"]):
+            return "authentication"
+        return "exposure"
 
     def _extract_location(self, finding: Finding) -> str:
         text = " ".join([str(finding.evidence or ""), str(finding.summary or "")]).strip()
@@ -506,10 +514,14 @@ class ReportingService:
 
     def _extract_prerequisites(self, finding: Finding) -> list[str]:
         base = []
-        if finding.reproduction:
-            if "token" in finding.reproduction.lower():
+        reproduction = str(finding.reproduction or "").lower()
+        evidence = str(finding.evidence or "").lower()
+        if "without authentication" in reproduction or "unauthenticated" in evidence:
+            return ["None beyond network reachability to target scope"]
+        if reproduction:
+            if "token" in reproduction:
                 base.append("Valid authentication token")
-            if "admin" in finding.reproduction.lower():
+            if "admin" in reproduction:
                 base.append("Elevated role/session where noted in reproduction")
         if not base:
             base.append("None beyond network reachability to target scope")
@@ -534,7 +546,7 @@ class ReportingService:
         lines.append("")
         lines.append("## Summary by Vulnerability Type")
         lines.append("")
-        for key in ["authentication", "authorization", "xss", "injection", "ssrf"]:
+        for key in ["authentication", "authorization", "xss", "injection", "ssrf", "exposure", "network"]:
             row = (payload.get("vulnerability_type_summary") or {}).get(key) or {}
             lines.append(f"### {row.get('label', key)}")
             lines.append(f"**Status:** {row.get('summary', '')}")

@@ -7,7 +7,9 @@ import json
 import os
 import subprocess
 import time
-from urllib.parse import urlparse
+from urllib import request as urlrequest
+from urllib import error as urlerror
+from urllib.parse import quote, urlencode, urlparse
 
 from sqlalchemy import select
 
@@ -581,6 +583,8 @@ class ExecutionManager:
             paths = self.nas.for_workspace(run.workspace_id)
             session = self._create_agent_session(db, run.id, "researcher", "Researcher Sidecar", paths)
             self._set_role_status(db, run.id, "researcher", "running")
+            # Release sqlite writer lock before outbound CVE/API lookups.
+            db.commit()
             results = []
             errors = []
             services = run.config_json.get("services", [])
@@ -652,6 +656,8 @@ class ExecutionManager:
                             metadata_json=top,
                         )
                     )
+                # Keep the transaction short so worker lease heartbeats are not starved.
+                db.commit()
             cve_path = paths.facts / "cve_results.json"
             paths.write_json(cve_path, results)
             session.status = "completed"
@@ -817,11 +823,15 @@ class ExecutionManager:
                 payload={"agent": "browser", "candidates": candidate_urls[:8]},
                 agent_session_id=session.id,
             )
+            # Release sqlite write locks before long-running browser runtime activity.
+            # Without this commit, heartbeat lease-renew writes can starve and mark the phase stale.
+            run_config_snapshot = dict(run.config_json or {})
+            db.commit()
             best_result = None
             best_url = target_url
             best_score = -1
             for idx, url in enumerate((candidate_urls or [target_url])[:8], start=1):
-                cfg = dict(run.config_json or {})
+                cfg = dict(run_config_snapshot or {})
                 browser_cfg = dict(cfg.get("browser") or {})
                 browser_cfg["entry_url"] = url
                 cfg["browser"] = browser_cfg
@@ -851,7 +861,7 @@ class ExecutionManager:
                 run_id=run.id,
                 workspace_root=paths.root,
                 target=target_url,
-                run_config=dict(run.config_json or {}),
+                run_config=dict(run_config_snapshot or {}),
             )
             target_url = best_url
             config = dict(run.config_json or {})
@@ -1055,6 +1065,8 @@ class ExecutionManager:
                 value = str(endpoint.get("endpoint") or "").strip()
                 if not value:
                     continue
+                if not self._is_meaningful_endpoint(value):
+                    continue
                 db.add(
                     Fact(
                         run_id=run.id,
@@ -1067,12 +1079,16 @@ class ExecutionManager:
                     )
                 )
                 endpoint_l = value.lower()
-                endpoint_tokens = ("login", "auth", "admin", "user", "order", "basket", "cart", "profile", "password", "token", "file", "upload", "search", "graphql")
+                endpoint_count = int(endpoint.get("count") or 0)
+                endpoint_tokens = ("login", "auth", "admin", "password", "token", "search", "graphql", "config", "metrics", "upload", "reset")
+                high_signal_tokens = ("admin", "auth", "password", "token", "config", "graphql")
                 if any(token in endpoint_l for token in endpoint_tokens):
+                    if endpoint_count < 2 and not any(token in endpoint_l for token in high_signal_tokens):
+                        continue
                     title = f"API surface candidate: {value}"
                     if title not in emitted_vectors:
                         emitted_vectors.add(title)
-                        severity = "high" if any(token in endpoint_l for token in ("admin", "auth", "password", "token")) else "medium"
+                        severity = "high" if any(token in endpoint_l for token in high_signal_tokens) else "medium"
                         db.add(
                             self._browser_vector(
                                 run_id=run.id,
@@ -1088,7 +1104,7 @@ class ExecutionManager:
                         )
             for route in route_values[:30]:
                 route_l = route.lower()
-                route_tokens = ("admin", "profile", "account", "basket", "order", "payment", "search", "support", "chat", "file", "api")
+                route_tokens = ("admin", "manage", "internal", "debug", "graphql", "swagger", "openapi")
                 if any(token in route_l for token in route_tokens):
                     title = f"Route exposure candidate: {route}"
                     if title not in emitted_vectors:
@@ -1106,6 +1122,60 @@ class ExecutionManager:
                                 requires_approval=True,
                             )
                         )
+            web_validation = self._browser_http_validations(
+                base_url=target_url,
+                network_endpoints=result.network_summary.get("endpoints", []),
+                workspace_paths=paths,
+            )
+            category_validation = self._browser_category_validations(
+                base_url=target_url,
+                network_endpoints=result.network_summary.get("endpoints", []),
+                workspace_paths=paths,
+            )
+            web_validation["findings"].extend(category_validation["findings"])
+            web_validation["artifacts"].extend(category_validation["artifacts"])
+            if web_validation["findings"]:
+                existing_titles = {
+                    str(row[0]).strip().lower()
+                    for row in db.query(Finding.title).filter(Finding.run_id == run.id).all()
+                    if str(row[0] or "").strip()
+                }
+                for finding in web_validation["findings"]:
+                    title = str(finding.get("title") or "").strip()
+                    if not title or title.lower() in existing_titles:
+                        continue
+                    existing_titles.add(title.lower())
+                    db.add(
+                        Finding(
+                            run_id=run.id,
+                            title=title[:255],
+                            severity=str(finding.get("severity") or "medium"),
+                            status="validated",
+                            summary=str(finding.get("summary") or "")[:2000],
+                            evidence=str(finding.get("evidence") or "")[:4000],
+                            reproduction=str(finding.get("reproduction") or "")[:4000],
+                            remediation=str(finding.get("remediation") or "")[:4000],
+                            confidence=float(max(0.0, min(0.99, float(finding.get("confidence") or 0.75)))),
+                        )
+                    )
+                for artifact_path in web_validation["artifacts"]:
+                    db.add(
+                        Artifact(
+                            run_id=run.id,
+                            kind="http-validation",
+                            path=artifact_path,
+                            metadata_json={"phase": "browser-assessment"},
+                        )
+                    )
+                db.add(
+                    RunMessage(
+                        run_id=run.id,
+                        role="system",
+                        author="System",
+                        content=f"Browser validation checks produced {len(web_validation['findings'])} validated finding(s).",
+                        metadata_json={"phase": "browser-assessment", "validated_count": len(web_validation["findings"])},
+                    )
+                )
             if result.network_summary.get("endpoints"):
                 title = "Client-side/API mismatch candidate"
                 if title not in emitted_vectors:
@@ -1211,6 +1281,440 @@ class ExecutionManager:
                 next_action="cve analysis",
             )
             db.commit()
+
+    def _browser_http_validations(self, *, base_url: str, network_endpoints: list[dict], workspace_paths) -> dict[str, list]:
+        parsed = urlparse(str(base_url or ""))
+        if not parsed.scheme or not parsed.netloc:
+            return {"findings": [], "artifacts": []}
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        suspicious_tokens = (
+            "admin",
+            "config",
+            "debug",
+            "metrics",
+            "swagger",
+            "openapi",
+            "graphql",
+            "ftp",
+            "backup",
+            ".git",
+            ".env",
+            "internal",
+        )
+        static_suffixes = (".css", ".js", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2")
+        candidate_paths: list[str] = []
+        for row in (network_endpoints or []):
+            endpoint = str((row or {}).get("endpoint") or "").strip()
+            if not endpoint:
+                continue
+            if not self._is_meaningful_endpoint(endpoint):
+                continue
+            parts = endpoint.split(" ", 1)
+            if len(parts) != 2:
+                continue
+            method, path = parts[0].upper(), parts[1].strip()
+            if method != "GET" or not path.startswith("/"):
+                continue
+            lower = path.lower()
+            if lower.endswith(static_suffixes):
+                continue
+            if any(token in lower for token in suspicious_tokens):
+                candidate_paths.append(path)
+        deduped_paths: list[str] = []
+        seen_paths: set[str] = set()
+        for path in candidate_paths:
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            deduped_paths.append(path)
+
+        findings: list[dict] = []
+        artifacts: list[str] = []
+        out_dir = workspace_paths.artifacts / "http-validation"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for path in deduped_paths[:12]:
+            url = f"{origin}{path}"
+            req = urlrequest.Request(url=url, method="GET")
+            try:
+                with urlrequest.urlopen(req, timeout=6) as resp:
+                    status = int(getattr(resp, "status", 0) or 0)
+                    ctype = str(resp.headers.get("Content-Type", "")).lower()
+                    raw = resp.read(1400)
+            except urlerror.HTTPError as exc:
+                status = int(exc.code or 0)
+                ctype = str(exc.headers.get("Content-Type", "")).lower() if exc.headers else ""
+                raw = b""
+            except Exception:
+                continue
+            if status != 200:
+                continue
+            snippet = raw.decode("utf-8", errors="ignore")[:800]
+            lower_path = path.lower()
+            sev = "medium"
+            if any(token in lower_path for token in ("admin", "config", "debug", ".git", ".env", "backup", "internal", "ftp")):
+                sev = "high"
+            if "metrics" in lower_path:
+                sev = "medium"
+            title = f"Unauthenticated sensitive endpoint exposure: GET {path}"
+            summary = f"Endpoint `{path}` returned HTTP 200 without authentication."
+            remediation = "Require authentication and authorization checks for sensitive endpoints and files."
+            if "metrics" in lower_path:
+                remediation = "Restrict metrics endpoints to trusted networks and authenticated monitoring identities."
+            slug = re.sub(r"[^a-zA-Z0-9]+", "-", path).strip("-")[:90] or "root"
+            artifact_path = out_dir / f"{slug}.txt"
+            artifact_path.write_text(
+                f"URL: {url}\nStatus: {status}\nContent-Type: {ctype}\n\nSnippet:\n{snippet}\n",
+                encoding="utf-8",
+            )
+            artifacts.append(str(artifact_path))
+            findings.append(
+                {
+                    "title": title,
+                    "severity": sev,
+                    "summary": summary,
+                    "evidence": f"{url} returned HTTP 200 unauthenticated. Artifact: {artifact_path}",
+                    "reproduction": f"GET {url} without authentication",
+                    "remediation": remediation,
+                    "confidence": 0.82 if sev == "high" else 0.74,
+                }
+            )
+            # Generic SQL error-based probe for query/search style endpoints.
+            if any(token in lower_path for token in ("search", "query", "filter")):
+                probe_url = f"{origin}{path}{'&' if '?' in path else '?'}q=%27"
+                req_probe = urlrequest.Request(url=probe_url, method="GET")
+                try:
+                    with urlrequest.urlopen(req_probe, timeout=6) as probe_resp:
+                        probe_status = int(getattr(probe_resp, "status", 0) or 0)
+                        probe_raw = probe_resp.read(1400)
+                except urlerror.HTTPError as exc:
+                    probe_status = int(exc.code or 0)
+                    probe_raw = b""
+                except Exception:
+                    probe_status = 0
+                    probe_raw = b""
+                probe_text = probe_raw.decode("utf-8", errors="ignore")
+                sql_markers = ("sql", "sqlite", "syntax error", "unterminated", "sequelize", "database error")
+                if probe_status >= 500 or any(marker in probe_text.lower() for marker in sql_markers):
+                    sql_artifact = out_dir / f"{slug}-sqli-probe.txt"
+                    sql_artifact.write_text(
+                        f"URL: {probe_url}\nStatus: {probe_status}\n\nSnippet:\n{probe_text[:900]}\n",
+                        encoding="utf-8",
+                    )
+                    artifacts.append(str(sql_artifact))
+                    findings.append(
+                        {
+                            "title": f"Potential injection flaw at {path}",
+                            "severity": "high",
+                            "summary": "Input containing SQL metacharacters caused server/database error behavior.",
+                            "evidence": f"Probe `{probe_url}` returned status={probe_status} with SQL-error-like response markers.",
+                            "reproduction": f"GET {probe_url} and inspect response for database syntax errors.",
+                            "remediation": "Use parameterized queries, strict input handling, and generic error responses.",
+                            "confidence": 0.86,
+                        }
+                    )
+        return {"findings": findings, "artifacts": artifacts}
+
+    def _browser_category_validations(self, *, base_url: str, network_endpoints: list[dict], workspace_paths) -> dict[str, list]:
+        parsed = urlparse(str(base_url or ""))
+        if not parsed.scheme or not parsed.netloc:
+            return {"findings": [], "artifacts": []}
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        endpoints = self._endpoint_paths(network_endpoints)
+        out_dir = workspace_paths.artifacts / "http-validation"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        findings: list[dict] = []
+        artifacts: list[str] = []
+        seen_titles: set[str] = set()
+
+        def add_finding(item: dict) -> None:
+            title = str(item.get("title") or "").strip()
+            if not title or title.lower() in seen_titles:
+                return
+            seen_titles.add(title.lower())
+            findings.append(item)
+
+        exposure_checks = {
+            "/metrics": ("medium", "Public metrics endpoint exposes runtime telemetry", "Restrict metrics to trusted monitoring networks or authenticated monitoring identities."),
+            "/swagger.json": ("medium", "Public API schema disclosure", "Restrict machine-readable API schemas when they expose sensitive internal routes."),
+            "/openapi.json": ("medium", "Public API schema disclosure", "Restrict machine-readable API schemas when they expose sensitive internal routes."),
+            "/api-docs": ("medium", "Public API documentation exposure", "Restrict API documentation to trusted users or remove privileged routes from public docs."),
+            "/.env": ("critical", "Environment file disclosure", "Remove environment files from web roots and rotate any exposed secrets."),
+            "/.git/config": ("high", "Git metadata disclosure", "Block access to VCS metadata and remove repository internals from deployed web roots."),
+        }
+        for path, (severity, title, remediation) in exposure_checks.items():
+            resp = self._http_request("GET", f"{origin}{path}", timeout=5)
+            if resp["status"] != 200 or not resp["body"]:
+                continue
+            body_l = resp["body"].lower()
+            if path == "/metrics" and "# help" not in body_l and "process_" not in body_l:
+                continue
+            if path in {"/swagger.json", "/openapi.json"} and "paths" not in body_l:
+                continue
+            if path == "/.env" and not re.search(r"(?m)^[A-Z0-9_]{3,}\s*=\s*.+$", resp["body"]):
+                continue
+            if path == "/.env" and self._looks_like_spa_html(resp):
+                continue
+            if path == "/.git/config" and "[core]" not in body_l and "repositoryformatversion" not in body_l:
+                continue
+            if path == "/.git/config" and self._looks_like_spa_html(resp):
+                continue
+            artifact = self._write_http_artifact(out_dir, path, resp, f"{origin}{path}")
+            artifacts.append(str(artifact))
+            add_finding(
+                {
+                    "title": title,
+                    "severity": severity,
+                    "summary": f"`{path}` returned HTTP 200 with sensitive operational content.",
+                    "evidence": f"`GET {origin}{path}` returned HTTP 200. Artifact: {artifact}",
+                    "reproduction": f"GET {origin}{path}",
+                    "remediation": remediation,
+                    "confidence": 0.84,
+                }
+            )
+
+        sensitive_gets = sorted(
+            {
+                path
+                for path in endpoints.get("GET", set())
+                if any(token in path.lower() for token in ("admin", "config", "version", "memory", "memories", "users", "metrics", "ftp", "backup"))
+            }
+        )
+        for fallback in ("/rest/memories", "/rest/memories/", "/api/Users", "/ftp/", "/ftp/acquisitions.md", "/backup", "/admin"):
+            if fallback not in sensitive_gets:
+                sensitive_gets.append(fallback)
+        deduped_sensitive_gets: list[str] = []
+        seen_sensitive_keys: set[str] = set()
+        for path in sensitive_gets:
+            key = path.rstrip("/") or path
+            if key in seen_sensitive_keys:
+                continue
+            seen_sensitive_keys.add(key)
+            deduped_sensitive_gets.append(path)
+        for path in deduped_sensitive_gets[:20]:
+            resp = self._http_request("GET", f"{origin}{path}", timeout=5)
+            if resp["status"] != 200:
+                continue
+            if self._looks_like_spa_html(resp):
+                continue
+            artifact = self._write_http_artifact(out_dir, path, resp, f"{origin}{path}")
+            artifacts.append(str(artifact))
+            severity = "high" if any(token in path.lower() for token in ("admin", "config", "users", "memory", "memories", "backup")) else "medium"
+            add_finding(
+                {
+                    "title": f"Unauthenticated sensitive endpoint exposure: GET {path}",
+                    "severity": severity,
+                    "summary": f"Sensitive-looking endpoint `{path}` returned HTTP 200 without authentication.",
+                    "evidence": f"`GET {origin}{path}` returned HTTP 200. Artifact: {artifact}",
+                    "reproduction": f"GET {origin}{path}",
+                    "remediation": "Require authentication and object-level authorization for sensitive API and file endpoints.",
+                    "confidence": 0.82,
+                }
+            )
+
+        login_candidates = sorted(path for path in endpoints.get("POST", set()) if any(token in path.lower() for token in ("login", "signin", "auth")))
+        for fallback in ("/rest/user/login", "/api/login", "/login", "/auth/login", "/users/login"):
+            if fallback not in login_candidates:
+                login_candidates.append(fallback)
+        for path in login_candidates[:5]:
+            probe = {"email": "' OR 1=1--", "username": "' OR 1=1--", "password": "anything"}
+            resp = self._http_request("POST", f"{origin}{path}", json_body=probe, timeout=6)
+            body_l = resp["body"].lower()
+            if resp["status"] == 200 and any(token in body_l for token in ("token", "jwt", "auth", "admin", "role")):
+                artifact = self._write_http_artifact(out_dir, f"{path}-sqli-auth-bypass", resp, f"{origin}{path}", request_body=probe)
+                artifacts.append(str(artifact))
+                add_finding(
+                    {
+                        "title": f"SQL injection authentication bypass: POST {path}",
+                        "severity": "critical",
+                        "summary": "Authentication accepted a SQL tautology payload and returned an authenticated-looking response.",
+                        "evidence": f"`POST {origin}{path}` with a SQL tautology returned HTTP 200 and authentication markers. Artifact: {artifact}",
+                        "reproduction": f"POST {origin}{path} with JSON email/username payload `' OR 1=1--` and any password.",
+                        "remediation": "Use parameterized queries or ORM-safe predicates for authentication and add negative tests for SQL metacharacters.",
+                        "confidence": 0.93,
+                    }
+                )
+
+        query_candidates = sorted(
+            {
+                path
+                for method, paths in endpoints.items()
+                for path in paths
+                if method == "GET" and any(token in path.lower() for token in ("search", "query", "filter", "lookup"))
+            }
+        )
+        for path in query_candidates[:10]:
+            probe_path = self._append_query(path, {"q": "'"})
+            resp = self._http_request("GET", f"{origin}{probe_path}", timeout=6)
+            body_l = resp["body"].lower()
+            if resp["status"] >= 500 or any(token in body_l for token in ("sql", "sqlite", "syntax error", "sequelize", "database error")):
+                artifact = self._write_http_artifact(out_dir, f"{path}-sqli-error", resp, f"{origin}{probe_path}")
+                artifacts.append(str(artifact))
+                add_finding(
+                    {
+                        "title": f"Error-based injection signal: GET {path}",
+                        "severity": "high",
+                        "summary": "SQL metacharacter input produced server/database error behavior on a query endpoint.",
+                        "evidence": f"`GET {origin}{probe_path}` returned status={resp['status']} with database-error markers. Artifact: {artifact}",
+                        "reproduction": f"GET {origin}{probe_path}",
+                        "remediation": "Use parameterized queries, strict input handling, and generic error responses.",
+                        "confidence": 0.84,
+                    }
+                )
+
+        jsonp_candidates = sorted(path for method, paths in endpoints.items() for path in paths if method == "GET" and "whoami" in path.lower())
+        for path in jsonp_candidates[:5]:
+            probe_path = self._append_query(path, {"callback": "alert"})
+            resp = self._http_request("GET", f"{origin}{probe_path}", timeout=5)
+            body = resp["body"]
+            if resp["status"] == 200 and ("alert(" in body or "typeof alert" in body):
+                artifact = self._write_http_artifact(out_dir, f"{path}-jsonp-callback", resp, f"{origin}{probe_path}")
+                artifacts.append(str(artifact))
+                add_finding(
+                    {
+                        "title": f"JSONP callback execution surface: GET {path}",
+                        "severity": "medium",
+                        "summary": "The endpoint reflects a callback name into executable JavaScript-style response content.",
+                        "evidence": f"`GET {origin}{probe_path}` returned callback execution markers. Artifact: {artifact}",
+                        "reproduction": f"GET {origin}{probe_path}",
+                        "remediation": "Remove JSONP support where possible; otherwise restrict callback names and return JSON with CORS controls.",
+                        "confidence": 0.8,
+                    }
+                )
+
+        upload_or_url_paths = sorted(
+            {
+                path
+                for method, paths in endpoints.items()
+                for path in paths
+                if any(token in path.lower() for token in ("image/url", "profile/image", "fetch", "import", "webhook", "callback", "avatar"))
+            }
+        )
+        for path in upload_or_url_paths[:10]:
+            add_finding(
+                {
+                    "title": f"SSRF validation candidate: {path}",
+                    "severity": "medium",
+                    "summary": "Browser/API discovery found a URL-ingestion style endpoint requiring SSRF validation.",
+                    "evidence": f"Discovered URL-ingestion style endpoint `{path}` during browser/network assessment.",
+                    "reproduction": f"Review accepted URL parameters on {origin}{path} and validate with non-destructive internal canary URLs.",
+                    "remediation": "Enforce URL allowlists, block private/link-local ranges, and fetch remote content through hardened proxy controls.",
+                    "confidence": 0.62,
+                }
+            )
+
+        return {"findings": findings, "artifacts": artifacts}
+
+    def _endpoint_paths(self, network_endpoints: list[dict]) -> dict[str, set[str]]:
+        endpoints: dict[str, set[str]] = {}
+        for row in network_endpoints or []:
+            raw = str((row or {}).get("endpoint") or "").strip()
+            if not self._is_meaningful_endpoint(raw):
+                continue
+            method, path = raw.split(" ", 1)
+            endpoints.setdefault(method.upper(), set()).add(path.strip())
+        return endpoints
+
+    def _append_query(self, path: str, params: dict[str, str]) -> str:
+        sep = "&" if "?" in path else "?"
+        return f"{path}{sep}{urlencode(params)}"
+
+    def _http_request(self, method: str, url: str, *, json_body: dict | None = None, timeout: int = 5) -> dict[str, str | int]:
+        body_bytes = None
+        headers = {"User-Agent": "Vantix-Validation/1.0"}
+        if json_body is not None:
+            body_bytes = json.dumps(json_body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urlrequest.Request(url=url, data=body_bytes, method=method.upper(), headers=headers)
+        try:
+            with urlrequest.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read(20000)
+                return {
+                    "status": int(getattr(resp, "status", 0) or 0),
+                    "headers": "\n".join(f"{k}: {v}" for k, v in resp.headers.items()),
+                    "body": raw.decode("utf-8", errors="ignore"),
+                }
+        except urlerror.HTTPError as exc:
+            raw = exc.read(20000) if hasattr(exc, "read") else b""
+            return {
+                "status": int(exc.code or 0),
+                "headers": "\n".join(f"{k}: {v}" for k, v in exc.headers.items()) if exc.headers else "",
+                "body": raw.decode("utf-8", errors="ignore"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"status": 0, "headers": "", "body": f"request failed: {exc}"}
+
+    def _looks_like_spa_html(self, response: dict[str, str | int]) -> bool:
+        headers = str(response.get("headers") or "").lower()
+        body = str(response.get("body") or "").lower()[:1200]
+        return "content-type: text/html" in headers and ("<!doctype html" in body or "<html" in body)
+
+    def _write_http_artifact(
+        self,
+        out_dir: Path,
+        path: str,
+        response: dict[str, str | int],
+        url: str,
+        *,
+        request_body: dict | None = None,
+    ) -> Path:
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", path).strip("-")[:110] or "http"
+        artifact_path = out_dir / f"{slug}.txt"
+        body = str(response.get("body") or "")
+        headers = str(response.get("headers") or "")
+        request_block = ""
+        if request_body is not None:
+            request_block = f"\nRequest JSON:\n{json.dumps(request_body, indent=2)}\n"
+        artifact_path.write_text(
+            f"URL: {url}\nStatus: {response.get('status')}\nHeaders:\n{headers[:2000]}\n{request_block}\nBody Snippet:\n{body[:6000]}\n",
+            encoding="utf-8",
+        )
+        return artifact_path
+
+    def _is_meaningful_endpoint(self, endpoint: str) -> bool:
+        value = str(endpoint or "").strip()
+        if not value:
+            return False
+        parts = value.split(" ", 1)
+        if len(parts) != 2:
+            return False
+        method, path = parts[0].upper().strip(), parts[1].strip()
+        if not path.startswith("/"):
+            return False
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return False
+        lower = path.lower()
+        noisy_prefixes = (
+            "/assets/",
+            "/dist/",
+            "/static/",
+            "/socket.io/",
+            "/github/collect",
+            "/favicon",
+        )
+        if any(lower.startswith(prefix) for prefix in noisy_prefixes):
+            return False
+        noisy_suffixes = (
+            ".css",
+            ".js",
+            ".mjs",
+            ".map",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+        )
+        if lower.endswith(noisy_suffixes):
+            return False
+        if "/images/uploads/" in lower:
+            return False
+        return True
 
     def _phase_orchestrate(self, run_id: str) -> None:
         with SessionLocal() as db:
@@ -1320,6 +1824,28 @@ class ExecutionManager:
                     def on_line(line: str) -> None:
                         handle.write(line)
                         handle.flush()
+                        stripped = line.strip()
+                        if not stripped:
+                            return
+                        noisy_prefixes = (
+                            "### /home/",
+                            "id=mem.",
+                            "ts=",
+                            "fmt: id=<id>",
+                            "load: use `python3 scripts/learn_engine.py",
+                            "OpenAI Codex v",
+                            "workdir:",
+                            "model:",
+                            "provider:",
+                            "approval:",
+                            "sandbox:",
+                            "reasoning effort:",
+                            "reasoning summaries:",
+                            "session id:",
+                            "--------",
+                        )
+                        if stripped.startswith(noisy_prefixes):
+                            return
                         # Streaming events need their own short-lived session so
                         # they do not collide with the outer unit-of-work.
                         with SessionLocal() as stream_db:
@@ -1576,8 +2102,14 @@ class ExecutionManager:
             if task.status == "completed":
                 return
             self._set_role_status(db, run.id, "reporter", "running")
-            self._ensure_findings_for_report(db, run.id)
-            generated = self.reporting.generate(db, run)
+            workspace = self.nas.for_workspace(run.workspace_id)
+            adopted = self._existing_report_package(workspace)
+            if adopted:
+                self._ensure_findings_for_report(db, run)
+                generated = adopted
+            else:
+                self._ensure_findings_for_report(db, run)
+                generated = self.reporting.generate(db, run)
             task.status = "completed"
             self._set_role_status(db, run.id, "reporter", "completed")
             self._set_vantix_task_status(db, run.id, "reporting", "completed", {"source_phase": "report"})
@@ -1670,10 +2202,143 @@ class ExecutionManager:
             )
             db.commit()
 
-    def _ensure_findings_for_report(self, db, run_id: str) -> None:
-        existing = db.query(Finding).filter(Finding.run_id == run_id).count()
-        if existing > 0:
-            return
+    def _existing_report_package(self, workspace) -> dict[str, str] | None:
+        report_md = workspace.artifacts / "run_report.md"
+        report_json = workspace.artifacts / "run_report.json"
+        if not report_md.exists() or not report_json.exists():
+            return None
+        try:
+            payload = json.loads(report_json.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:  # noqa: BLE001
+            return None
+        findings = payload.get("findings") or []
+        if not isinstance(findings, list) or len(findings) == 0:
+            return None
+        return {
+            "markdown_path": str(report_md),
+            "json_path": str(report_json),
+            "comprehensive_markdown_path": str(workspace.artifacts / "comprehensive_security_assessment_report.md")
+            if (workspace.artifacts / "comprehensive_security_assessment_report.md").exists()
+            else "",
+            "comprehensive_json_path": str(workspace.artifacts / "comprehensive_security_assessment_report.json")
+            if (workspace.artifacts / "comprehensive_security_assessment_report.json").exists()
+            else "",
+            "artifact_index_path": str(workspace.artifacts / "artifact_index.json")
+            if (workspace.artifacts / "artifact_index.json").exists()
+            else "",
+            "timeline_csv_path": str(workspace.artifacts / "timeline.csv")
+            if (workspace.artifacts / "timeline.csv").exists()
+            else "",
+        }
+
+    def _ensure_findings_for_report(self, db, run: WorkspaceRun | str) -> None:
+        if isinstance(run, str):
+            resolved = db.get(WorkspaceRun, run)
+            if resolved is None:
+                return
+            run = resolved
+        run_id = run.id
+        existing_titles = {
+            str(row[0]).strip().lower()
+            for row in db.query(Finding.title).filter(Finding.run_id == run_id).all()
+            if str(row[0] or "").strip()
+        }
+        created = 0
+
+        # Prefer validated findings from generated report JSON when present.
+        workspace = self.nas.for_workspace(run.workspace_id)
+        report_paths = [
+            workspace.artifacts / "run_report.json",
+            workspace.artifacts / "comprehensive_security_assessment_report.json",
+        ]
+        for report_path in report_paths:
+            if not report_path.exists():
+                continue
+            try:
+                payload = json.loads(report_path.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:  # noqa: BLE001
+                continue
+            for item in (payload.get("findings") or []):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()[:255]
+                if not title:
+                    continue
+                key = title.lower()
+                if key in existing_titles:
+                    continue
+                severity = str(item.get("severity") or "medium").lower().strip()
+                severity_map = {"low-medium": "medium", "med": "medium", "informational": "info"}
+                severity = severity_map.get(severity, severity)
+                if severity not in {"critical", "high", "medium", "low", "info"}:
+                    severity = "medium"
+                status = str(item.get("status") or "validated").lower().strip()
+                if status not in {"validated", "candidate", "confirmed", "fixed", "rejected"}:
+                    status = "validated"
+                summary = str(item.get("summary") or item.get("overview") or title).strip()[:2000]
+                evidence_value = item.get("evidence")
+                if isinstance(evidence_value, list):
+                    evidence = "\n".join(str(v).strip() for v in evidence_value if str(v).strip())[:4000]
+                else:
+                    evidence = str(evidence_value or "").strip()[:4000]
+                reproduction = str(item.get("reproduction") or item.get("steps") or "").strip()[:4000]
+                remediation = str(item.get("remediation") or item.get("fix") or "").strip()[:4000]
+                raw_conf = item.get("confidence")
+                if isinstance(raw_conf, (int, float)):
+                    confidence = float(max(0.0, min(0.99, float(raw_conf))))
+                else:
+                    confidence = {
+                        "critical": 0.95,
+                        "high": 0.85,
+                        "medium": 0.7,
+                        "low": 0.6,
+                        "info": 0.5,
+                    }.get(severity, 0.7)
+                db.add(
+                    Finding(
+                        run_id=run_id,
+                        title=title,
+                        severity=severity,
+                        status=status,
+                        summary=summary,
+                        evidence=evidence,
+                        reproduction=reproduction,
+                        remediation=remediation,
+                        confidence=confidence,
+                    )
+                )
+                existing_titles.add(key)
+                created += 1
+
+        # Pull validated findings from operator-authored pentest summaries.
+        summary_path = workspace.artifacts / "pentest-summary.md"
+        if summary_path.exists():
+            for item in self._parse_pentest_summary_findings(summary_path):
+                title = str(item.get("title") or "").strip()[:255]
+                if not title:
+                    continue
+                key = title.lower()
+                if key in existing_titles:
+                    continue
+                severity = str(item.get("severity") or "medium").lower().strip()
+                if severity not in {"critical", "high", "medium", "low", "info"}:
+                    severity = "medium"
+                db.add(
+                    Finding(
+                        run_id=run_id,
+                        title=title,
+                        severity=severity,
+                        status="validated",
+                        summary=str(item.get("summary") or title).strip()[:2000],
+                        evidence=str(item.get("evidence") or "").strip()[:4000],
+                        reproduction="Reproduce using the recorded endpoint and payload path in pentest-summary evidence.",
+                        remediation=str(item.get("remediation") or "").strip()[:4000],
+                        confidence=float(item.get("confidence") or 0.8),
+                    )
+                )
+                existing_titles.add(key)
+                created += 1
+
         vectors = (
             db.query(Fact)
             .filter(Fact.run_id == run_id, Fact.kind == "vector")
@@ -1686,7 +2351,9 @@ class ExecutionManager:
             status = str(meta.get("status") or "").lower()
             confidence = float(meta.get("score") or vector.confidence or 0.0)
             evidence = str(meta.get("evidence") or vector.value or "").strip()
-            if status not in {"planned", "validated", "selected", "executed", "candidate"} and confidence < 0.7:
+            if status not in {"planned", "validated", "selected", "executed"} and confidence < 0.7:
+                continue
+            if status == "candidate":
                 continue
             if confidence < 0.7:
                 continue
@@ -1694,6 +2361,8 @@ class ExecutionManager:
                 continue
             title = str(meta.get("title") or vector.value or "Vector-derived finding").strip()[:255]
             if not title:
+                continue
+            if title.lower() in existing_titles:
                 continue
             summary = str(meta.get("summary") or "Vector selected for validation during workflow execution.").strip()
             severity = str(meta.get("severity") or "medium").lower()
@@ -1712,9 +2381,85 @@ class ExecutionManager:
                     confidence=max(0.0, min(0.99, confidence)),
                 )
             )
+            existing_titles.add(title.lower())
             promoted += 1
+            created += 1
             if promoted >= 10:
                 break
+
+    def _parse_pentest_summary_findings(self, summary_path: Path) -> list[dict[str, str | float]]:
+        try:
+            content = summary_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            return []
+        marker = "## Validated Findings"
+        if marker not in content:
+            return []
+        section = content.split(marker, 1)[1]
+        raw_blocks = re.split(r"\n###\s+", section)
+        findings: list[dict[str, str | float]] = []
+        for raw in raw_blocks:
+            block = raw.strip()
+            if not block:
+                continue
+            first_line, _, rest = block.partition("\n")
+            heading = first_line.strip()
+            if not heading:
+                continue
+            severity = "medium"
+            title = heading
+            if ":" in heading:
+                maybe_sev, maybe_title = heading.split(":", 1)
+                sev_norm = maybe_sev.strip().lower()
+                if sev_norm in {"critical", "high", "medium", "low", "info"}:
+                    severity = sev_norm
+                    title = maybe_title.strip()
+            body = rest.strip()
+            if not body:
+                continue
+            summary_lines: list[str] = []
+            evidence_lines: list[str] = []
+            remediation_lines: list[str] = []
+            mode = "summary"
+            for line in body.splitlines():
+                text = line.strip()
+                if not text:
+                    continue
+                lower = text.lower()
+                if lower.startswith("evidence:"):
+                    mode = "evidence"
+                    continue
+                if lower.startswith("recommendation:"):
+                    mode = "remediation"
+                    continue
+                if mode == "summary":
+                    summary_lines.append(text)
+                elif mode == "evidence":
+                    evidence_lines.append(text.lstrip("- ").strip())
+                else:
+                    remediation_lines.append(text)
+            summary = " ".join(summary_lines).strip()
+            evidence = "\n".join(line for line in evidence_lines if line)
+            remediation = " ".join(remediation_lines).strip()
+            if not summary:
+                summary = f"Validated finding captured in {summary_path.name}."
+            findings.append(
+                {
+                    "title": title[:255],
+                    "severity": severity,
+                    "summary": summary[:2000],
+                    "evidence": evidence[:4000],
+                    "remediation": remediation[:4000],
+                    "confidence": {
+                        "critical": 0.95,
+                        "high": 0.88,
+                        "medium": 0.78,
+                        "low": 0.68,
+                        "info": 0.6,
+                    }.get(severity, 0.78),
+                }
+            )
+        return findings
 
     def _browser_vector(
         self,

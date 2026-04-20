@@ -48,10 +48,16 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
             config = dict(run.config_json or {})
             grants = dict(config.get("approval_grants") or {})
             grants[action_kind] = int(grants.get(action_kind, 0) or 0) + 1
+            # Scope approval for a private/lab target implicitly unlocks low-noise recon
+            # for the same run to avoid an immediate second operator prompt.
+            if action_kind == "scope":
+                grants["recon_high_noise"] = int(grants.get("recon_high_noise", 0) or 0) + 1
             config["approval_grants"] = grants
             persistent = dict(config.get("approval_grants_persistent") or {})
             if action_kind in {"scope", "recon_high_noise"}:
                 persistent[action_kind] = True
+            if action_kind == "scope":
+                persistent["recon_high_noise"] = True
             if persistent:
                 config["approval_grants_persistent"] = persistent
             if action_kind == "scope":
@@ -74,6 +80,19 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
         for item in sibling_pending:
             item.status = "approved"
             item.response_note = f"Auto-resolved by approval {approval.id}"
+        if approval.reason == "scope-policy":
+            recon_pending = (
+                db.query(ApprovalRequest)
+                .filter(
+                    ApprovalRequest.run_id == approval.run_id,
+                    ApprovalRequest.reason == "recon_high_noise-policy",
+                    ApprovalRequest.status == "pending",
+                )
+                .all()
+            )
+            for item in recon_pending:
+                item.status = "approved"
+                item.response_note = f"Auto-resolved by scope approval {approval.id}"
         if approval.reason == "quick-scan-gate":
             config = dict(run.config_json or {})
             config["scan_profile"] = "full"

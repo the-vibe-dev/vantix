@@ -1079,7 +1079,7 @@ def stream_run(run_id: str, db: Session = Depends(get_db)):
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                 current_run = stream_db.get(WorkspaceRun, run_id)
-                if current_run is None or current_run.status in {"blocked", "completed", "failed", "cancelled"}:
+                if current_run is None or current_run.status in {"completed", "failed", "cancelled"}:
                     break
             time.sleep(settings.default_stream_poll_interval)
 
