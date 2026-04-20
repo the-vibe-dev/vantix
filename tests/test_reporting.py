@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 TEST_DB_PATH = Path(os.getenv("SECOPS_TEST_DB", str(Path(tempfile.gettempdir()) / f"secops_report_test_{os.getpid()}.db")))
 TEST_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
+os.environ["SECOPS_RUNTIME_ROOT"] = str(Path(tempfile.gettempdir()) / f"secops_reporting_runtime_{os.getpid()}")
 
 from secops.db import Base, SessionLocal, engine
 from secops.models import Artifact, Engagement, Fact, RunEvent, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun

@@ -35,6 +35,10 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
     approval = db.get(ApprovalRequest, approval_id)
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status == "approved":
+        return approval
+    if approval.status == "rejected":
+        raise HTTPException(status_code=409, detail="Approval was already rejected")
     approval.status = "approved"
     approval.response_note = payload.note
     run = db.get(WorkspaceRun, approval.run_id)
@@ -57,6 +61,19 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
                     scope_overrides[target] = True
                     config["scope_overrides"] = scope_overrides
             run.config_json = config
+        sibling_pending = (
+            db.query(ApprovalRequest)
+            .filter(
+                ApprovalRequest.run_id == approval.run_id,
+                ApprovalRequest.id != approval.id,
+                ApprovalRequest.reason == approval.reason,
+                ApprovalRequest.status == "pending",
+            )
+            .all()
+        )
+        for item in sibling_pending:
+            item.status = "approved"
+            item.response_note = f"Auto-resolved by approval {approval.id}"
         if approval.reason == "quick-scan-gate":
             config = dict(run.config_json or {})
             config["scan_profile"] = "full"
@@ -93,6 +110,10 @@ def reject(approval_id: str, payload: ApprovalDecision, db: Session = Depends(ge
     approval = db.get(ApprovalRequest, approval_id)
     if approval is None:
         raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status == "rejected":
+        return approval
+    if approval.status == "approved":
+        raise HTTPException(status_code=409, detail="Approval was already approved")
     approval.status = "rejected"
     approval.response_note = payload.note
     run = db.get(WorkspaceRun, approval.run_id)

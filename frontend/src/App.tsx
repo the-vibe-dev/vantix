@@ -13,6 +13,7 @@ import {
   ApiError,
   Approval,
   AttackChain,
+  BrowserState,
   EventRecord,
   Fact,
   Finding,
@@ -331,7 +332,7 @@ function Panel({
 }
 
 // ─── Static lists ───────────────────────────────────────────────────────────
-const ROLES = ["orchestrator", "recon", "knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"];
+const ROLES = ["orchestrator", "recon", "browser", "knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"];
 const MODES = ["pentest", "ctf", "koth", "bugbounty", "windows-ctf", "windows-koth"];
 const DISPLAY_PHASES = ["init", "recon", "exploit", "validate", "post-exploit", "report"] as const;
 type DisplayPhase = (typeof DISPLAY_PHASES)[number];
@@ -344,6 +345,7 @@ const PHASE_ALIAS: Record<string, DisplayPhase | "completed"> = {
   "learning-recall": "recon",
   recon: "recon",
   "recon-sidecar": "recon",
+  "browser-assessment": "recon",
   "knowledge-load": "recon",
   "vector-store": "exploit",
   research: "exploit",
@@ -373,7 +375,7 @@ function normalizeCompletedPhases(values: string[] | undefined): DisplayPhase[] 
 }
 
 function eventToChatMessage(event: EventRecord): RunMessage | null {
-  if (!["phase", "approval", "run_status", "policy_decision"].includes(event.event_type)) return null;
+  if (!["phase", "approval", "run_status", "policy_decision", "agent_status", "scheduler"].includes(event.event_type)) return null;
   return {
     id: `e-${event.id}`,
     run_id: "",
@@ -1301,6 +1303,71 @@ function ChainsPanel({
   );
 }
 
+function BrowserPanel({
+  state,
+  selectedRunId,
+  onOpenPath,
+}: {
+  state: BrowserState | null;
+  selectedRunId: string | undefined;
+  onOpenPath: (path: string) => void;
+}) {
+  if (!state) {
+    return (
+      <Panel title="Browser Assessment">
+        <EmptyState icon="◉" text="No browser assessment data yet." />
+      </Panel>
+    );
+  }
+  const endpoints = Array.isArray(state.network_summary?.endpoints)
+    ? (state.network_summary.endpoints as Array<Record<string, unknown>>)
+    : [];
+  return (
+    <Panel title="Browser Assessment" meta={`${state.status} · ${state.pages_visited} pages`}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Badge variant="default">auth: {state.authenticated}</Badge>
+          <Badge variant="blue">routes: {state.routes_discovered}</Badge>
+          <Badge variant="amber">forms: {state.forms.length}</Badge>
+          <Badge variant="ok">screenshots: {state.screenshots.length}</Badge>
+        </div>
+        <div style={{ fontSize: ".72rem", color: "#7a9e92", lineHeight: 1.45 }}>
+          <div>Entry: {state.entry_url || "(none)"}</div>
+          <div>Current: {state.current_url || "(none)"}</div>
+        </div>
+        {state.blocked_actions.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {state.blocked_actions.slice(0, 4).map((line, i) => (
+              <div key={i} style={{ fontSize: ".7rem", color: "#f4b860" }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+        {endpoints.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>Observed Endpoints</Label>
+            {endpoints.slice(0, 5).map((item, idx) => (
+              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", fontFamily: "var(--mono)" }}>
+                {String(item.endpoint || "")} ({String(item.count || "0")})
+              </div>
+            ))}
+          </div>
+        )}
+        {state.screenshots.length > 0 && selectedRunId && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {state.screenshots.slice(0, 4).map((path) => (
+              <Btn key={path} size="xs" variant="ghost" onClick={() => onOpenPath(path)}>
+                Screenshot
+              </Btn>
+            ))}
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 // ─── Results ────────────────────────────────────────────────────────────────
 function ResultsPanel({
   results,
@@ -1361,8 +1428,8 @@ function ResultsPanel({
           </div>
           <div>
             <Label>Evidence & Artifacts ({artifacts.length})</Label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {artifacts.slice(0, 6).map((a, i) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 280, overflowY: "auto" }}>
+              {artifacts.map((a, i) => (
                 <div
                   key={a.id || i}
                   style={{
@@ -2163,6 +2230,7 @@ export default function App() {
   const [agents, setAgents] = useState<AgentSession[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [learning, setLearning] = useState<Array<Record<string, unknown>>>([]);
+  const [browserState, setBrowserState] = useState<BrowserState | null>(null);
   const [termLines, setTermLines] = useState<string[]>([]);
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -2177,7 +2245,6 @@ export default function App() {
   const [githubRef, setGithubRef] = useState("");
   const [localPath, setLocalPath] = useState("");
   const [stagedUploadId, setStagedUploadId] = useState("");
-  const [pendingSend, setPendingSend] = useState<{ message: string } | null>(null);
 
   const streamRef = useRef<EventSource | null>(null);
   const selectedRunRef = useRef<string>("");
@@ -2216,6 +2283,11 @@ export default function App() {
     try {
       const rows = await api.listRuns();
       setRuns(rows);
+      setSelectedRun((current) => {
+        if (!current) return current;
+        const refreshed = rows.find((item) => item.id === current.id);
+        return refreshed || null;
+      });
     } catch (error) {
       flash(`Run list failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -2234,7 +2306,7 @@ export default function App() {
             console.warn(`[refreshRun] ${label} failed:`, err);
             return fallback;
           };
-        const [run, graph, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runTerminal] =
+        const [run, graph, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
@@ -2246,6 +2318,7 @@ export default function App() {
             api.getResults(runId).catch(track<RunResults | null>("results", null)),
             api.getSkills(runId).catch(track<RunSkillApplication[]>("skills", [])),
             api.getAttackChains(runId).catch(track<AttackChain[]>("chains", [])),
+            api.getBrowserState(runId).catch(track<BrowserState | null>("browser", null)),
             api.getTerminal(runId, incrementalTerminal ? sinceSequence : 0, 250, !incrementalTerminal).catch(
               track("terminal", { run_id: runId, content: "", last_sequence: sinceSequence }),
             ),
@@ -2267,6 +2340,7 @@ export default function App() {
         setFindings(runResults?.findings || []);
         setSkillApps(runSkills);
         setChains(runChains);
+        setBrowserState(runBrowserState);
         const delta = runTerminal?.content ? runTerminal.content.split("\n").filter(Boolean) : [];
         terminalSequenceRef.current[runId] = runTerminal?.last_sequence || terminalSequenceRef.current[runId] || 0;
         if (!incrementalTerminal) {
@@ -2311,6 +2385,7 @@ export default function App() {
     try {
       const source = new EventSource(`/api/v1/runs/${selectedRun.id}/stream`);
       source.onmessage = (event) => {
+        if (selectedRunRef.current !== selectedRun.id) return;
         try {
           const data = JSON.parse(event.data) as EventRecord;
           if (data.event_type === "terminal") {
@@ -2341,13 +2416,6 @@ export default function App() {
     return { type: "none" };
   }
 
-  function sourceSummary(input: SourceInput): string {
-    if (input.type === "github") return input.github?.url || "GitHub";
-    if (input.type === "local") return input.local?.path || "Local path";
-    if (input.type === "upload") return input.upload?.staged_upload_id || "Upload";
-    return "None";
-  }
-
   async function submitChatMessage(message: string, forceNew: boolean) {
     const sourceInput = buildSourceInput();
     const sourceMetadata = { source_input: sourceInput, ...(forceNew ? { start_new_run: true } : {}) };
@@ -2372,10 +2440,7 @@ export default function App() {
     const newTarget = target.trim();
     const targetChanged = Boolean(selectedRun && newTarget && newTarget !== (selectedRun.target || ""));
     const sourceAttached = sourceInput.type !== "none";
-    if (selectedRun && (targetChanged || sourceAttached)) {
-      setPendingSend({ message: txt });
-      return;
-    }
+    const shouldStartNew = Boolean(selectedRun && (targetChanged || sourceAttached));
     setChatText("");
     const userMsg: RunMessage = {
       id: `m${Date.now()}`,
@@ -2389,7 +2454,7 @@ export default function App() {
     setMessages((m) => [...m, userMsg]);
     setChatLoading(true);
     try {
-      await submitChatMessage(txt, false);
+      await submitChatMessage(txt, shouldStartNew);
     } catch (err) {
       setMessages((m) => [
         ...m,
@@ -2415,21 +2480,6 @@ export default function App() {
       flash(`Upload staged: ${staged.filename}`);
     } catch (error) {
       flash(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  async function confirmPendingSend(createNew: boolean) {
-    if (!pendingSend) return;
-    const message = pendingSend.message;
-    setPendingSend(null);
-    setChatText("");
-    setChatLoading(true);
-    try {
-      await submitChatMessage(message, createNew);
-    } catch (error) {
-      flash(`Send failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setChatLoading(false);
     }
   }
 
@@ -2562,6 +2612,7 @@ export default function App() {
       else if (action === "replan") await api.replanRun(selectedRun.id);
       else if (action === "cancel") await api.cancelRun(selectedRun.id);
       flash(`${action} issued`);
+      refreshRuns();
       refreshRun(selectedRun.id);
     } catch (error) {
       flash(error instanceof Error ? error.message : String(error));
@@ -2652,6 +2703,7 @@ export default function App() {
               onPromote={handlePromoteVector}
             />
             <CvePanel facts={cveFacts} />
+            <BrowserPanel state={browserState} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
             <MemoryPanel hits={learning} />
             <ChainsPanel chains={chains} onPromote={handlePromoteChain} selectedRunId={selectedRun?.id} />
           </div>
@@ -2683,24 +2735,6 @@ export default function App() {
           </div>
         )}
       </main>
-      {pendingSend && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
-          <div style={{ width: "min(620px,92vw)", background: "#13090b", border: "1px solid rgba(217,58,73,.35)", borderRadius: 8, padding: 14 }}>
-            <div style={{ fontSize: ".88rem", fontWeight: 700, color: "#e8f4ee", marginBottom: 6 }}>Run Confirmation</div>
-            <div style={{ fontSize: ".74rem", color: "#a69599", marginBottom: 10 }}>
-              Active run is selected. Choose whether to apply guidance to current run or start a new engagement.
-            </div>
-            <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 12 }}>
-              Current target: {selectedRun?.target || "(none)"} | New target: {target || "(none)"} | Source: {sourceSummary(buildSourceInput())}
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <Btn size="sm" variant="ghost" onClick={() => setPendingSend(null)}>Cancel</Btn>
-              <Btn size="sm" variant="blue" onClick={() => confirmPendingSend(false)}>Apply to Current Run</Btn>
-              <Btn size="sm" variant="green" onClick={() => confirmPendingSend(true)}>Start New Run</Btn>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

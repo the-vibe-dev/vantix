@@ -89,6 +89,10 @@ run_cmd "Upgrade pip" "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip
 
 step "Installer dependencies"
 run_cmd "Install Vantix editable package" "$ROOT_DIR/.venv/bin/python" -m pip install -e "$ROOT_DIR[dev]"
+echo "    -> Install Playwright Chromium runtime (best effort)"
+if ! "$ROOT_DIR/.venv/bin/python" -m playwright install chromium; then
+  echo "    [WARN] Playwright Chromium install failed during bootstrap. The interactive installer will retry."
+fi
 
 step "Interactive wizard"
 export VANTIX_INSTALLER_BANNER_SHOWN=1

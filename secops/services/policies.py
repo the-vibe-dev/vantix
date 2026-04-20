@@ -101,6 +101,19 @@ class ExecutionPolicyService:
             if self._consume_grant(run, kind):
                 return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
             return PolicyDecision(verdict="require_approval", reason=f"{kind} requires operator approval", audit=True)
+        if kind in {"browser_assessment", "browser_auth", "browser_high_noise", "browser_sensitive_route"}:
+            if self._consume_grant(run, kind):
+                return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
+            cfg = dict(run.config_json or {})
+            browser = dict(cfg.get("browser") or {})
+            if kind == "browser_assessment" and not bool(browser.get("enabled", True)):
+                return PolicyDecision(verdict="block", reason="browser assessment disabled by run config", audit=True)
+            if kind == "browser_auth":
+                return PolicyDecision(verdict="require_approval", reason="browser auth flow requires operator approval", audit=True)
+            if kind in {"browser_high_noise", "browser_sensitive_route"}:
+                return PolicyDecision(verdict="require_approval", reason=f"{kind} requires operator approval", audit=True)
+            if kind == "browser_assessment":
+                return PolicyDecision(verdict="allow_with_audit", reason="browser assessment allowed", audit=True)
         if kind in {"external_network", "network"}:
             return PolicyDecision(verdict="allow_with_audit", reason="external network action audited", audit=True)
         return PolicyDecision(verdict="allow", reason="default policy")

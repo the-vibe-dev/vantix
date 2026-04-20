@@ -27,5 +27,6 @@ fi
 
 "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null
 "$ROOT_DIR/.venv/bin/python" -m pip install -e "$ROOT_DIR[dev]" >/dev/null
+"$ROOT_DIR/.venv/bin/python" -m playwright install chromium >/dev/null || true
 
 exec "$ROOT_DIR/.venv/bin/python" -m secops.updater --repo-root "$ROOT_DIR" "$@"

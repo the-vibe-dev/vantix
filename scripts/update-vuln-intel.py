@@ -40,23 +40,47 @@ def update_source(name: str, *, limit: int, dry_run: bool, since_year: int) -> d
     source_url = getattr(adapter, "url", "")
     cutoff = datetime(since_year, 1, 1, tzinfo=timezone.utc) if since_year >= 1970 else None
     records = list(result.records)
+    fetched_count = len(records)
+    deduped_by_external: dict[str, object] = {}
+    for record in records:
+        external_id = str(getattr(record, "external_id", "") or "").strip()
+        if not external_id:
+            continue
+        deduped_by_external[external_id] = record
+    records = list(deduped_by_external.values())
+    deduped_count = len(records)
+    with_cve_count = sum(1 for record in records if getattr(record, "cve_ids", None))
+    without_cve_count = deduped_count - with_cve_count
     cutoff_relaxed = False
+    filtered_by_date = len(records)
+    kept_cve_relaxation = 0
     if cutoff is not None:
         filtered = [record for record in records if (record.modified_at or record.published_at or datetime(1970, 1, 1, tzinfo=timezone.utc)) >= cutoff]
+        filtered_by_date = len(filtered)
         # ExploitDB CSV can be stale on publish dates while still carrying useful CVE-linked PoC metadata.
         # Avoid silently dropping the entire source when a strict year cutoff yields zero rows.
         if name == "exploitdb" and records and not filtered:
             cutoff_relaxed = True
-            records = records
+            relaxed = [record for record in records if getattr(record, "cve_ids", None)]
+            kept_cve_relaxation = len(relaxed)
+            records = relaxed or records
         else:
             records = filtered
     report = {
         "source": name,
         "url": source_url,
-        "fetched": len(result.records),
+        "fetched": fetched_count,
+        "deduped": deduped_count,
         "filtered": len(records),
         "since_year": since_year,
         "cutoff_relaxed": cutoff_relaxed,
+        "filter_stats": {
+            "after_external_id_dedup": deduped_count,
+            "after_date_filter": filtered_by_date,
+            "kept_with_cve_relaxation": kept_cve_relaxation,
+            "accepted_with_cve": with_cve_count,
+            "accepted_without_cve": without_cve_count,
+        },
         "cursor": result.cursor,
         "error": result.error,
         "dry_run": dry_run,

@@ -27,6 +27,7 @@ SPECIALIST_TASKS = [
     ("source-intake", "Source Intake", "Resolve source input for white-box analysis."),
     ("source-analysis", "Source Analysis", "Run source-level analysis and extract findings."),
     ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts."),
+    ("browser-assessment", "Browser Assessment", "Explore in-scope web application behavior and collect browser-native evidence."),
     ("knowledge-load", "Knowledge Base", "Load dense memory, learning hits, tool guidance, and prior cases."),
     ("vector-store", "Vector Store", "Rank similar cases and candidate attack patterns."),
     ("research", "Researcher", "Query CVE, exploit, and vulnerability intelligence."),
@@ -39,6 +40,7 @@ SPECIALIST_TASKS = [
 ROLE_NAMES = {
     "orchestrator": "Orchestrator",
     "recon": "Vantix Recon",
+    "browser": "Browser Analyst",
     "knowledge_base": "Knowledge Base",
     "vector_store": "Vector Store",
     "researcher": "Researcher",
@@ -174,7 +176,7 @@ class VantixScheduler:
                 "You can continue with researcher/developer/executor/report flow after recon completes."
             )
         return (
-            f"Vantix initialized from {reason}. Target `{run.target}` is queued for Recon, Knowledge Base, "
+            f"Vantix initialized from {reason}. Target `{run.target}` is queued for Recon, Browser Assessment, Knowledge Base, "
             "Vector Store, Researcher, Developer, Executor, and Report specialist flow."
         )
 
@@ -295,6 +297,8 @@ def _should_start_new_engagement(message: str, current_run: WorkspaceRun, *, exp
         return True
     new_target = (explicit_target or "").strip()
     old_target = (current_run.target or "").strip()
+    if new_target and old_target and new_target != old_target:
+        return True
     terminal = current_run.status in {"completed", "cancelled", "failed"}
     if terminal and new_target:
         if not old_target or new_target != old_target:

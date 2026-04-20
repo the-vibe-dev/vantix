@@ -169,6 +169,22 @@ export type RunResults = {
   executive_summary?: string;
 };
 
+export type BrowserState = {
+  run_id: string;
+  status: string;
+  entry_url: string;
+  current_url: string;
+  authenticated: string;
+  pages_visited: number;
+  routes_discovered: number;
+  blocked_actions: string[];
+  network_summary: Record<string, unknown>;
+  route_edges: Array<Record<string, unknown>>;
+  forms: Array<Record<string, unknown>>;
+  screenshots: string[];
+  artifacts: Array<Record<string, unknown>>;
+};
+
 export type PlanningBundle = {
   run_id: string;
   workflow_status: string;
@@ -395,6 +411,7 @@ export const api = {
   promoteFinding: (runId: string, payload: Record<string, unknown>) =>
     request<Finding>(`/api/v1/runs/${runId}/findings/promote`, { method: "POST", body: JSON.stringify(payload) }),
   getResults: (runId: string) => request<RunResults>(`/api/v1/runs/${runId}/results`),
+  getBrowserState: (runId: string) => request<BrowserState>(`/api/v1/runs/${runId}/browser-state`),
   getPlanningBundle: (runId: string) => request<PlanningBundle>(`/api/v1/runs/${runId}/planning-bundle`),
   listSkills: () => request<SkillPack[]>("/api/v1/skills"),
   createSkill: (payload: Record<string, unknown>) => request<SkillPack>("/api/v1/skills", { method: "POST", body: JSON.stringify(payload) }),

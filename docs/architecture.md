@@ -1,52 +1,30 @@
 # Architecture
 
-## Control Plane
+## System Layers
 
-- API routers: `secops/routers/*`.
-- Chat entrypoint: `/api/v1/chat` (preserved contract).
-- Scheduler: `secops/services/vantix.py` seeds tasks, roles, vectors, and notes.
-- System status: `secops/routers/system.py` includes runtime, tooling, and worker state.
+1. **Frontend (`frontend/`)**  
+   React/Vite control plane for run creation, chat guidance, approvals, activity, vectors, intel, and results.
 
-## Durable Workflow Layer
+2. **API and Control Plane (`secops/routers`, `secops/services`)**  
+   FastAPI routers expose chat, run state, workflow data, approvals, vectors, artifacts, reporting, skills, and system status.
 
-- Engine: `secops/services/workflows/engine.py`.
-- Phase sequence metadata: `secops/services/workflows/phases.py`.
-- Retry classifier: `secops/services/workflows/retries.py`.
-- Checkpoint handling: `secops/services/workflows/checkpoints.py`.
-- DB entities in `secops/models.py`:
-  - `WorkflowExecution`
-  - `WorkflowPhaseRun`
-  - `RunCheckpoint`
-  - `WorkerLease`
-  - `RunMetric`
+3. **Workflow Engine (`secops/services/workflows`)**  
+   Durable DB-backed phase orchestration with retries, leases, checkpoints, and resume safety.
 
-The API enqueues work. Worker runtime claims phase attempts from DB and executes them with lease records.
+4. **Execution and Policy Layer (`secops/services/execution.py`, `secops/services/policies.py`)**  
+   Phase handlers, safety gates, approval routing, and normalized error handling.
 
-## Worker Runtime
+5. **Runtime Storage (`StorageLayout`)**  
+   User-owned run state: prompts, logs, artifacts, evidence, reports, and memory.
 
-- Module: `secops/services/worker_runtime.py`.
-- Single-host compatibility worker thread exists by default.
-- Worker claims a phase, executes it, and writes completion/retry/blocked/failure updates.
-- Stale lease recovery is supported by claim logic on expired leases.
+## Specialist Roles
 
-## Execution And Safety Adapters
+Core roles include orchestrator, recon, knowledge base, vector store, researcher, developer, executor, reporter, and browser (web assessment phase).
 
-- Dispatcher/compat layer: `secops/services/execution.py`.
-- Execution policies + subprocess hardening: `secops/services/policies.py`.
-- Reporting synthesis: `secops/services/reporting.py`.
+## Key Design Traits
 
-## Product Strengths Preserved
-
-- vectors and attack chains
-- approvals and handoffs
-- skill packs and operator notes
-- user-owned runtime storage
-- chat-first operator flow
-
-## Storage Model
-
-Runtime data remains user-owned under local state roots (`StorageLayout`) and includes prompts, artifacts, reports, logs, handoffs, and memory files.
-
-## Compatibility Note
-
-Internal package naming remains `secops` for compatibility. Product-facing behavior remains Vantix.
+- Chat-first run lifecycle with durable state
+- Evidence-first outputs (artifacts/facts/vectors/report)
+- Policy-gated execution with approvals
+- Restart/resume tolerance through DB-backed workflow records
+- Backward compatibility with `secops` internal package naming

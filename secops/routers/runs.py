@@ -4,6 +4,7 @@ import json
 import time
 import mimetypes
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -50,6 +51,7 @@ from secops.schemas import (
     TaskRead,
     TerminalRead,
     ArtifactRead,
+    BrowserStateRead,
     VectorCreate,
     VectorRead,
     RunResultsRead,
@@ -88,6 +90,7 @@ WORKFLOW_SPECIALIST_MAP = {
     "source-analysis": {"tasks": ["source-analysis"], "agents": ["developer"]},
     "learning-recall": {"tasks": ["knowledge-load"], "agents": ["knowledge_base"]},
     "recon-sidecar": {"tasks": ["vantix-recon"], "agents": ["recon"]},
+    "browser-assessment": {"tasks": ["browser-assessment"], "agents": ["browser"]},
     "cve-analysis": {"tasks": ["research", "vector-store"], "agents": ["researcher", "vector_store"]},
     "orchestrate": {"tasks": ["planning"], "agents": ["orchestrator"]},
     "report": {"tasks": ["reporting"], "agents": ["reporter"]},
@@ -119,6 +122,8 @@ def _backfill_specialist_status(db: Session, run_id: str) -> None:
             "waiting": "pending",
         }
         mapped_status = status_map.get(phase.status, "pending")
+        if mapped_status == "pending":
+            continue
         for task_kind in mapping["tasks"]:
             task = (
                 db.query(Task)
@@ -655,6 +660,63 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/{run_id}/browser-state", response_model=BrowserStateRead)
+def get_browser_state(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    artifacts = (
+        db.query(Artifact)
+        .filter(Artifact.run_id == run_id, Artifact.kind.in_(["browser-session-summary", "route-discovery", "form-map", "network-summary", "screenshot", "dom-snapshot"]))
+        .order_by(Artifact.created_at.asc())
+        .all()
+    )
+    state: dict[str, Any] = {
+        "run_id": run_id,
+        "status": "idle",
+        "entry_url": "",
+        "current_url": "",
+        "authenticated": "not_attempted",
+        "pages_visited": 0,
+        "routes_discovered": 0,
+        "blocked_actions": [],
+        "network_summary": {},
+        "route_edges": [],
+        "forms": [],
+        "screenshots": [],
+        "artifacts": [{"kind": item.kind, "path": item.path} for item in artifacts],
+    }
+    for art in artifacts:
+        if art.kind == "screenshot":
+            state["screenshots"].append(art.path)
+            continue
+        if art.kind not in {"browser-session-summary", "route-discovery", "form-map", "network-summary"}:
+            continue
+        try:
+            payload = json.loads(Path(art.path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if art.kind == "browser-session-summary":
+            state["status"] = "completed"
+            state["entry_url"] = str(payload.get("entry_url") or "")
+            state["current_url"] = str(payload.get("current_url") or "")
+            state["authenticated"] = str(payload.get("authenticated") or "not_attempted")
+            state["pages_visited"] = int(payload.get("pages_visited") or 0)
+            state["blocked_actions"] = [str(item) for item in (payload.get("blocked_actions") or [])][:100]
+        elif art.kind == "route-discovery":
+            edges = payload.get("edges") or []
+            state["route_edges"] = [edge for edge in edges if isinstance(edge, dict)][:300]
+            state["routes_discovered"] = len({str(item.get("to") or "") for item in state["route_edges"] if str(item.get("to") or "")})
+        elif art.kind == "form-map":
+            forms = payload.get("forms") or []
+            state["forms"] = [item for item in forms if isinstance(item, dict)][:120]
+        elif art.kind == "network-summary":
+            state["network_summary"] = payload if isinstance(payload, dict) else {}
+    if not state["artifacts"]:
+        state["status"] = "not-started"
+    return state
+
+
 @router.get("/{run_id}/skills", response_model=list[RunSkillApplicationRead])
 def list_run_skills(run_id: str, db: Session = Depends(get_db)) -> list[dict]:
     run = db.get(WorkspaceRun, run_id)
@@ -718,7 +780,14 @@ def stream_run(run_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Run not found")
 
     def event_generator():
-        last_sequence = 0
+        with Session(bind=db.bind) as init_db:
+            latest = (
+                init_db.query(RunEvent.sequence)
+                .filter(RunEvent.run_id == run_id)
+                .order_by(RunEvent.sequence.desc())
+                .first()
+            )
+            last_sequence = int(latest[0]) if latest else 0
         while True:
             with Session(bind=db.bind) as stream_db:
                 events = (

@@ -86,8 +86,12 @@ class RunPhaseService:
                 return "knowledge-load"
             if current == "recon-sidecar":
                 return "recon"
+            if current == "browser-assessment":
+                return "recon"
             if current == "cve-analysis":
                 return "research"
+            if current == "orchestrate":
+                return "planning"
             if current == "learn-ingest":
                 return "execution"
             if current == "report":

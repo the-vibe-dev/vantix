@@ -182,6 +182,7 @@ class RunService:
             ("source-analysis", "Run source-level analysis and emit white-box findings."),
             ("learning-recall", "Recall relevant lessons across the whole system with mode-aware ranking."),
             ("recon-sidecar", "Dispatch the recon sidecar and persist its outcome."),
+            ("browser-assessment", "Run browser-native route/form/API/session discovery with policy controls."),
             ("cve-analysis", "Re-check CVEs based on configured or discovered services."),
             ("orchestrate", "Run the primary Codex orchestrator against the current target state."),
             ("learn-ingest", "Ingest run artifacts back into the learning system."),

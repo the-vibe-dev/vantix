@@ -131,7 +131,7 @@ class Wizard:
         self.runtime_root = Path(self.env_updates.get("SECOPS_RUNTIME_ROOT") or default_runtime_root(self.repo_root))
         self.state = InstallerStateService(self.runtime_root)
         self.tool_service = ToolService(self.repo_root, self.runtime_root)
-        self.total_steps = 9
+        self.total_steps = 10
         self.current_step = 0
 
     def print_intro(self) -> None:
@@ -305,6 +305,23 @@ class Wizard:
             proc = self.run_visible(command, label=" ".join(command[3:]))
             if proc.returncode != 0:
                 raise RuntimeError(f"Failed backend bootstrap: {' '.join(command)}")
+
+    def ensure_browser_runtime(self) -> dict[str, Any]:
+        pip = [str(self.venv_python), "-m", "pip"]
+        playwright_module = self.run([str(self.venv_python), "-m", "playwright", "--version"])
+        if playwright_module.returncode != 0:
+            install = self.run_visible([*pip, "install", "playwright"], label="Install Playwright Python package")
+            if install.returncode != 0:
+                return {"enabled": False, "reason": "playwright-install-failed"}
+        browser_install = self.run_visible(
+            [str(self.venv_python), "-m", "playwright", "install", "chromium"],
+            label="Install Playwright Chromium runtime",
+        )
+        if browser_install.returncode != 0:
+            print("    [WARN] Playwright installed but Chromium runtime installation failed.")
+            print("    [HINT] Retry manually: .venv/bin/python -m playwright install chromium")
+            return {"enabled": False, "reason": "chromium-install-failed"}
+        return {"enabled": True, "reason": ""}
 
     def ensure_corepack(self) -> None:
         if shutil.which("corepack"):
@@ -821,6 +838,8 @@ class Wizard:
         self.section("Backend environment", "Installing Python dependencies and the editable backend package.")
         self.ensure_backend()
         self.bootstrap_database()
+        self.section("Browser runtime", "Installing Playwright and Chromium for browser-native assessment.")
+        browser_runtime = self.ensure_browser_runtime()
         self.section("Web UI", "Installing frontend dependencies and optionally building the static UI.")
         frontend = self.ensure_frontend(build=self.confirm("Build the static Web UI now", default=True))
         self.section("Runtime provider", "Checking Codex and optional model provider configuration.")
@@ -844,6 +863,7 @@ class Wizard:
             "updated_at": "",
             "os": os_info,
             "frontend": frontend,
+            "browser_runtime": browser_runtime,
             "runtime": runtime,
             "cve": cve,
             "tools": tools,

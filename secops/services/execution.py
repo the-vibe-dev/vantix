@@ -27,6 +27,7 @@ from secops.models import (
 from secops.mode_profiles import get_mode_profile
 from secops.services.codex_runner import CodexRunner
 from secops.services.context_builder import ContextBuilder
+from secops.services.browser_runtime import BrowserRuntimeService
 from secops.services.cve_search import CVESearchService
 from secops.services.events import RunEventService
 from secops.services.learning import LearningService
@@ -41,6 +42,7 @@ from secops.services.workflows.engine import WorkflowEngine
 ROLE_DISPLAY_NAMES = {
     "orchestrator": "Orchestrator",
     "recon": "Vantix Recon",
+    "browser": "Browser Analyst",
     "knowledge_base": "Knowledge Base",
     "vector_store": "Vector Store",
     "researcher": "Researcher",
@@ -60,6 +62,7 @@ class ExecutionManager:
         self.nas = StorageLayout()
         self.learning = LearningService()
         self.cve = CVESearchService()
+        self.browser = BrowserRuntimeService()
         self.memory = MemoryWriteService()
         self.policies = ExecutionPolicyService()
         self.reporting = ReportingService()
@@ -115,6 +118,7 @@ class ExecutionManager:
             "source-analysis": self._phase_source_analysis,
             "learning-recall": self._phase_learning,
             "recon-sidecar": self._phase_recon,
+            "browser-assessment": self._phase_browser,
             "cve-analysis": self._phase_cve,
             "orchestrate": self._phase_orchestrate,
             "learn-ingest": self._phase_learn_ingest,
@@ -337,6 +341,7 @@ class ExecutionManager:
             session = self._create_agent_session(db, run.id, "recon", "Recon Sidecar", paths)
             self._set_role_status(db, run.id, "recon", "running")
             command = []
+            cfg = dict(run.config_json or {})
             recon_target = self._recon_target(run.target)
             if recon_target:
                 scope_verdict = self._enforce_scope(db, run, recon_target)
@@ -374,11 +379,12 @@ class ExecutionManager:
                     )
                     db.commit()
                     return
-                if run.config_json.get("ports"):
-                    ports = ",".join(run.config_json["ports"])
+                if cfg.get("ports"):
+                    ports = ",".join(cfg["ports"])
                     command = ["nmap", "-Pn", "-sT", "-p", ports, "--open", recon_target]
                 else:
-                    command = ["nmap", "-Pn", "-sT", "--top-ports", "100", "--open", recon_target]
+                    top_ports = "50" if str(cfg.get("scan_profile", "full")).lower() == "quick" else "100"
+                    command = ["nmap", "-Pn", "-sT", "--top-ports", top_ports, "--open", recon_target]
             action_kind = "recon_high_noise"
             decision = self.policies.evaluate(run, action_kind=action_kind)
             self._emit_policy_decision(
@@ -453,13 +459,13 @@ class ExecutionManager:
                 self._emit_terminal_excerpt(db, run_id=run.id, output=output2, agent_session_id=session.id, agent="recon")
                 merged = self._parse_nmap(combined)
                 discovered = merged
-                cfg = dict(run.config_json or {})
                 cfg["recon_escalated"] = True
                 run.config_json = cfg
             if discovered["ports"]:
-                run.config_json["ports"] = sorted(set(run.config_json.get("ports", []) + discovered["ports"]))
+                cfg["ports"] = sorted(set(cfg.get("ports", []) + discovered["ports"]))
             if discovered["services"]:
-                run.config_json["services"] = sorted(set(run.config_json.get("services", []) + discovered["services"]))
+                cfg["services"] = sorted(set(cfg.get("services", []) + discovered["services"]))
+            run.config_json = cfg
             web_summary = self._web_followup_checks(
                 db=db,
                 run=run,
@@ -500,8 +506,7 @@ class ExecutionManager:
                 )
             facts = [[ "port", port ] for port in discovered["ports"]] + [[ "service", service ] for service in discovered["services"]]
             self._write_memory(db, run, mode="phase", phase="recon", done=["recon completed"], facts=facts, files=[str(session.log_path)], next_action="cve analysis")
-            if str(run.config_json.get("scan_profile", "full")).lower() == "quick":
-                cfg = dict(run.config_json or {})
+            if str(cfg.get("scan_profile", "full")).lower() == "quick":
                 cfg["quick_scan_recon_done"] = True
                 cfg["quick_scan_gate_pending"] = True
                 run.config_json = cfg
@@ -572,6 +577,45 @@ class ExecutionManager:
                         agent_session_id=session.id,
                     )
                 results.append(response)
+                live_meta = dict(response.get("live") or {})
+                live_attempted = bool(live_meta.get("attempted"))
+                live_upserted = int(live_meta.get("upserted", 0) or 0)
+                live_errors = [str(item) for item in (live_meta.get("errors") or [])]
+                live_sources = [str(item) for item in (live_meta.get("sources") or [])]
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        source="cve-search",
+                        kind="intel",
+                        value=f"{service}: live attempted={live_attempted} upserted={live_upserted}",
+                        confidence=0.8 if live_upserted > 0 else 0.6,
+                        tags=["intel", "cve", service],
+                        metadata_json={
+                            "service": service,
+                            "live_attempted": live_attempted,
+                            "live_upserted": live_upserted,
+                            "live_sources": live_sources,
+                            "live_errors": live_errors,
+                            "result_count": len(response.get("results") or []),
+                        },
+                    )
+                )
+                db.add(
+                    RunMessage(
+                        run_id=run.id,
+                        role="system",
+                        author="System",
+                        content=(
+                            f"CVE search `{service}`: {len(response.get('results') or [])} local result(s); "
+                            f"external attempted={live_attempted}, upserted={live_upserted}, errors={len(live_errors)}."
+                        ),
+                        metadata_json={
+                            "phase": "cve-analysis",
+                            "service": service,
+                            "live": live_meta,
+                        },
+                    )
+                )
                 cve_hits += len(response.get("results", []) or [])
                 for top in response.get("results", [])[:5]:
                     db.add(
@@ -607,6 +651,277 @@ class ExecutionManager:
             )
             self._write_memory(db, run, mode="phase", phase="cve-analysis", done=[f"cve queries={len(results)}"], files=[str(cve_path)], next_action="primary orchestration")
             db.add(Artifact(run_id=run.id, kind="cve-results", path=str(cve_path), metadata_json={"queries": len(results)}))
+            db.commit()
+
+    def _phase_browser(self, run_id: str) -> None:
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None or not self._check_controls(db, run):
+                return
+            task = self._task_by_kind(db, run.id, "browser-assessment")
+            if task.status == "completed":
+                return
+            paths = self.nas.for_workspace(run.workspace_id)
+            session = self._create_agent_session(db, run.id, "browser", "Browser Analyst", paths)
+            session.status = "running"
+            self._set_role_status(db, run.id, "browser", "running")
+            target_url = str(((run.config_json or {}).get("browser") or {}).get("entry_url") or run.target or "").strip()
+            action_kind = "browser_assessment"
+            decision = self.policies.evaluate(run, action_kind=action_kind)
+            self._emit_policy_decision(
+                db,
+                run_id=run.id,
+                action_kind=action_kind,
+                verdict=decision.verdict,
+                reason=decision.reason,
+                audit=decision.audit,
+            )
+            if decision.verdict in {"block", "require_approval"}:
+                task.status = "blocked"
+                task.result_json = {"reason": decision.reason, "verdict": decision.verdict, "action_kind": action_kind}
+                run.status = "blocked"
+                session.status = "blocked"
+                session.completed_at = datetime.now(timezone.utc)
+                self._set_role_status(db, run.id, "browser", "blocked")
+                self.events.emit(
+                    db,
+                    run.id,
+                    "terminal",
+                    f"[browser] blocked by policy: {decision.reason}",
+                    level="warning",
+                    payload={"agent": "browser", "action_kind": action_kind},
+                    agent_session_id=session.id,
+                )
+                self._create_approval(
+                    db,
+                    run.id,
+                    title="Browser assessment policy blocked run",
+                    detail=decision.reason,
+                    reason=f"{action_kind}-policy",
+                    metadata={"target": target_url},
+                )
+                self._write_memory(
+                    db,
+                    run,
+                    mode="handoff",
+                    phase="browser-blocked",
+                    issues=[decision.reason],
+                    files=[str(paths.logs / "browser.log")],
+                    next_action="review approval and retry",
+                )
+                db.commit()
+                return
+
+            browser_cfg = dict((run.config_json or {}).get("browser") or {})
+            if browser_cfg.get("allow_auth") and (run.config_json or {}).get("browser_auth"):
+                auth_decision = self.policies.evaluate(run, action_kind="browser_auth")
+                self._emit_policy_decision(
+                    db,
+                    run_id=run.id,
+                    action_kind="browser_auth",
+                    verdict=auth_decision.verdict,
+                    reason=auth_decision.reason,
+                    audit=auth_decision.audit,
+                )
+                if auth_decision.verdict in {"block", "require_approval"}:
+                    task.status = "blocked"
+                    task.result_json = {"reason": auth_decision.reason, "verdict": auth_decision.verdict, "action_kind": "browser_auth"}
+                    run.status = "blocked"
+                    session.status = "blocked"
+                    session.completed_at = datetime.now(timezone.utc)
+                    self._set_role_status(db, run.id, "browser", "blocked")
+                    self._create_approval(
+                        db,
+                        run.id,
+                        title="Browser auth session requires approval",
+                        detail=auth_decision.reason,
+                        reason="browser_auth-policy",
+                        metadata={"target": target_url},
+                    )
+                    db.commit()
+                    return
+
+            self.events.emit(
+                db,
+                run.id,
+                "terminal",
+                f"[browser] starting assessment: {target_url or '(none)'}",
+                payload={"agent": "browser"},
+                agent_session_id=session.id,
+            )
+            result = self.browser.assess(
+                run_id=run.id,
+                workspace_root=paths.root,
+                target=target_url,
+                run_config=dict(run.config_json or {}),
+            )
+            for item in result.artifacts:
+                kind = str(item.get("kind") or "")
+                path = str(item.get("path") or "")
+                if not kind or not path:
+                    continue
+                db.add(
+                    Artifact(
+                        run_id=run.id,
+                        kind=kind,
+                        path=path,
+                        metadata_json={
+                            "phase": "browser-assessment",
+                            "agent_session_id": session.id,
+                            "captured_at": result.completed_at,
+                        },
+                    )
+                )
+            route_values: list[str] = []
+            for obs in result.observations:
+                route_values.append(obs.url)
+                db.add(Fact(run_id=run.id, source="browser-runtime", kind="route", value=obs.url, confidence=0.9, tags=["browser", "route"], metadata_json={"title": obs.title, "depth": obs.depth}))
+                if obs.forms:
+                    db.add(
+                        Fact(
+                            run_id=run.id,
+                            source="browser-runtime",
+                            kind="form",
+                            value=obs.url,
+                            confidence=0.82,
+                            tags=["browser", "form"],
+                            metadata_json={"forms": obs.forms[:20], "title": obs.title},
+                        )
+                    )
+                    if any(bool(form.get("auth_like")) for form in obs.forms):
+                        vector = self._browser_vector(
+                            run_id=run.id,
+                            title=f"Auth boundary candidate at {obs.url}",
+                            summary="Authentication-like form discovered; validate route guards and session transitions.",
+                            severity="medium",
+                            evidence=f"Route {obs.url} exposes auth-like form fields.",
+                            tags=["browser", "auth-boundary"],
+                            prerequisites=["authenticated session context"],
+                            noise_level="quiet",
+                            requires_approval=True,
+                        )
+                        db.add(vector)
+                if obs.storage_summary:
+                    db.add(Fact(run_id=run.id, source="browser-runtime", kind="browser-session", value=obs.url, confidence=0.7, tags=["browser", "session"], metadata_json=obs.storage_summary))
+                if any("admin" in link.lower() or "debug" in link.lower() for link in obs.links):
+                    vector = self._browser_vector(
+                        run_id=run.id,
+                        title=f"Hidden/admin surface candidate at {obs.url}",
+                        summary="Discovered route links suggest privileged or debug surface exposure.",
+                        severity="high",
+                        evidence=f"Observed links include admin/debug keywords from {obs.url}.",
+                        tags=["browser", "admin-surface"],
+                        prerequisites=["route validation"],
+                        noise_level="quiet",
+                        requires_approval=True,
+                    )
+                    db.add(vector)
+
+            for endpoint in result.network_summary.get("endpoints", [])[:80]:
+                value = str(endpoint.get("endpoint") or "").strip()
+                if not value:
+                    continue
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        source="browser-runtime",
+                        kind="api-endpoint",
+                        value=value,
+                        confidence=0.75,
+                        tags=["browser", "api"],
+                        metadata_json={"count": int(endpoint.get("count") or 0)},
+                    )
+                )
+            if result.network_summary.get("endpoints"):
+                vector = self._browser_vector(
+                    run_id=run.id,
+                    title="Client-side/API mismatch candidate",
+                    summary="Browser-captured endpoints indicate API surface requiring authorization and trust-boundary validation.",
+                    severity="medium",
+                    evidence=f"Observed {len(result.network_summary.get('endpoints') or [])} API endpoint patterns in browser network capture.",
+                    tags=["browser", "api-surface"],
+                    prerequisites=["api authorization checks"],
+                    noise_level="quiet",
+                    requires_approval=True,
+                )
+                db.add(vector)
+
+            if route_values:
+                chain_payload = {
+                    "name": "Browser recon to validation",
+                    "score": min(99.0, 40.0 + float(len(route_values))),
+                    "status": "candidate",
+                    "steps": [
+                        {"phase": "browser-assessment", "action": "route-discovery"},
+                        {"phase": "planning", "action": "vector-selection"},
+                    ],
+                    "mitre_ids": ["T1595"],
+                    "notes": f"Browser discovered {len(route_values)} in-scope routes and generated candidate vectors.",
+                    "provenance": {"source": "browser-runtime", "route_count": len(route_values), "artifact_kinds": [item.get("kind") for item in result.artifacts]},
+                }
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        source="browser-runtime",
+                        kind="attack_chain",
+                        value=chain_payload["name"],
+                        confidence=0.72,
+                        tags=["browser", "planning"],
+                        metadata_json=chain_payload,
+                    )
+                )
+
+            session.status = "completed"
+            session.completed_at = datetime.now(timezone.utc)
+            self._set_role_status(db, run.id, "browser", "completed")
+            task.status = "completed"
+            task.result_json = {
+                "entry_url": result.entry_url,
+                "current_url": result.current_url,
+                "authenticated": result.authenticated,
+                "pages": len(result.observations),
+                "routes": len(route_values),
+                "network_requests": int(result.network_summary.get("total_requests") or 0),
+                "blocked_actions": result.blocked_actions,
+            }
+            self._set_vantix_task_status(
+                db,
+                run.id,
+                "browser-assessment",
+                "completed",
+                {"source_phase": "browser-assessment", "pages": len(result.observations), "routes": len(route_values)},
+            )
+            self.events.emit(
+                db,
+                run.id,
+                "phase",
+                f"Browser assessment completed: {len(result.observations)} pages, {len(route_values)} routes",
+                payload={
+                    "phase": "browser-assessment",
+                    "entry_url": result.entry_url,
+                    "authenticated": result.authenticated,
+                    "blocked_actions": result.blocked_actions,
+                },
+                agent_session_id=session.id,
+            )
+            db.add(
+                RunMessage(
+                    run_id=run.id,
+                    role="system",
+                    author="System",
+                    content=f"Browser assessment: pages={len(result.observations)}, routes={len(route_values)}, authenticated={result.authenticated}.",
+                    metadata_json={"phase": "browser-assessment", "routes": len(route_values), "pages": len(result.observations)},
+                )
+            )
+            self._write_memory(
+                db,
+                run,
+                mode="phase",
+                phase="browser-assessment",
+                done=[f"browser pages={len(result.observations)}", f"routes={len(route_values)}"],
+                files=[item["path"] for item in result.artifacts if item.get("path")][:10],
+                next_action="cve analysis",
+            )
             db.commit()
 
     def _phase_orchestrate(self, run_id: str) -> None:
@@ -863,6 +1178,8 @@ class ExecutionManager:
         if not recon_target:
             return {"checked_ports": 0, "hits": 0, "checks": 0}
         cfg = dict(run.config_json or {})
+        if str(cfg.get("scan_profile", "full")).lower() == "quick":
+            return {"checked_ports": 0, "hits": 0, "checks": 0, "skipped": "quick-scan-profile"}
         if bool(cfg.get("web_followup_done")):
             return {"checked_ports": 0, "hits": 0, "checks": 0, "skipped": "already-done"}
         ports = [port for port in discovered.get("ports", []) if str(port).isdigit()]
@@ -1008,8 +1325,78 @@ class ExecutionManager:
             self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(generated["markdown_path"]), str(generated["json_path"])], next_action="close run")
             db.commit()
 
+    def _browser_vector(
+        self,
+        *,
+        run_id: str,
+        title: str,
+        summary: str,
+        severity: str,
+        evidence: str,
+        tags: list[str],
+        prerequisites: list[str],
+        noise_level: str,
+        requires_approval: bool,
+    ) -> Fact:
+        score = 0.45
+        if severity.lower() in {"high", "critical"}:
+            score += 0.2
+        if requires_approval:
+            score += 0.08
+        if noise_level == "quiet":
+            score += 0.06
+        metadata = {
+            "title": title,
+            "summary": summary,
+            "source": "browser-runtime",
+            "severity": severity.lower(),
+            "status": "candidate",
+            "evidence": evidence,
+            "next_action": "review browser evidence and validate safely",
+            "noise_level": noise_level,
+            "requires_approval": requires_approval,
+            "evidence_quality": 0.72,
+            "source_credibility": 0.8,
+            "novelty": 0.55,
+            "noise_level_score": 0.2 if noise_level == "quiet" else 0.7,
+            "prerequisites_satisfied": 0.5,
+            "prerequisites": prerequisites,
+            "score": round(min(0.99, max(0.0, score)), 3),
+            "provenance": {"facts": [], "artifacts": [], "origin_phase": "browser-assessment"},
+            "scope_check": "required-before-validation",
+            "safety_notes": "Bounded validation only; operator approval required for high-risk actions.",
+        }
+        return Fact(
+            run_id=run_id,
+            source="browser-runtime",
+            kind="vector",
+            value=title,
+            confidence=float(metadata["score"]),
+            tags=tags,
+            metadata_json=metadata,
+        )
+
     def _task_by_kind(self, db, run_id: str, kind: str) -> Task:
-        return db.execute(select(Task).where(Task.run_id == run_id, Task.kind == kind)).scalar_one()
+        task = (
+            db.query(Task)
+            .filter(Task.run_id == run_id, Task.kind == kind)
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if task is not None:
+            return task
+        sequence = (db.query(Task).filter(Task.run_id == run_id).count() or 0) + 1
+        task = Task(
+            run_id=run_id,
+            name=kind.replace("-", " ").title(),
+            description=f"Auto-created task for {kind}",
+            kind=kind,
+            status="pending",
+            sequence=sequence,
+        )
+        db.add(task)
+        db.flush()
+        return task
 
     def _set_vantix_task_status(self, db, run_id: str, kind: str, status: str, result: dict | None = None) -> None:
         row = (
@@ -1121,6 +1508,17 @@ class ExecutionManager:
         )
         if existing is not None and (not metadata or all(existing.metadata_json.get(key) == value for key, value in metadata.items())):
             return existing
+        latest = (
+            db.query(ApprovalRequest)
+            .filter(ApprovalRequest.run_id == run_id, ApprovalRequest.reason == reason)
+            .order_by(ApprovalRequest.created_at.desc())
+            .first()
+        )
+        if latest is not None and latest.status == "approved":
+            same_context = not metadata or all((latest.metadata_json or {}).get(key) == value for key, value in metadata.items())
+            approved_recently = (datetime.now(timezone.utc) - latest.updated_at).total_seconds() <= 300
+            if same_context and approved_recently:
+                return latest
         approval = ApprovalRequest(run_id=run_id, title=title, detail=detail, reason=reason, status="pending", metadata_json=metadata)
         db.add(approval)
         self.events.emit(db, run_id, "approval", title, level="warning", payload={"reason": reason, **metadata})
@@ -1255,9 +1653,18 @@ class ExecutionManager:
             from secops.services.skills import SkillApplicationService
 
             SkillApplicationService().apply_to_run(db, run)
+        previous = str(agent.status or "")
         agent.status = status
         if status in {"completed", "failed", "blocked"}:
             agent.completed_at = datetime.now(timezone.utc)
+        if previous != status:
+            self.events.emit(
+                db,
+                run_id,
+                "agent_status",
+                f"{role}:{status}",
+                payload={"role": role, "status": status, "previous": previous},
+            )
 
     def _emit_policy_decision(
         self,

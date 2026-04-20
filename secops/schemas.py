@@ -474,6 +474,22 @@ class RunResultsRead(BaseModel):
     executive_summary: str = ""
 
 
+class BrowserStateRead(BaseModel):
+    run_id: str
+    status: str = "idle"
+    entry_url: str = ""
+    current_url: str = ""
+    authenticated: str = "not_attempted"
+    pages_visited: int = 0
+    routes_discovered: int = 0
+    blocked_actions: list[str] = Field(default_factory=list)
+    network_summary: dict[str, Any] = Field(default_factory=dict)
+    route_edges: list[dict[str, Any]] = Field(default_factory=list)
+    forms: list[dict[str, Any]] = Field(default_factory=list)
+    screenshots: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class RunPhaseRead(BaseModel):
     current: str
     completed: list[str] = Field(default_factory=list)

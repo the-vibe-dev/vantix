@@ -6,6 +6,7 @@ PHASE_SEQUENCE = [
     "source-analysis",
     "learning-recall",
     "recon-sidecar",
+    "browser-assessment",
     "cve-analysis",
     "orchestrate",
     "learn-ingest",

@@ -111,3 +111,4 @@ tools/**/logs/
 /vantix_upgrade_kit.zip
 /*.handoff.zip
 planning/upgrade_kit/
+planning/local/

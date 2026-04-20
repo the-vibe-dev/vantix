@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -70,6 +72,42 @@ class ReportingService:
             "events": [{"id": ev.id, "sequence": ev.sequence, "type": ev.event_type, "level": ev.level, "message": ev.message} for ev in events[-80:]],
             "negative_evidence": [fact.value for fact in facts if fact.kind in {"negative_evidence", "no_finding"}],
         }
+        observation_facts = [fact for fact in facts if fact.kind in {"port", "service", "route", "form", "cve", "intel", "browser-session"}]
+        hypothesis_facts = [fact for fact in facts if fact.kind in {"vector", "attack_chain"}]
+        validated_findings = [finding for finding in findings if str(finding.status or "").lower() in {"validated", "confirmed", "draft"}]
+        browser_artifacts = [art for art in artifacts if art.kind in {"browser-session-summary", "route-discovery", "form-map", "network-summary", "screenshot", "dom-snapshot"}]
+        browser_summary: dict[str, Any] = {
+            "enabled": bool(browser_artifacts),
+            "pages_visited": 0,
+            "routes_discovered": 0,
+            "forms_discovered": 0,
+            "authenticated": "not_attempted",
+            "blocked_actions": [],
+            "artifact_count": len(browser_artifacts),
+        }
+        for art in browser_artifacts:
+            if art.kind not in {"browser-session-summary", "route-discovery", "form-map"}:
+                continue
+            try:
+                payload = json.loads(Path(art.path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if art.kind == "browser-session-summary":
+                browser_summary["pages_visited"] = int(payload.get("pages_visited") or 0)
+                browser_summary["authenticated"] = str(payload.get("authenticated") or "not_attempted")
+                browser_summary["blocked_actions"] = [str(item) for item in (payload.get("blocked_actions") or [])][:100]
+            elif art.kind == "route-discovery":
+                edges = payload.get("edges") or []
+                routes = {str(item.get("to") or "") for item in edges if isinstance(item, dict) and str(item.get("to") or "")}
+                browser_summary["routes_discovered"] = max(browser_summary["routes_discovered"], len(routes))
+            elif art.kind == "form-map":
+                forms = payload.get("forms") or []
+                count = 0
+                for item in forms:
+                    if isinstance(item, dict):
+                        count += len(item.get("forms") or [])
+                browser_summary["forms_discovered"] = max(browser_summary["forms_discovered"], count)
+        report_json["browser_assessment"] = browser_summary
 
         port_values = sorted({fact.value for fact in facts if fact.kind == "port"})
         service_values = sorted({fact.value for fact in facts if fact.kind == "service"})
@@ -104,6 +142,9 @@ class ReportingService:
             f"- Open TCP ports: {', '.join(port_values) if port_values else 'none observed'}",
             f"- Service fingerprints: {', '.join(service_values) if service_values else 'none observed'}",
             f"- CVE references: {', '.join(cve_values[:20]) if cve_values else 'none observed'}",
+            f"- Observation facts: {len(observation_facts)}",
+            f"- Hypothesis vectors/chains: {len(hypothesis_facts)}",
+            f"- Validated findings: {len(validated_findings)}",
             "",
             "## Phase Timeline",
         ]
@@ -128,9 +169,53 @@ class ReportingService:
                 )
         else:
             md_lines.append("- No promoted findings were recorded for this run.")
+        md_lines.extend(["", "## Evidence Model"])
+        md_lines.append("### Observations")
+        if observation_facts:
+            for fact in observation_facts[:80]:
+                md_lines.append(f"- [{fact.kind}] {fact.value} (source={fact.source}, confidence={fact.confidence:.2f})")
+        else:
+            md_lines.append("- No observation facts captured.")
+        md_lines.append("")
+        md_lines.append("### Hypotheses")
+        if hypothesis_facts:
+            for fact in hypothesis_facts[:80]:
+                meta = dict(fact.metadata_json or {})
+                title = str(meta.get("title") or fact.value or fact.kind)
+                status = str(meta.get("status") or "candidate")
+                evidence = str(meta.get("evidence") or "")
+                md_lines.append(f"- {title} [{status}]")
+                if evidence:
+                    md_lines.append(f"  - Evidence: {evidence}")
+        else:
+            md_lines.append("- No hypothesis vectors/chains captured.")
+        md_lines.append("")
+        md_lines.append("### Validated Results")
+        if validated_findings:
+            for finding in validated_findings:
+                md_lines.append(f"- {finding.title} [{finding.severity}] (confidence={finding.confidence:.2f})")
+                if finding.evidence:
+                    md_lines.append(f"  - Evidence: {finding.evidence}")
+                if finding.reproduction:
+                    md_lines.append(f"  - Reproduction: {finding.reproduction}")
+        else:
+            md_lines.append("- No validated findings were recorded in this run.")
         md_lines.extend(["", "## Proof Of Concept Notes"])
         for line in exec_evidence[:40]:
             md_lines.append(f"- {line}")
+        md_lines.extend(["", "## Browser Assessment"])
+        if browser_summary["enabled"]:
+            md_lines.append(f"- Authenticated state: {browser_summary['authenticated']}")
+            md_lines.append(f"- Pages visited: {browser_summary['pages_visited']}")
+            md_lines.append(f"- Routes discovered: {browser_summary['routes_discovered']}")
+            md_lines.append(f"- Forms discovered: {browser_summary['forms_discovered']}")
+            md_lines.append(f"- Browser artifacts: {browser_summary['artifact_count']}")
+            if browser_summary["blocked_actions"]:
+                md_lines.append("- Policy-gated browser actions:")
+                for item in browser_summary["blocked_actions"][:20]:
+                    md_lines.append(f"  - {item}")
+        else:
+            md_lines.append("- Browser assessment was not executed for this run.")
         md_lines.extend(["", "## Artifacts With Provenance"])
         for art in report_json["artifacts"][:80]:
             md_lines.append(f"- {art['kind']}: {art['path']} (artifact_id={art['id']})")
