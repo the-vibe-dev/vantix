@@ -1,4 +1,8 @@
-"""PRA-001 / PRA-014 regression: empty token fails closed; wrong token rejected."""
+"""PRA-001 / PRA-014 regression: empty token fails closed; wrong token rejected.
+
+These tests cover the legacy service-token path (SECOPS_SERVICE_TOKEN_ENABLED=1).
+Cookie-based user auth is covered in test_auth_flow.py.
+"""
 from __future__ import annotations
 
 import os
@@ -32,28 +36,41 @@ def _restore_settings():
     originals = {
         "api_token": settings.api_token,
         "dev_mode": settings.dev_mode,
+        "service_token_enabled": settings.service_token_enabled,
     }
     yield
     for key, value in originals.items():
         _set(key, value)
 
 
-def test_empty_token_non_dev_rejects_all_requests() -> None:
+def test_empty_token_with_service_mode_rejects() -> None:
     _reset_db()
     _set("api_token", "")
     _set("dev_mode", False)
+    _set("service_token_enabled", True)
     client = TestClient(create_app())
 
-    # Protected routes must refuse in this configuration.
     resp = client.get("/api/v1/runs")
     assert resp.status_code == 503
     assert "SECOPS_API_TOKEN" in resp.json()["detail"]
+
+
+def test_service_token_disabled_rejects_bearer() -> None:
+    _reset_db()
+    _set("api_token", "right-token")
+    _set("dev_mode", False)
+    _set("service_token_enabled", False)
+    client = TestClient(create_app())
+
+    resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
+    assert resp.status_code == 401
 
 
 def test_wrong_token_rejected() -> None:
     _reset_db()
     _set("api_token", "the-real-token")
     _set("dev_mode", False)
+    _set("service_token_enabled", True)
     client = TestClient(create_app())
 
     resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer wrong"})
@@ -64,6 +81,7 @@ def test_correct_token_accepted() -> None:
     _reset_db()
     _set("api_token", "right-token")
     _set("dev_mode", False)
+    _set("service_token_enabled", True)
     client = TestClient(create_app())
 
     resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
@@ -84,6 +102,7 @@ def test_missing_credentials_rejected() -> None:
     _reset_db()
     _set("api_token", "prod-token")
     _set("dev_mode", False)
+    _set("service_token_enabled", True)
     client = TestClient(create_app())
 
     resp = client.get("/api/v1/runs")

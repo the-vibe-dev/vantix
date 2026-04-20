@@ -55,6 +55,11 @@ class Settings:
     default_stream_poll_interval: float
     dev_mode: bool
     cors_allow_origins: list[str]
+    admin_username: str
+    admin_password: str
+    session_ttl_hours: int
+    session_cookie_secure: bool
+    service_token_enabled: bool
 
 
 def _env_list(name: str, default: list[str]) -> list[str]:
@@ -120,4 +125,9 @@ settings = Settings(
     default_stream_poll_interval=float(os.getenv("SECOPS_STREAM_POLL_INTERVAL", "0.5")),
     dev_mode=_env_bool("SECOPS_DEV_MODE", default=False),
     cors_allow_origins=_env_list("SECOPS_CORS_ALLOW_ORIGINS", ["http://127.0.0.1:4173", "http://localhost:4173"]),
+    admin_username=os.getenv("SECOPS_ADMIN_USERNAME", ""),
+    admin_password=os.getenv("SECOPS_ADMIN_PASSWORD", ""),
+    session_ttl_hours=int(os.getenv("SECOPS_SESSION_TTL_HOURS", "12")),
+    session_cookie_secure=_env_bool("SECOPS_SESSION_COOKIE_SECURE", default=False),
+    service_token_enabled=_env_bool("SECOPS_SERVICE_TOKEN_ENABLED", default=False),
 )

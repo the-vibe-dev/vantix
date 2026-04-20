@@ -49,6 +49,10 @@ _LIMITED_SUFFIXES = (
     "/providers",
 )
 
+_LOGIN_PATH = "/api/v1/auth/login"
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 60
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Simple fixed-window-ish sliding counter per (remote_addr, route-class).
@@ -70,10 +74,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         method = request.method.upper()
+        remote = request.client.host if request.client else "-"
+        now = time.time()
+
+        # Login has its own stricter bucket
+        if method == "POST" and path == _LOGIN_PATH:
+            key = (remote, _LOGIN_PATH)
+            bucket = self._hits[key]
+            cutoff = now - _LOGIN_WINDOW_SECONDS
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= _LOGIN_MAX_ATTEMPTS:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "too many login attempts"},
+                    headers={"Retry-After": str(_LOGIN_WINDOW_SECONDS)},
+                )
+            bucket.append(now)
+            return await call_next(request)
+
         if self._limited(method, path):
-            remote = request.client.host if request.client else "-"
             key = (remote, path)
-            now = time.time()
             bucket = self._hits[key]
             cutoff = now - self.window
             while bucket and bucket[0] < cutoff:
@@ -112,11 +133,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 from secops.db import SessionLocal
                 from secops.models import AuditLog
 
-                authz = request.headers.get("authorization") or ""
-                actor = "anonymous"
-                if authz.lower().startswith("bearer "):
-                    tok = authz.split(" ", 1)[1].strip()
-                    actor = f"token:{tok[:4]}...{tok[-2:]}" if len(tok) >= 8 else "token:***"
+                auth = getattr(request.state, "auth", None)
+                if auth is not None:
+                    actor = f"{auth.kind}:{auth.username}"
+                else:
+                    authz = request.headers.get("authorization") or ""
+                    actor = "anonymous"
+                    if authz.lower().startswith("bearer "):
+                        tok = authz.split(" ", 1)[1].strip()
+                        actor = f"token:{tok[:4]}...{tok[-2:]}" if len(tok) >= 8 else "token:***"
                 with SessionLocal() as db:
                     db.add(
                         AuditLog(

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from secops.config import settings
 from secops.db import Base, engine
 from secops.middleware import AuditMiddleware, RateLimitMiddleware, RequestIdMiddleware
-from secops.routers import approvals, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, sources, system, tasks, tools
+from secops.routers import approvals, auth, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, sources, system, tasks, tools
 
 
 logger = logging.getLogger("secops")
@@ -47,10 +47,24 @@ def _run_migrations_if_needed() -> None:
     command.upgrade(cfg, "head")
 
 
+def _bootstrap_admin_if_needed() -> None:
+    try:
+        from secops.db import SessionLocal
+        from secops.services.auth_service import bootstrap_admin_if_needed
+        with SessionLocal() as db:
+            created = bootstrap_admin_if_needed(db)
+            if created is not None:
+                db.commit()
+                logger.warning("bootstrap admin user created: %s", created.username)
+    except Exception:  # noqa: BLE001
+        logger.exception("admin bootstrap failed")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _check_startup_config()
     _run_migrations_if_needed()
+    _bootstrap_admin_if_needed()
     try:
         yield
     finally:
@@ -89,7 +103,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_allow_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id", "X-CSRF-Token"],
     )
 
     @app.exception_handler(Exception)
@@ -103,6 +117,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(system.router)
     app.include_router(chat.router)
     app.include_router(modes.router)
