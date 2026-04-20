@@ -7,6 +7,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -e ".[dev]"
+.venv/bin/python -m playwright install chromium
 cp .env.example .env
 ```
 
@@ -36,7 +37,7 @@ Focused suites:
 
 ```bash
 pytest -q
-pytest -q tests/test_workflow_engine.py tests/test_resume_and_retry.py tests/test_phase_handlers.py tests/test_reporting.py
+pytest -q tests/test_workflow_engine.py tests/test_resume_and_retry.py tests/test_phase_handlers.py tests/test_reporting.py tests/test_browser_agent.py
 cd frontend && corepack pnpm build
 ```
 
@@ -52,6 +53,7 @@ cd frontend && corepack pnpm build
 - Install/update lifecycle: `scripts/install-vantix.sh`, `scripts/update-vantix.sh`.
 - Local service lifecycle: `scripts/vantixctl.sh`.
 - CVE ingest and smoke checks: `scripts/backfill-cve-intel.sh`, `scripts/smoke-cve-intel.sh`.
+- Browser runtime bootstrap: `.venv/bin/python -m playwright install chromium`.
 
 ## Contribution Expectations
 

@@ -181,8 +181,19 @@ export type BrowserState = {
   network_summary: Record<string, unknown>;
   route_edges: Array<Record<string, unknown>>;
   forms: Array<Record<string, unknown>>;
+  session_summary: Record<string, unknown>;
+  auth_transitions: Array<Record<string, unknown>>;
+  dom_diffs: Array<Record<string, unknown>>;
+  js_signals: Array<Record<string, unknown>>;
+  route_hints: Array<Record<string, unknown>>;
   screenshots: string[];
   artifacts: Array<Record<string, unknown>>;
+};
+
+export type SourceStatus = {
+  run_id: string;
+  source_input: Record<string, unknown>;
+  source_context: Record<string, unknown>;
 };
 
 export type PlanningBundle = {
@@ -192,6 +203,16 @@ export type PlanningBundle = {
   best_chains: AttackChain[];
   ranking_rationale: Array<Record<string, unknown>>;
   missing_evidence: string[];
+};
+
+export type ReplayState = {
+  run_id: string;
+  status: string;
+  phase_history: Array<Record<string, unknown>>;
+  events: EventRecord[];
+  report_path: string;
+  report_json_path: string;
+  summary: Record<string, unknown>;
 };
 
 export type SkillPack = {
@@ -405,6 +426,7 @@ export const api = {
     return uploadRequest<{ staged_upload_id: string; filename: string; size_bytes: number; sha256: string }>("/api/v1/sources/uploads", body);
   },
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
+  getSourceStatus: (runId: string) => request<SourceStatus>(`/api/v1/runs/${runId}/source-status`),
   getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
   getWorkflowState: (runId: string) => request<WorkflowState>(`/api/v1/runs/${runId}/workflow-state`),
@@ -424,6 +446,7 @@ export const api = {
   getResults: (runId: string) => request<RunResults>(`/api/v1/runs/${runId}/results`),
   getBrowserState: (runId: string) => request<BrowserState>(`/api/v1/runs/${runId}/browser-state`),
   getPlanningBundle: (runId: string) => request<PlanningBundle>(`/api/v1/runs/${runId}/planning-bundle`),
+  getReplay: (runId: string, limit = 400) => request<ReplayState>(`/api/v1/runs/${runId}/replay?limit=${limit}`),
   listSkills: () => request<SkillPack[]>("/api/v1/skills"),
   createSkill: (payload: Record<string, unknown>) => request<SkillPack>("/api/v1/skills", { method: "POST", body: JSON.stringify(payload) }),
   updateSkill: (skillId: string, payload: Record<string, unknown>) => request<SkillPack>(`/api/v1/skills/${skillId}`, { method: "PUT", body: JSON.stringify(payload) }),

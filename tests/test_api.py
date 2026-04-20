@@ -158,8 +158,8 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         assert graph_payload["phase"]["current"] in {"knowledge-load", "research", "recon", "planning"}
         task_kinds = [task["kind"] for task in graph_payload["tasks"]]
         assert "vantix-recon" in task_kinds
-        assert "vector-store" in task_kinds
-        assert {agent["role"] for agent in graph_payload["agents"]} >= {"orchestrator", "recon", "researcher", "executor"}
+        assert "flow-initialization" in task_kinds
+        assert {agent["role"] for agent in graph_payload["agents"]} == {"orchestrator", "recon"}
 
         phase = client.get(f"/api/v1/runs/{run_id}/phase")
         assert phase.status_code == 200
@@ -176,6 +176,10 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         assert any(item["agent_role"] == "orchestrator" for item in skill_payload)
         assert any(skill["id"] == "scope_guard" for item in skill_payload for skill in item["skills"])
         assert any(Path(item["prompt_path"]).exists() for item in skill_payload)
+
+        source_status = client.get(f"/api/v1/runs/{run_id}/source-status")
+        assert source_status.status_code == 200
+        assert source_status.json()["source_input"]["type"] == "none"
 
         handoff = client.get(f"/api/v1/runs/{run_id}/handoff")
         assert handoff.status_code == 200
@@ -237,6 +241,20 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         results = client.get(f"/api/v1/runs/{run_id}/results")
         assert results.status_code == 200
         assert results.json()["run_id"] == run_id
+
+        events = client.get(f"/api/v1/runs/{run_id}/events")
+        assert events.status_code == 200
+        event_types = {item["event_type"] for item in events.json()}
+        assert "vector_generated" in event_types
+        assert "attack_chain_generated" in event_types
+        assert "finding_promoted" in event_types
+
+        workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
+        assert workflow_state.status_code == 200
+        metrics = workflow_state.json()["metrics"]
+        assert "approval_pending_count" in metrics
+        assert "phase_durations_seconds" in metrics
+        assert "current_phase_duration_seconds" in metrics
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)
@@ -302,22 +320,27 @@ def test_vantix_quick_scan_starts_recon_only_and_approval_resumes() -> None:
         graph_after_quick = client.get(f"/api/v1/runs/{run_id}/graph")
         assert graph_after_quick.status_code == 200
         roles = {agent["role"] for agent in graph_after_quick.json()["agents"]}
-        assert {"knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"} <= roles
-        assert "research" not in roles
+        assert roles == {"orchestrator", "recon"}
 
         skills = client.get(f"/api/v1/runs/{run_id}/skills")
         assert skills.status_code == 200
         payload = skills.json()
         skills_by_role = {item["agent_role"]: item["skills"] for item in payload}
         assert len(skills_by_role.get("orchestrator", [])) > 0
-        assert len(skills_by_role.get("knowledge_base", [])) > 0
-        assert len(skills_by_role.get("researcher", [])) > 0
+        assert "knowledge_base" not in skills_by_role
+        assert "researcher" not in skills_by_role
 
         terminal = client.get(f"/api/v1/runs/{run_id}/terminal")
         assert terminal.status_code == 200
         content = terminal.json()["content"]
         assert "[recon] starting:" in content
         assert "[recon] blocked by policy:" in content
+
+        events = client.get(f"/api/v1/runs/{run_id}/events")
+        assert events.status_code == 200
+        event_types = {item["event_type"] for item in events.json()}
+        assert "approval_requested" in event_types
+        assert "approval_resolved" in event_types
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)

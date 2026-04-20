@@ -18,14 +18,17 @@ import {
   EventRecord,
   Fact,
   Finding,
+  ReplayState,
   Run,
   RunMessage,
   RunPhase,
   RunResults,
   RunSkillApplication,
+  SourceStatus,
   SourceInput,
   Task,
   Vector,
+  WorkflowState,
   api,
   hydrateCsrfFromCookie,
 } from "./api";
@@ -376,7 +379,23 @@ function normalizeCompletedPhases(values: string[] | undefined): DisplayPhase[] 
 }
 
 function eventToChatMessage(event: EventRecord): RunMessage | null {
-  if (!["phase", "approval", "run_status", "policy_decision", "agent_status", "scheduler"].includes(event.event_type)) return null;
+  if (
+    ![
+      "phase_transition",
+      "approval_requested",
+      "approval_resolved",
+      "run_status",
+      "policy_decision",
+      "agent_status",
+      "scheduler",
+      "vector_generated",
+      "attack_chain_generated",
+      "finding_promoted",
+      "report_generated",
+      "browser_observation",
+    ].includes(event.event_type)
+  )
+    return null;
   return {
     id: `e-${event.id}`,
     run_id: "",
@@ -403,6 +422,36 @@ function mergeTimeline(messages: RunMessage[], events: EventRecord[]): RunMessag
     const right = new Date(b.created_at || 0).getTime();
     return left - right;
   });
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  phase_transition: "Phase",
+  approval_requested: "Approval",
+  approval_resolved: "Approval",
+  policy_decision: "Policy",
+  agent_status: "Agent",
+  scheduler: "Scheduler",
+  vector_generated: "Vector",
+  attack_chain_generated: "Chain",
+  finding_promoted: "Finding",
+  report_generated: "Report",
+  browser_observation: "Browser",
+  run_status: "Run",
+};
+
+function eventBadgeVariant(eventType: string): Variant {
+  if (eventType.startsWith("approval")) return "warn";
+  if (eventType === "policy_decision") return "amber";
+  if (eventType === "finding_promoted") return "danger";
+  if (eventType === "report_generated") return "ok";
+  if (eventType === "vector_generated" || eventType === "attack_chain_generated") return "blue";
+  if (eventType === "browser_observation") return "amber";
+  return "default";
+}
+
+function metricNumber(workflowState: WorkflowState | null, key: string): number {
+  const value = workflowState?.metrics?.[key];
+  return typeof value === "number" ? value : Number(value || 0);
 }
 
 // ─── Risk calculation ───────────────────────────────────────────────────────
@@ -813,6 +862,11 @@ function ChatPanel({
                 >
                   {m.author || rs.label}
                 </span>
+                {m.role === "system" && typeof m.metadata?.event_type === "string" && (
+                  <Badge variant={eventBadgeVariant(String(m.metadata.event_type))} style={{ alignSelf: isUser ? "flex-end" : "flex-start" }}>
+                    {EVENT_LABELS[String(m.metadata.event_type)] || String(m.metadata.event_type).replace(/_/g, " ")}
+                  </Badge>
+                )}
                 <div
                   style={{
                     maxWidth: "88%",
@@ -931,11 +985,29 @@ function AgentsPanel({
   agents,
   tasks,
   roles,
+  phase,
 }: {
   agents: AgentSession[];
   tasks: Task[];
   roles: string[];
+  phase: RunPhase | null;
 }) {
+  const current = String(phase?.current || "").toLowerCase();
+  const activeRoles = new Set<string>(
+    current === "context-bootstrap" || current === "source-intake" || current === "source-analysis"
+      ? ["orchestrator", "developer"]
+      : current === "learning-recall" || current === "recon-sidecar" || current === "browser-assessment"
+      ? ["recon", "browser", "knowledge_base"]
+      : current === "cve-analysis"
+      ? ["researcher", "vector_store"]
+      : current === "orchestrate"
+      ? ["orchestrator"]
+      : current === "learn-ingest"
+      ? ["executor", "developer"]
+      : current === "report"
+      ? ["reporter"]
+      : ["orchestrator", "recon"]
+  );
   return (
     <Panel title="Agent Team" meta="Specialist agents">
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -944,13 +1016,16 @@ function AgentsPanel({
           const task = tasks.find(
             (t) => t.kind?.includes(role.replace("_", "-")) || t.kind?.includes(role),
           );
-          const status = agent?.status || task?.status || "pending";
+          const rawStatus = agent?.status || task?.status || "pending";
+          const status =
+            rawStatus === "pending" && !activeRoles.has(role) ? "standby" : rawStatus;
           const sc: Record<string, string> = {
             running: "#f4b860",
             completed: "#19c37d",
             failed: "#ef4444",
             blocked: "#ef4444",
             pending: "#7a9e92",
+            standby: "#4e6b63",
           };
           return (
             <div
@@ -962,10 +1037,10 @@ function AgentsPanel({
                 padding: "9px 11px",
                 borderRadius: 10,
                 background: "rgba(255,255,255,.025)",
-                border: `1px solid rgba(140,185,165,${status === "running" ? 0.22 : 0.1})`,
+                border: `1px solid rgba(140,185,165,${status === "running" ? 0.22 : status === "standby" ? 0.08 : 0.1})`,
               }}
             >
-              <StatusDot status={status} size={7} />
+              <StatusDot status={status === "standby" ? "idle" : status} size={7} />
               <div style={{ minWidth: 0 }}>
                 <div
                   style={{
@@ -987,6 +1062,193 @@ function AgentsPanel({
             </div>
           );
         })}
+      </div>
+    </Panel>
+  );
+}
+
+function ControlCenterPanel({
+  workflowState,
+  approvals,
+}: {
+  workflowState: WorkflowState | null;
+  approvals: Approval[];
+}) {
+  const pendingApprovals = approvals.filter((row) => row.status === "pending").length;
+  const blockedClasses = Array.isArray(workflowState?.metrics?.blocked_reason_classes)
+    ? (workflowState?.metrics?.blocked_reason_classes as string[])
+    : [];
+  const phaseDurations = workflowState?.metrics?.phase_durations_seconds as Record<string, number> | undefined;
+  return (
+    <Panel title="Control Center" meta="Workflow health">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <Badge variant="blue">workers {metricNumber(workflowState, "active_worker_count")}</Badge>
+        <Badge variant={metricNumber(workflowState, "stale_worker_count") > 0 ? "danger" : "ok"}>
+          stale {metricNumber(workflowState, "stale_worker_count")}
+        </Badge>
+        <Badge variant={pendingApprovals > 0 ? "warn" : "ok"}>approvals {pendingApprovals}</Badge>
+        <Badge variant="default">retries {metricNumber(workflowState, "retry_count")}</Badge>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(255,255,255,.025)",
+            border: "1px solid rgba(140,185,165,.1)",
+          }}
+        >
+          <div style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
+            Active Workflow
+          </div>
+          <div style={{ fontSize: ".8rem", color: "#e8f4ee", fontWeight: 600 }}>
+            {workflowState?.workflow?.current_phase || "n/a"}
+          </div>
+          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginTop: 4 }}>
+            claim age {metricNumber(workflowState, "current_claim_age_seconds").toFixed(1)}s
+          </div>
+          <div style={{ fontSize: ".72rem", color: "#7a9e92" }}>
+            phase age {metricNumber(workflowState, "current_phase_duration_seconds").toFixed(1)}s
+          </div>
+          <div style={{ fontSize: ".72rem", color: "#7a9e92" }}>
+            latest heartbeat {(workflowState?.metrics?.latest_heartbeat_at as string) || "n/a"}
+          </div>
+        </div>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "rgba(255,255,255,.025)",
+            border: "1px solid rgba(140,185,165,.1)",
+          }}
+        >
+          <div style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
+            Governance
+          </div>
+          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 4 }}>
+            resolved approvals {metricNumber(workflowState, "approval_resolved_count")}
+          </div>
+          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 4 }}>
+            avg approval latency {metricNumber(workflowState, "approval_latency_seconds_avg").toFixed(1)}s
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {blockedClasses.length ? blockedClasses.map((item) => (
+              <Badge key={item} variant="amber">{item}</Badge>
+            )) : <span style={{ fontSize: ".72rem", color: "#7a9e92" }}>No blockers classified</span>}
+          </div>
+        </div>
+      </div>
+      {workflowState?.workers?.length ? (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          {workflowState.workers.map((worker) => (
+            <div
+              key={worker.worker_id}
+              style={{
+                padding: "9px 11px",
+                borderRadius: 10,
+                background: "rgba(255,255,255,.02)",
+                border: "1px solid rgba(140,185,165,.1)",
+                display: "grid",
+                gridTemplateColumns: "minmax(0,1fr) auto",
+                gap: 8,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: ".74rem", color: "#e8f4ee", fontWeight: 600, fontFamily: "var(--mono)" }}>
+                  {worker.worker_id}
+                </div>
+                <div style={{ fontSize: ".7rem", color: "#7a9e92", marginTop: 2 }}>
+                  {worker.current_phase || "idle"} · {worker.current_run_id || "no-run"}
+                </div>
+              </div>
+              <Badge variant={worker.status === "error" || worker.status === "stale" ? "danger" : worker.status === "running" ? "amber" : "default"}>
+                {worker.status}
+              </Badge>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {phaseDurations && Object.keys(phaseDurations).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <Label>Phase Durations</Label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+            {Object.entries(phaseDurations)
+              .sort((left, right) => left[0].localeCompare(right[0]))
+              .map(([name, seconds]) => (
+                <Badge key={name} variant="default">
+                  {name} {Number(seconds).toFixed(1)}s
+                </Badge>
+              ))}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function TimelinePanel({ events }: { events: EventRecord[] }) {
+  return (
+    <Panel title="Attack Timeline" meta={`${events.length} events`} style={{ gridColumn: "span 2" }}>
+      {events.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
+          {events.map((event) => (
+            <div
+              key={event.id}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: "rgba(255,255,255,.025)",
+                border: "1px solid rgba(140,185,165,.1)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between", marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <Badge variant={eventBadgeVariant(event.event_type)}>
+                    {EVENT_LABELS[event.event_type] || event.event_type.replace(/_/g, " ")}
+                  </Badge>
+                  <span style={{ fontSize: ".76rem", color: "#e8f4ee", fontWeight: 600 }}>{event.message}</span>
+                </div>
+                <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "#7a9e92" }}>
+                  #{event.sequence}
+                </span>
+              </div>
+              <div style={{ fontSize: ".69rem", color: "#7a9e92", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span>{new Date(event.created_at).toLocaleString()}</span>
+                {typeof event.payload?.phase_name === "string" && <span>phase {String(event.payload.phase_name)}</span>}
+                {typeof event.payload?.role === "string" && <span>role {String(event.payload.role)}</span>}
+                {typeof event.payload?.reason === "string" && <span>reason {String(event.payload.reason)}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState icon="⋯" text="No timeline events recorded yet." />
+      )}
+    </Panel>
+  );
+}
+
+function SourcePanel({ sourceStatus }: { sourceStatus: SourceStatus | null }) {
+  const sourceInput = sourceStatus?.source_input || {};
+  const sourceContext = sourceStatus?.source_context || {};
+  const sourceType = String(sourceInput.type || "none");
+  const status = String(sourceContext.status || (sourceType === "none" ? "skipped" : "pending"));
+  const resolvedPath = String(sourceContext.resolved_path || "");
+  const url = String((sourceInput.github as Record<string, unknown> | undefined)?.url || "");
+  const localPath = String((sourceInput.local as Record<string, unknown> | undefined)?.path || "");
+  const uploadId = String((sourceInput.upload as Record<string, unknown> | undefined)?.staged_upload_id || "");
+  return (
+    <Panel title="Source Intake" meta={`${sourceType} · ${status}`}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        <Badge variant={sourceType === "none" ? "default" : "blue"}>{sourceType}</Badge>
+        <Badge variant={status === "ready" ? "ok" : status === "failed" ? "danger" : "default"}>{status}</Badge>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: ".73rem", color: "#7a9e92" }}>
+        {url ? <div>GitHub: {url}</div> : null}
+        {localPath ? <div>Local path: {localPath}</div> : null}
+        {uploadId ? <div>Upload: {uploadId}</div> : null}
+        {resolvedPath ? <div>Resolved: {resolvedPath}</div> : null}
+        {!url && !localPath && !uploadId && <div>No white-box source attached to this run.</div>}
       </div>
     </Panel>
   );
@@ -1075,8 +1337,9 @@ function VectorsPanel({
   onPromote: (v: Vector) => void;
   selectedRunId: string | undefined;
 }) {
+  const selectedCount = vectors.filter((row) => row.status === "planned" || row.status === "selected").length;
   return (
-    <Panel title="Attack Vectors" meta={`${vectors.length} candidates`} style={{ gridColumn: "span 2" }}>
+    <Panel title="Attack Vectors" meta={`${vectors.length} candidates · ${selectedCount} selected`} style={{ gridColumn: "span 2" }}>
       {vectors.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {vectors.map((v) => {
@@ -1323,6 +1586,12 @@ function BrowserPanel({
   const endpoints = Array.isArray(state.network_summary?.endpoints)
     ? (state.network_summary.endpoints as Array<Record<string, unknown>>)
     : [];
+  const sessionSummary = (state.session_summary || {}) as Record<string, unknown>;
+  const finalStorage = ((sessionSummary["final_storage_summary"] as Record<string, unknown> | undefined) || {});
+  const authTransitions = Array.isArray(state.auth_transitions) ? state.auth_transitions : [];
+  const domDiffs = Array.isArray(state.dom_diffs) ? state.dom_diffs : [];
+  const jsSignals = Array.isArray(state.js_signals) ? state.js_signals : [];
+  const routeHints = Array.isArray(state.route_hints) ? state.route_hints : [];
   return (
     <Panel title="Browser Assessment" meta={`${state.status} · ${state.pages_visited} pages`}>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1331,10 +1600,17 @@ function BrowserPanel({
           <Badge variant="blue">routes: {state.routes_discovered}</Badge>
           <Badge variant="amber">forms: {state.forms.length}</Badge>
           <Badge variant="ok">screenshots: {state.screenshots.length}</Badge>
+          <Badge variant="ghost">signals: {jsSignals.length}</Badge>
         </div>
         <div style={{ fontSize: ".72rem", color: "#7a9e92", lineHeight: 1.45 }}>
           <div>Entry: {state.entry_url || "(none)"}</div>
           <div>Current: {state.current_url || "(none)"}</div>
+          {!!Object.keys(sessionSummary).length && (
+            <div>
+              Storage: cookies {String(finalStorage["cookie_count"] ?? "0")} · local {String(finalStorage["local_storage_keys"] ?? "0")} ·
+              session {String(finalStorage["session_storage_keys"] ?? "0")}
+            </div>
+          )}
         </div>
         {state.blocked_actions.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1345,12 +1621,54 @@ function BrowserPanel({
             ))}
           </div>
         )}
+        {authTransitions.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>Auth State</Label>
+            {authTransitions.slice(0, 4).map((item, idx) => (
+              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+                {String(item.stage || "state")} · {String(item.status || "observed")}
+                {item.url ? ` · ${String(item.url)}` : ""}
+              </div>
+            ))}
+          </div>
+        )}
+        {domDiffs.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>State Deltas</Label>
+            {domDiffs.slice(0, 3).map((item, idx) => (
+              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+                {String(item.stage || "navigation")} · forms {String(item.form_delta ?? 0)} · links {String(item.link_delta ?? 0)} · cookies{" "}
+                {String(item.cookie_delta ?? 0)}
+              </div>
+            ))}
+          </div>
+        )}
         {endpoints.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Observed Endpoints</Label>
             {endpoints.slice(0, 5).map((item, idx) => (
               <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", fontFamily: "var(--mono)" }}>
                 {String(item.endpoint || "")} ({String(item.count || "0")})
+              </div>
+            ))}
+          </div>
+        )}
+        {routeHints.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>Route Hints</Label>
+            {routeHints.slice(0, 4).map((item, idx) => (
+              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", fontFamily: "var(--mono)" }}>
+                {String(item.hint || "")}
+              </div>
+            ))}
+          </div>
+        )}
+        {jsSignals.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>Client Signals</Label>
+            {jsSignals.slice(0, 4).map((item, idx) => (
+              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+                {String(item.kind || "signal")} · {String(item.signal || "")}
               </div>
             ))}
           </div>
@@ -1381,8 +1699,9 @@ function ResultsPanel({
 }) {
   const findings = results?.findings || [];
   const artifacts = results?.artifacts || [];
+  const validatedCount = findings.filter((row) => ["validated", "confirmed", "draft"].includes(String(row.status || "").toLowerCase())).length;
   return (
-    <Panel title="Findings & Report" meta="Confirmed vulnerabilities" style={{ gridColumn: "span 2" }}>
+    <Panel title="Findings & Report" meta={`${validatedCount} validated · ${artifacts.length} artifacts`} style={{ gridColumn: "span 2" }}>
       {results ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {results.executive_summary && (
@@ -1515,6 +1834,49 @@ function ResultsPanel({
         </div>
       ) : (
         <EmptyState icon="◇" text="No results yet." />
+      )}
+    </Panel>
+  );
+}
+
+function ReplayPanel({ replay }: { replay: ReplayState | null }) {
+  return (
+    <Panel title="Replay" meta={replay ? `${replay.summary?.event_count || 0} events` : "history"}>
+      {replay ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <Badge variant="blue">events {Number(replay.summary?.event_count || 0)}</Badge>
+            <Badge variant="amber">phase transitions {Number(replay.summary?.phase_transition_count || 0)}</Badge>
+            <Badge variant="warn">approvals {Number(replay.summary?.approval_count || 0)}</Badge>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(replay.phase_history || []).slice(-12).map((entry, index) => (
+              <div
+                key={`${String(entry.at || index)}-${String(entry.phase || index)}`}
+                style={{
+                  padding: "9px 11px",
+                  borderRadius: 10,
+                  background: "rgba(255,255,255,.025)",
+                  border: "1px solid rgba(140,185,165,.1)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+                  <span style={{ fontSize: ".76rem", color: "#e8f4ee", fontWeight: 600 }}>
+                    {String(entry.phase || "unknown")}
+                  </span>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "#7a9e92" }}>
+                    {String(entry.at || "")}
+                  </span>
+                </div>
+                <div style={{ fontSize: ".71rem", color: "#7a9e92", marginTop: 4 }}>
+                  {String(entry.reason || "n/a")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <EmptyState icon="↺" text="Replay history not available yet." />
       )}
     </Panel>
   );
@@ -2150,6 +2512,7 @@ function Sidebar({
 function TopBar({
   run,
   phase,
+  workflowState,
   statusMsg,
   onRefresh,
   onPause,
@@ -2159,6 +2522,7 @@ function TopBar({
 }: {
   run: Run | null;
   phase: RunPhase | null;
+  workflowState: WorkflowState | null;
   statusMsg: string;
   onRefresh: () => void;
   onPause: () => void;
@@ -2196,6 +2560,10 @@ function TopBar({
           {run && <Badge variant={runVariant}>{run.status}</Badge>}
           {run && <Badge variant="default">{run.mode}</Badge>}
           {phase && <Badge variant="amber">↳ {phase.current}</Badge>}
+          {workflowState?.workers?.length ? <Badge variant="blue">workers {metricNumber(workflowState, "active_worker_count")}</Badge> : null}
+          {metricNumber(workflowState, "approval_pending_count") > 0 ? (
+            <Badge variant="warn">approvals {metricNumber(workflowState, "approval_pending_count")}</Badge>
+          ) : null}
         </div>
         {run && (
           <div
@@ -2213,6 +2581,11 @@ function TopBar({
             {(run.objective || "").length > 90 ? "…" : ""}
           </div>
         )}
+        {workflowState?.workflow?.blocked_reason ? (
+          <div style={{ fontSize: ".72rem", color: "#ef4444", marginTop: 4 }}>
+            Blocked: {workflowState.workflow.blocked_reason}
+          </div>
+        ) : null}
         {statusMsg && <div style={{ fontSize: ".72rem", color: "#f4b860", marginTop: 4 }}>{statusMsg}</div>}
       </div>
       {run && (
@@ -2252,6 +2625,8 @@ export default function App() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [phase, setPhase] = useState<RunPhase | null>(null);
+  const [workflowState, setWorkflowState] = useState<WorkflowState | null>(null);
+  const [events, setEvents] = useState<EventRecord[]>([]);
   const [messages, setMessages] = useState<RunMessage[]>([]);
   const [vectors, setVectors] = useState<Vector[]>([]);
   const [facts, setFacts] = useState<Fact[]>([]);
@@ -2264,6 +2639,8 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [learning, setLearning] = useState<Array<Record<string, unknown>>>([]);
   const [browserState, setBrowserState] = useState<BrowserState | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus | null>(null);
+  const [replayState, setReplayState] = useState<ReplayState | null>(null);
   const [termLines, setTermLines] = useState<string[]>([]);
 
   const [tab, setTab] = useState<Tab>("overview");
@@ -2358,10 +2735,13 @@ export default function App() {
             console.warn(`[refreshRun] ${label} failed:`, err);
             return fallback;
           };
-        const [run, graph, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
+        const [run, graph, workflow, runSourceStatus, runReplay, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
+            api.getWorkflowState(runId).catch(track<WorkflowState | null>("workflow", null)),
+            api.getSourceStatus(runId).catch(track<SourceStatus | null>("source", null)),
+            api.getReplay(runId).catch(track<ReplayState | null>("replay", null)),
             api.getFacts(runId).catch(track<Fact[]>("facts", [])),
             api.getLearning(runId).catch(track("learning", { run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> })),
             api.getMessages(runId).catch(track<RunMessage[]>("messages", [])),
@@ -2381,11 +2761,15 @@ export default function App() {
         }
         setSelectedRun(run);
         setPhase(graph.phase);
+        setWorkflowState(workflow);
+        setSourceStatus(runSourceStatus);
+        setReplayState(runReplay);
         setAgents(graph.agents);
         setTasks(graph.tasks);
         setApprovals(graph.approvals);
         setFacts(runFacts);
         setLearning(learningHits.results);
+        setEvents(runEvents);
         setMessages(mergeTimeline(runMessages, runEvents));
         setVectors(runVectors);
         setResults(runResults);
@@ -2403,6 +2787,10 @@ export default function App() {
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setSelectedRun(null);
+          setWorkflowState(null);
+          setSourceStatus(null);
+          setReplayState(null);
+          setEvents([]);
           flash("Selected run no longer exists.");
           refreshRuns();
           return;
@@ -2720,6 +3108,7 @@ export default function App() {
         <TopBar
           run={selectedRun}
           phase={phase}
+          workflowState={workflowState}
           statusMsg={statusMsg}
           onRefresh={() => runAction("refresh")}
           onPause={() => runAction("pause")}
@@ -2753,7 +3142,9 @@ export default function App() {
               loading={chatLoading}
             />
             <PhasePanel phase={phase} />
-            <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} />
+            <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
+            <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
+            <TimelinePanel events={events} />
             <TerminalPanel lines={termLines} />
           </div>
         )}
@@ -2776,12 +3167,15 @@ export default function App() {
         {tab === "results" && (
           <div className="vx-grid">
             <ResultsPanel results={results} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
+            <ReplayPanel replay={replayState} />
           </div>
         )}
 
         {tab === "config" && (
           <div className="vx-grid">
             <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
+            <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
+            <SourcePanel sourceStatus={sourceStatus} />
             <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />
             <NotesPanel
               note={note}

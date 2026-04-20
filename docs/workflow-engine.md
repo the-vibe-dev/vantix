@@ -36,6 +36,7 @@ Current phase flow includes:
 ## Recovery and Idempotency
 
 - Expired leases are reclaimable.
+- Stale claims are scavenged back into runnable state and surfaced through workflow metrics.
 - Retry classification normalizes transient vs permanent failures.
 - Resume/restart behavior is driven by persisted workflow state, not in-memory loops.
 

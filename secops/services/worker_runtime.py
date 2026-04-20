@@ -60,6 +60,13 @@ class WorkerRuntime:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._upsert_worker_status(
+            status="stopping",
+            current_run_id=self._claimed_run_id,
+            current_phase=self._claimed_phase,
+            lease_expires_at=self._lease_expires_at if self._claimed_run_id else None,
+            last_error="operator requested stop",
+        )
         with self._lock:
             thread = self._thread
         if thread and thread.is_alive():
@@ -86,6 +93,7 @@ class WorkerRuntime:
         while not self._stop_event.is_set():
             try:
                 with SessionLocal() as db:
+                    self._engine.scavenge_stale_runtime(db)
                     claim = self._engine.claim_next_phase(db, worker_id=self._worker_id, lease_seconds=90)
                     db.commit()
                 if claim is None:

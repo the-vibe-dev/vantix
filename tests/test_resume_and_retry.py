@@ -12,7 +12,7 @@ TEST_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 
 from secops.db import Base, SessionLocal, engine
-from secops.models import Engagement, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.models import Engagement, WorkerLease, WorkerRuntimeStatus, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 from secops.services.workflows.engine import WorkflowClaim, WorkflowEngine, utcnow
 from secops.services.workflows.phases import PHASE_SEQUENCE
 from secops.services.workflows.types import PhaseStatus, WorkflowStatus
@@ -131,3 +131,50 @@ def test_claim_owner_guard_and_lease_renewal() -> None:
         wf = db.get(WorkflowExecution, workflow.id)
         assert wf is not None
         assert wf.current_phase == PHASE_SEQUENCE[1]
+
+
+def test_scavenge_stale_runtime_recovers_claim_and_marks_worker_stale() -> None:
+    reset_db()
+    engine_service = WorkflowEngine()
+    with SessionLocal() as db:
+        run = _seed_run(db)
+        workflow = engine_service.enqueue_run(db, run)
+        db.commit()
+
+        claim = engine_service.claim_next_phase(db, worker_id="worker-a", lease_seconds=20)
+        assert claim is not None
+        phase_row = db.get(WorkflowPhaseRun, claim.phase_run_id)
+        assert phase_row is not None
+        phase_row.lease_expires_at = utcnow() - timedelta(seconds=5)
+        db.add(
+            WorkerRuntimeStatus(
+                worker_id="worker-a",
+                hostname="localhost",
+                pid=1234,
+                status="running",
+                current_run_id=run.id,
+                current_phase=phase_row.phase_name,
+                heartbeat_at=utcnow() - timedelta(seconds=600),
+                metadata_json={},
+            )
+        )
+        db.commit()
+
+        summary = engine_service.scavenge_stale_runtime(db, stale_worker_after_seconds=60)
+        db.commit()
+
+        assert summary["recovered_claims"] == 1
+        assert summary["stale_workers"] == 1
+
+        db.refresh(phase_row)
+        assert phase_row.status == PhaseStatus.RETRYING.value
+        assert phase_row.worker_id == ""
+        assert phase_row.retry_class == "transient"
+
+        leases = db.query(WorkerLease).filter(WorkerLease.phase_run_id == phase_row.id).all()
+        assert leases
+        assert all(lease.status == "expired" for lease in leases)
+
+        worker = db.query(WorkerRuntimeStatus).filter(WorkerRuntimeStatus.worker_id == "worker-a").first()
+        assert worker is not None
+        assert worker.status == "stale"

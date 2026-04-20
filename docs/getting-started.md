@@ -35,6 +35,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -e ".[dev]"
+.venv/bin/python -m playwright install chromium
 cp .env.example .env
 bash scripts/doctor.sh
 ```
@@ -46,6 +47,11 @@ cd frontend
 corepack pnpm install
 corepack pnpm dev
 ```
+
+Browser runtime note:
+
+- `scripts/install-vantix.sh` and `scripts/update-vantix.sh` already install Playwright Chromium.
+- Manual installs must run `.venv/bin/python -m playwright install chromium` or browser assessment will stay in degraded mode.
 
 ## Verify
 

@@ -75,7 +75,11 @@ class ReportingService:
         observation_facts = [fact for fact in facts if fact.kind in {"port", "service", "route", "form", "cve", "intel", "browser-session"}]
         hypothesis_facts = [fact for fact in facts if fact.kind in {"vector", "attack_chain"}]
         validated_findings = [finding for finding in findings if str(finding.status or "").lower() in {"validated", "confirmed", "draft"}]
-        browser_artifacts = [art for art in artifacts if art.kind in {"browser-session-summary", "route-discovery", "form-map", "network-summary", "screenshot", "dom-snapshot"}]
+        browser_artifacts = [
+            art
+            for art in artifacts
+            if art.kind in {"browser-session-summary", "browser-auth-state", "browser-js-signals", "route-discovery", "form-map", "network-summary", "screenshot", "dom-snapshot"}
+        ]
         browser_summary: dict[str, Any] = {
             "enabled": bool(browser_artifacts),
             "pages_visited": 0,
@@ -84,9 +88,14 @@ class ReportingService:
             "authenticated": "not_attempted",
             "blocked_actions": [],
             "artifact_count": len(browser_artifacts),
+            "auth_transitions": [],
+            "dom_diffs": [],
+            "js_signals": [],
+            "route_hints": [],
+            "session_summary": {},
         }
         for art in browser_artifacts:
-            if art.kind not in {"browser-session-summary", "route-discovery", "form-map"}:
+            if art.kind not in {"browser-session-summary", "browser-auth-state", "browser-js-signals", "route-discovery", "form-map"}:
                 continue
             try:
                 payload = json.loads(Path(art.path).read_text(encoding="utf-8"))
@@ -96,6 +105,24 @@ class ReportingService:
                 browser_summary["pages_visited"] = int(payload.get("pages_visited") or 0)
                 browser_summary["authenticated"] = str(payload.get("authenticated") or "not_attempted")
                 browser_summary["blocked_actions"] = [str(item) for item in (payload.get("blocked_actions") or [])][:100]
+                browser_summary["session_summary"] = payload if isinstance(payload, dict) else {}
+            elif art.kind == "browser-auth-state":
+                browser_summary["auth_transitions"] = [item for item in (payload.get("auth_transitions") or []) if isinstance(item, dict)][:20]
+                browser_summary["dom_diffs"] = [item for item in (payload.get("dom_diffs") or []) if isinstance(item, dict)][:20]
+            elif art.kind == "browser-js-signals":
+                pages = [item for item in (payload.get("pages") or []) if isinstance(item, dict)][:40]
+                signals: list[dict[str, Any]] = []
+                hints: list[dict[str, Any]] = []
+                for item in pages:
+                    url = str(item.get("url") or "")
+                    for signal in item.get("js_signals") or []:
+                        if isinstance(signal, dict):
+                            signals.append({"url": url, **signal})
+                    for hint in item.get("route_hints") or []:
+                        if str(hint or "").strip():
+                            hints.append({"url": url, "hint": str(hint)})
+                browser_summary["js_signals"] = signals[:40]
+                browser_summary["route_hints"] = hints[:40]
             elif art.kind == "route-discovery":
                 edges = payload.get("edges") or []
                 routes = {str(item.get("to") or "") for item in edges if isinstance(item, dict) and str(item.get("to") or "")}
@@ -210,6 +237,28 @@ class ReportingService:
             md_lines.append(f"- Routes discovered: {browser_summary['routes_discovered']}")
             md_lines.append(f"- Forms discovered: {browser_summary['forms_discovered']}")
             md_lines.append(f"- Browser artifacts: {browser_summary['artifact_count']}")
+            if browser_summary["auth_transitions"]:
+                md_lines.append("- Auth/session transitions:")
+                for item in browser_summary["auth_transitions"][:8]:
+                    md_lines.append(
+                        f"  - {item.get('stage', 'state')} status={item.get('status', 'observed')} url={item.get('url', '(none)')}"
+                    )
+            if browser_summary["dom_diffs"]:
+                md_lines.append("- Browser state deltas:")
+                for item in browser_summary["dom_diffs"][:8]:
+                    md_lines.append(
+                        f"  - {item.get('stage', 'navigation')}: forms={item.get('form_delta', 0)} links={item.get('link_delta', 0)} cookies={item.get('cookie_delta', 0)}"
+                    )
+            if browser_summary["route_hints"]:
+                md_lines.append("- Hidden/privileged route hints:")
+                for item in browser_summary["route_hints"][:10]:
+                    md_lines.append(f"  - {item.get('hint', '(none)')} (page={item.get('url', '(unknown)')})")
+            if browser_summary["js_signals"]:
+                md_lines.append("- Client-side signals:")
+                for item in browser_summary["js_signals"][:10]:
+                    md_lines.append(
+                        f"  - {item.get('kind', 'signal')}: {item.get('signal', '')} (page={item.get('url', '(unknown)')})"
+                    )
             if browser_summary["blocked_actions"]:
                 md_lines.append("- Policy-gated browser actions:")
                 for item in browser_summary["blocked_actions"][:20]:

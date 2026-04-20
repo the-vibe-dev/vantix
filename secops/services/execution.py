@@ -51,6 +51,28 @@ ROLE_DISPLAY_NAMES = {
     "reporter": "Vantix Report",
 }
 
+TASK_METADATA = {
+    "context-bootstrap": ("Context Bootstrap", "Assemble workflow context, prompts, and normalized run state."),
+    "source-intake": ("Source Intake", "Resolve source input for white-box analysis."),
+    "source-analysis": ("Source Analysis", "Run source-level analysis and extract findings."),
+    "learning-recall": ("Knowledge Recall", "Load dense memory, learning hits, tool guidance, and prior cases."),
+    "recon-sidecar": ("Vantix Recon", "Collect low-noise service, port, and target facts."),
+    "browser-assessment": ("Browser Assessment", "Explore in-scope web application behavior and capture evidence."),
+    "cve-analysis": ("Vulnerability Research", "Query CVE, exploit, and vulnerability intelligence."),
+    "orchestrate": ("Orchestrator Planning", "Select next action and branch between validation, execution, or report."),
+    "learn-ingest": ("Execution Review", "Ingest execution evidence and learning artifacts."),
+    "report": ("Vantix Report", "Summarize evidence, findings, and operator-ready report output."),
+    "flow-initialization": ("Orchestrator", "Normalize target, objective, scope, and run state."),
+    "vantix-recon": ("Vantix Recon", "Collect low-noise service, port, and target facts."),
+    "knowledge-load": ("Knowledge Base", "Load dense memory, learning hits, tool guidance, and prior cases."),
+    "vector-store": ("Vector Store", "Rank similar cases and candidate attack patterns."),
+    "research": ("Researcher", "Query CVE, exploit, and vulnerability intelligence."),
+    "planning": ("Orchestrator Planning", "Select next action and branch between recon, development, execution, or report."),
+    "development": ("Developer", "Prepare validation helpers, payload notes, or exploit implementation guidance."),
+    "execution": ("Executor", "Run the selected vector through current execution controls."),
+    "reporting": ("Vantix Report", "Summarize evidence, artifacts, validated findings, and next steps."),
+}
+
 
 class PhaseBlockedError(Exception):
     pass
@@ -773,9 +795,26 @@ class ExecutionManager:
                     )
                 )
             route_values: list[str] = []
+            emitted_vectors: set[str] = set()
             for obs in result.observations:
                 route_values.append(obs.url)
-                db.add(Fact(run_id=run.id, source="browser-runtime", kind="route", value=obs.url, confidence=0.9, tags=["browser", "route"], metadata_json={"title": obs.title, "depth": obs.depth}))
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        source="browser-runtime",
+                        kind="route",
+                        value=obs.url,
+                        confidence=0.9,
+                        tags=["browser", "route"],
+                        metadata_json={
+                            "title": obs.title,
+                            "depth": obs.depth,
+                            "dom_summary": obs.dom_summary,
+                            "route_hints": obs.route_hints[:10],
+                            "js_signal_kinds": [str(item.get("kind") or "") for item in obs.js_signals[:10]],
+                        },
+                    )
+                )
                 if obs.forms:
                     db.add(
                         Fact(
@@ -789,33 +828,146 @@ class ExecutionManager:
                         )
                     )
                     if any(bool(form.get("auth_like")) for form in obs.forms):
+                        title = f"Auth boundary candidate at {obs.url}"
+                        if title not in emitted_vectors:
+                            emitted_vectors.add(title)
+                            vector = self._browser_vector(
+                                run_id=run.id,
+                                title=title,
+                                summary="Authentication-like form discovered; validate route guards and session transitions.",
+                                severity="medium",
+                                evidence=f"Route {obs.url} exposes auth-like form fields.",
+                                tags=["browser", "auth-boundary"],
+                                prerequisites=["authenticated session context"],
+                                noise_level="quiet",
+                                requires_approval=True,
+                            )
+                            db.add(vector)
+                if obs.storage_summary:
+                    db.add(
+                        Fact(
+                            run_id=run.id,
+                            source="browser-runtime",
+                            kind="browser-session",
+                            value=obs.url,
+                            confidence=0.7,
+                            tags=["browser", "session"],
+                            metadata_json=obs.storage_summary,
+                        )
+                    )
+                    if int(obs.storage_summary.get("local_storage_keys") or 0) > 0 or int(obs.storage_summary.get("session_storage_keys") or 0) > 0:
+                        title = f"Client-side session trust boundary candidate at {obs.url}"
+                        if title not in emitted_vectors:
+                            emitted_vectors.add(title)
+                            db.add(
+                                self._browser_vector(
+                                    run_id=run.id,
+                                    title=title,
+                                    summary="Client storage or session state is present; validate trust boundaries and authorization coupling.",
+                                    severity="medium",
+                                    evidence=f"Observed local/session storage state on {obs.url}: {obs.storage_summary}",
+                                    tags=["browser", "session-boundary"],
+                                    prerequisites=["session validation"],
+                                    noise_level="quiet",
+                                    requires_approval=True,
+                                )
+                            )
+                privileged_hints = [item for item in (obs.route_hints or []) if any(token in item.lower() for token in ("/admin", "/debug", "/manage", "/internal"))]
+                if privileged_hints or any("admin" in link.lower() or "debug" in link.lower() for link in obs.links):
+                    title = f"Hidden/admin surface candidate at {obs.url}"
+                    if title not in emitted_vectors:
+                        emitted_vectors.add(title)
                         vector = self._browser_vector(
                             run_id=run.id,
-                            title=f"Auth boundary candidate at {obs.url}",
-                            summary="Authentication-like form discovered; validate route guards and session transitions.",
-                            severity="medium",
-                            evidence=f"Route {obs.url} exposes auth-like form fields.",
-                            tags=["browser", "auth-boundary"],
-                            prerequisites=["authenticated session context"],
+                            title=title,
+                            summary="Discovered route links or inline route hints suggest privileged or debug surface exposure.",
+                            severity="high",
+                            evidence=f"Observed privileged route hints from {obs.url}: {(privileged_hints or obs.links)[:6]}",
+                            tags=["browser", "admin-surface"],
+                            prerequisites=["route validation"],
                             noise_level="quiet",
                             requires_approval=True,
                         )
                         db.add(vector)
-                if obs.storage_summary:
-                    db.add(Fact(run_id=run.id, source="browser-runtime", kind="browser-session", value=obs.url, confidence=0.7, tags=["browser", "session"], metadata_json=obs.storage_summary))
-                if any("admin" in link.lower() or "debug" in link.lower() for link in obs.links):
-                    vector = self._browser_vector(
-                        run_id=run.id,
-                        title=f"Hidden/admin surface candidate at {obs.url}",
-                        summary="Discovered route links suggest privileged or debug surface exposure.",
-                        severity="high",
-                        evidence=f"Observed links include admin/debug keywords from {obs.url}.",
-                        tags=["browser", "admin-surface"],
-                        prerequisites=["route validation"],
-                        noise_level="quiet",
-                        requires_approval=True,
+                for hint in (obs.route_hints or [])[:20]:
+                    db.add(
+                        Fact(
+                            run_id=run.id,
+                            source="browser-runtime",
+                            kind="browser-route-hint",
+                            value=hint,
+                            confidence=0.7,
+                            tags=["browser", "route-hint"],
+                            metadata_json={"page": obs.url, "title": obs.title},
+                        )
                     )
-                    db.add(vector)
+                for signal in (obs.js_signals or [])[:20]:
+                    signal_kind = str(signal.get("kind") or "unknown")
+                    signal_text = str(signal.get("signal") or "").strip()
+                    if not signal_text:
+                        continue
+                    db.add(
+                        Fact(
+                            run_id=run.id,
+                            source="browser-runtime",
+                            kind="js-signal",
+                            value=f"{signal_kind}: {signal_text[:180]}",
+                            confidence=0.68,
+                            tags=["browser", "js-signal", signal_kind],
+                            metadata_json={"page": obs.url, "kind": signal_kind, "signal": signal_text[:180]},
+                        )
+                    )
+                    if signal_kind in {"app-config", "debug-signal"}:
+                        title = f"Client trust boundary candidate at {obs.url}"
+                        if title not in emitted_vectors:
+                            emitted_vectors.add(title)
+                            db.add(
+                                self._browser_vector(
+                                    run_id=run.id,
+                                    title=title,
+                                    summary="Client-side configuration or debug signal may expose internal trust assumptions or sensitive behavior.",
+                                    severity="medium",
+                                    evidence=f"Observed {signal_kind} signal on {obs.url}: {signal_text[:180]}",
+                                    tags=["browser", "client-trust"],
+                                    prerequisites=["configuration review", "bounded validation"],
+                                    noise_level="quiet",
+                                    requires_approval=True,
+                                )
+                            )
+
+            if result.auth_transitions:
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        source="browser-runtime",
+                        kind="browser-auth-transition",
+                        value=result.authenticated,
+                        confidence=0.8,
+                        tags=["browser", "auth-state"],
+                        metadata_json={
+                            "transitions": result.auth_transitions[:10],
+                            "dom_diffs": result.dom_diffs[:10],
+                            "session_summary": result.session_summary,
+                        },
+                    )
+                )
+                if result.authenticated == "partial":
+                    title = "Insecure state transition candidate"
+                    if title not in emitted_vectors:
+                        emitted_vectors.add(title)
+                        db.add(
+                            self._browser_vector(
+                                run_id=run.id,
+                                title=title,
+                                summary="Authentication flow produced a partial session state; validate route guards, state transitions, and logout/login boundaries.",
+                                severity="medium",
+                                evidence=f"Browser auth transitions ended in partial state with {len(result.dom_diffs)} captured deltas.",
+                                tags=["browser", "state-transition"],
+                                prerequisites=["auth flow review"],
+                                noise_level="quiet",
+                                requires_approval=True,
+                            )
+                        )
 
             for endpoint in result.network_summary.get("endpoints", [])[:80]:
                 value = str(endpoint.get("endpoint") or "").strip()
@@ -833,18 +985,21 @@ class ExecutionManager:
                     )
                 )
             if result.network_summary.get("endpoints"):
-                vector = self._browser_vector(
-                    run_id=run.id,
-                    title="Client-side/API mismatch candidate",
-                    summary="Browser-captured endpoints indicate API surface requiring authorization and trust-boundary validation.",
-                    severity="medium",
-                    evidence=f"Observed {len(result.network_summary.get('endpoints') or [])} API endpoint patterns in browser network capture.",
-                    tags=["browser", "api-surface"],
-                    prerequisites=["api authorization checks"],
-                    noise_level="quiet",
-                    requires_approval=True,
-                )
-                db.add(vector)
+                title = "Client-side/API mismatch candidate"
+                if title not in emitted_vectors:
+                    emitted_vectors.add(title)
+                    vector = self._browser_vector(
+                        run_id=run.id,
+                        title=title,
+                        summary="Browser-captured endpoints indicate API surface requiring authorization and trust-boundary validation.",
+                        severity="medium",
+                        evidence=f"Observed {len(result.network_summary.get('endpoints') or [])} API endpoint patterns in browser network capture.",
+                        tags=["browser", "api-surface"],
+                        prerequisites=["api authorization checks"],
+                        noise_level="quiet",
+                        requires_approval=True,
+                    )
+                    db.add(vector)
 
             if route_values:
                 chain_payload = {
@@ -883,6 +1038,8 @@ class ExecutionManager:
                 "routes": len(route_values),
                 "network_requests": int(result.network_summary.get("total_requests") or 0),
                 "blocked_actions": result.blocked_actions,
+                "auth_transitions": len(result.auth_transitions),
+                "dom_diffs": len(result.dom_diffs),
             }
             self._set_vantix_task_status(
                 db,
@@ -1302,7 +1459,17 @@ class ExecutionManager:
                 )
             )
             db.add(Artifact(run_id=run.id, kind="report-json", path=str(generated["json_path"]), metadata_json={}))
-            self.events.emit(db, run.id, "phase", "Report generated")
+            self.events.emit(
+                db,
+                run.id,
+                "phase",
+                "Report generated",
+                payload={
+                    "phase": "report",
+                    "report_path": generated["markdown_path"],
+                    "report_json_path": generated["json_path"],
+                },
+            )
             db.add(
                 RunMessage(
                     run_id=run.id,
@@ -1376,10 +1543,14 @@ class ExecutionManager:
         if task is not None:
             return task
         sequence = (db.query(Task).filter(Task.run_id == run_id).count() or 0) + 1
+        task_name, task_description = TASK_METADATA.get(
+            kind,
+            (kind.replace("-", " ").title(), f"Auto-created task for {kind}"),
+        )
         task = Task(
             run_id=run_id,
-            name=kind.replace("-", " ").title(),
-            description=f"Auto-created task for {kind}",
+            name=task_name,
+            description=task_description,
             kind=kind,
             status="pending",
             sequence=sequence,
@@ -1396,7 +1567,7 @@ class ExecutionManager:
             .first()
         )
         if row is None:
-            return
+            row = self._task_by_kind(db, run_id, kind)
         row.status = status
         if result:
             row.result_json = {**(row.result_json or {}), **result}

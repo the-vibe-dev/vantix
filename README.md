@@ -1,6 +1,6 @@
 # VANTIX
 
-Vantix is a chat-first control plane for authorized offensive security operations. It combines durable run orchestration, specialist agents, policy gates, approvals, evidence capture, and reporting in one local-first platform.
+Vantix is the control plane for autonomous security testing agents. It combines durable run orchestration, specialist agents, browser/runtime evidence, policy gates, approvals, and reporting in one local-first operator console.
 
 ## Quick Start
 
@@ -42,6 +42,9 @@ Manual setup and update workflow are in [Getting Started](docs/getting-started.m
 - [Workflow Engine](docs/workflow-engine.md)
 - [API](docs/api.md)
 - [Security and Safety](docs/security-and-safety.md)
+- [Capability Matrix](docs/capability-matrix.md)
+- [Browser Agent](docs/browser_agent.md)
+- [Browser Policies](docs/browser_policies.md)
 
 ## Authorized Use Only
 

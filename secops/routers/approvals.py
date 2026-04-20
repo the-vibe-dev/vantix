@@ -96,7 +96,7 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
             approval.run_id,
             "approval",
             f"Approval granted: {approval.title}",
-            payload={"approval_id": approval.id, "reason": approval.reason},
+            payload={"approval_id": approval.id, "reason": approval.reason, "status": "approved"},
         )
     db.commit()
     db.refresh(approval)
@@ -134,7 +134,7 @@ def reject(approval_id: str, payload: ApprovalDecision, db: Session = Depends(ge
             "approval",
             f"Approval rejected: {approval.title}",
             level="warning",
-            payload={"approval_id": approval.id, "reason": approval.reason},
+            payload={"approval_id": approval.id, "reason": approval.reason, "status": "rejected"},
         )
     db.commit()
     db.refresh(approval)

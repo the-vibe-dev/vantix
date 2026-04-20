@@ -37,6 +37,13 @@ SPECIALIST_TASKS = [
     ("reporting", "Vantix Report", "Summarize evidence, artifacts, validated findings, and next steps."),
 ]
 
+INITIAL_TASKS = [
+    ("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."),
+    ("source-intake", "Source Intake", "Resolve source input for white-box analysis."),
+    ("source-analysis", "Source Analysis", "Run source-level analysis and extract findings."),
+    ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts."),
+]
+
 ROLE_NAMES = {
     "orchestrator": "Orchestrator",
     "recon": "Vantix Recon",
@@ -61,8 +68,8 @@ class VantixScheduler:
     def bootstrap(self, db: Session, run: WorkspaceRun, *, reason: str = "chat") -> str:
         scan_profile = str((run.config_json or {}).get("scan_profile", "full")).lower()
         quick_scan = scan_profile == "quick"
-        self._seed_tasks(db, run, quick_scan=quick_scan)
-        self._seed_agents(db, run, quick_scan=quick_scan)
+        self._seed_tasks(db, run, initial_only=True)
+        self._seed_agents(db, run, initial_only=True)
         self._seed_initial_vector(db, run)
         self._set_agent_states(db, run, current_role="recon")
         self.phases.initialize(run, reason=reason)
@@ -81,8 +88,8 @@ class VantixScheduler:
         return "scheduler-initialized"
 
     def replan(self, db: Session, run: WorkspaceRun, *, reason: str = "chat-guidance") -> str:
-        self._seed_tasks(db, run)
-        self._seed_agents(db, run)
+        self._seed_tasks(db, run, initial_only=True)
+        self._seed_agents(db, run, initial_only=True)
         self._seed_initial_vector(db, run)
         target_phase = "development" if reason == "vector-selected" else "planning"
         active_role = "developer" if reason == "vector-selected" else "orchestrator"
@@ -96,8 +103,8 @@ class VantixScheduler:
         return "replan-queued"
 
     def expand_after_quick_scan_approval(self, db: Session, run: WorkspaceRun) -> str:
-        self._seed_tasks(db, run, quick_scan=False)
-        self._seed_agents(db, run, quick_scan=False)
+        self._seed_tasks(db, run, initial_only=True)
+        self._seed_agents(db, run, initial_only=True)
         self.skills.apply_to_run(db, run)
         self.events.emit(
             db,
@@ -108,20 +115,11 @@ class VantixScheduler:
         )
         return "quick-scan-expanded"
 
-    def _seed_tasks(self, db: Session, run: WorkspaceRun, *, quick_scan: bool = False) -> None:
+    def _seed_tasks(self, db: Session, run: WorkspaceRun, *, initial_only: bool = False) -> None:
         existing = {task.kind: task for task in db.execute(select(Task).where(Task.run_id == run.id)).scalars().all()}
         max_sequence = max((task.sequence for task in existing.values()), default=0)
         next_sequence = max_sequence + 1
-        task_list = (
-            [
-                ("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."),
-                ("source-intake", "Source Intake", "Resolve source input for white-box analysis."),
-                ("source-analysis", "Source Analysis", "Run source-level analysis and extract findings."),
-                ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts."),
-            ]
-            if quick_scan
-            else SPECIALIST_TASKS
-        )
+        task_list = INITIAL_TASKS if initial_only else SPECIALIST_TASKS
         for kind, name, description in task_list:
             if kind in existing:
                 continue
@@ -139,10 +137,10 @@ class VantixScheduler:
             db.add(Action(task_id=task.id, name=f"{name} work item", tool="vantix-scheduler", command="scheduler", status="planned"))
             next_sequence += 1
 
-    def _seed_agents(self, db: Session, run: WorkspaceRun, *, quick_scan: bool = False) -> None:
+    def _seed_agents(self, db: Session, run: WorkspaceRun, *, initial_only: bool = False) -> None:
         paths = self.storage.for_workspace(run.workspace_id)
         existing = {agent.role for agent in db.execute(select(AgentSession).where(AgentSession.run_id == run.id)).scalars().all()}
-        roles = ["orchestrator", "recon"] if quick_scan else list(ROLE_NAMES.keys())
+        roles = ["orchestrator", "recon"] if initial_only else list(ROLE_NAMES.keys())
         for role in roles:
             name = ROLE_NAMES[role]
             if role in existing:
@@ -176,8 +174,8 @@ class VantixScheduler:
                 "You can continue with researcher/developer/executor/report flow after recon completes."
             )
         return (
-            f"Vantix initialized from {reason}. Target `{run.target}` is queued for Recon, Browser Assessment, Knowledge Base, "
-            "Vector Store, Researcher, Developer, Executor, and Report specialist flow."
+            f"Vantix initialized from {reason}. Target `{run.target}` is queued for phased specialist workflow. "
+            "Recon and orchestration start immediately; browser, research, developer, executor, and report roles activate as the workflow reaches them."
         )
 
     def _message(self, db: Session, run_id: str, role: str, author: str, content: str, metadata: dict[str, Any] | None = None) -> RunMessage:

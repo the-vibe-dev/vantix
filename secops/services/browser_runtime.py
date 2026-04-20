@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -69,6 +69,9 @@ class BrowserAuthConfig:
     username_selector: str = "input[name='username']"
     password_selector: str = "input[type='password']"
     submit_selector: str = "button[type='submit']"
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    session_cookies: list[dict[str, Any]] = field(default_factory=list)
+    role_label: str = ""
 
 
 @dataclass(slots=True)
@@ -80,6 +83,9 @@ class BrowserObservation:
     forms: list[dict[str, Any]]
     storage_summary: dict[str, Any]
     scripts: list[str]
+    dom_summary: dict[str, Any]
+    route_hints: list[str]
+    js_signals: list[dict[str, Any]]
 
 
 @dataclass(slots=True)
@@ -94,6 +100,9 @@ class BrowserAssessmentResult:
     route_graph: list[dict[str, Any]]
     blocked_actions: list[str]
     artifacts: list[dict[str, str]]
+    auth_transitions: list[dict[str, Any]]
+    dom_diffs: list[dict[str, Any]]
+    session_summary: dict[str, Any]
 
 
 class BrowserRuntimeService:
@@ -128,6 +137,9 @@ class BrowserRuntimeService:
             username_selector=str(auth.get("username_selector") or "input[name='username']"),
             password_selector=str(auth.get("password_selector") or "input[type='password']"),
             submit_selector=str(auth.get("submit_selector") or "button[type='submit']"),
+            steps=[dict(item) for item in (auth.get("steps") or auth.get("auth_steps") or []) if isinstance(item, dict)],
+            session_cookies=[dict(item) for item in (auth.get("session_cookies") or auth.get("cookies") or []) if isinstance(item, dict)],
+            role_label=str(auth.get("role_label") or ""),
         )
 
     def _is_allowed_url(self, url: str, policy: BrowserPolicy) -> bool:
@@ -197,6 +209,142 @@ class BrowserRuntimeService:
             scripts.append(match.strip())
         return scripts[:50]
 
+    def _extract_js_signals(self, html: str) -> list[dict[str, Any]]:
+        body = html or ""
+        patterns: list[tuple[str, str]] = [
+            ("spa-framework", r"__NEXT_DATA__|__NUXT__|ReactDOM|vue-router|react-router|angular"),
+            ("app-config", r"__APP_CONFIG__|__INITIAL_STATE__|window\.config|apiBaseUrl|baseApiUrl"),
+            ("graphql-surface", r"/graphql|GraphQL"),
+            ("debug-signal", r"debug\s*=\s*true|DEBUG|developer mode|sourceMappingURL"),
+            ("feature-flags", r"featureFlag|launchDarkly|growthbook|optimizely"),
+        ]
+        signals: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for kind, pattern in patterns:
+            for match in re.finditer(pattern, body, flags=re.IGNORECASE):
+                snippet = body[max(0, match.start() - 24) : min(len(body), match.end() + 48)].strip()
+                normalized = re.sub(r"\s+", " ", snippet)[:180]
+                key = (kind, normalized.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                signals.append({"kind": kind, "signal": normalized})
+                if len(signals) >= 30:
+                    return signals
+        return signals
+
+    def _extract_route_hints(self, html: str, current_url: str) -> list[str]:
+        hints: list[str] = []
+        candidates = re.findall(r"""["']((?:/|https?://)[^"'?#]{1,180})["']""", html or "", flags=re.IGNORECASE)
+        for match in candidates:
+            normalized = _normalize_url(urljoin(current_url, match))
+            if not normalized:
+                continue
+            lower = normalized.lower()
+            if any(token in lower for token in ("/admin", "/debug", "/manage", "/internal", "/graphql", "/swagger", "/openapi")):
+                hints.append(normalized)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in hints:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped[:40]
+
+    def _summarize_dom(self, html: str, forms: list[dict[str, Any]], links: list[str]) -> dict[str, Any]:
+        password_fields = 0
+        hidden_inputs = 0
+        for form in forms:
+            for field in form.get("fields") or []:
+                field_type = str((field or {}).get("type") or "").lower()
+                if field_type == "password":
+                    password_fields += 1
+                if field_type == "hidden":
+                    hidden_inputs += 1
+        return {
+            "link_count": len(links),
+            "form_count": len(forms),
+            "password_field_count": password_fields,
+            "hidden_input_count": hidden_inputs,
+            "script_tag_count": len(re.findall(r"<script\b", html or "", flags=re.IGNORECASE)),
+        }
+
+    def _collect_storage_summary(self, context: Any, page: Any) -> dict[str, Any]:
+        try:
+            cookies = context.cookies()
+            ls_count = page.evaluate("() => Object.keys(window.localStorage || {}).length")
+            ss_count = page.evaluate("() => Object.keys(window.sessionStorage || {}).length")
+            return {
+                "cookie_count": len(cookies),
+                "local_storage_keys": int(ls_count),
+                "session_storage_keys": int(ss_count),
+                "has_http_only_cookie": any(bool(item.get("httpOnly")) for item in cookies),
+                "secure_cookie_count": sum(1 for item in cookies if bool(item.get("secure"))),
+            }
+        except Exception:  # noqa: BLE001
+            return {"error": "storage-inspection-failed"}
+
+    def _page_snapshot(self, *, page: Any, context: Any, html: str, depth: int) -> dict[str, Any]:
+        current_url = page.url
+        forms = self._extract_forms(html)
+        links = self._extract_links(html, current_url)
+        scripts = self._extract_scripts(html)
+        storage_summary = self._collect_storage_summary(context, page)
+        js_signals = self._extract_js_signals(html)
+        route_hints = self._extract_route_hints(html, current_url)
+        dom_summary = self._summarize_dom(html, forms, links)
+        return {
+            "url": current_url,
+            "title": page.title() or "",
+            "depth": depth,
+            "forms": forms[:60],
+            "links": links[:200],
+            "scripts": scripts,
+            "storage_summary": storage_summary,
+            "js_signals": js_signals,
+            "route_hints": route_hints,
+            "dom_summary": dom_summary,
+        }
+
+    def _dom_diff(self, before: dict[str, Any], after: dict[str, Any], stage: str) -> dict[str, Any]:
+        before_dom = dict(before.get("dom_summary") or {})
+        after_dom = dict(after.get("dom_summary") or {})
+        before_storage = dict(before.get("storage_summary") or {})
+        after_storage = dict(after.get("storage_summary") or {})
+        return {
+            "stage": stage,
+            "from_url": str(before.get("url") or ""),
+            "to_url": str(after.get("url") or ""),
+            "title_changed": str(before.get("title") or "") != str(after.get("title") or ""),
+            "navigated": str(before.get("url") or "") != str(after.get("url") or ""),
+            "form_delta": int(after_dom.get("form_count") or 0) - int(before_dom.get("form_count") or 0),
+            "password_field_delta": int(after_dom.get("password_field_count") or 0) - int(before_dom.get("password_field_count") or 0),
+            "link_delta": int(after_dom.get("link_count") or 0) - int(before_dom.get("link_count") or 0),
+            "local_storage_delta": int(after_storage.get("local_storage_keys") or 0) - int(before_storage.get("local_storage_keys") or 0),
+            "session_storage_delta": int(after_storage.get("session_storage_keys") or 0) - int(before_storage.get("session_storage_keys") or 0),
+            "cookie_delta": int(after_storage.get("cookie_count") or 0) - int(before_storage.get("cookie_count") or 0),
+            "auth_like_form_removed": int(before_dom.get("password_field_count") or 0) > 0 and int(after_dom.get("password_field_count") or 0) == 0,
+        }
+
+    def _resolve_auth_value(self, value: Any, auth_cfg: BrowserAuthConfig) -> str:
+        raw = str(value or "")
+        return (
+            raw.replace("${username}", auth_cfg.username)
+            .replace("${password}", auth_cfg.password)
+            .replace("${login_url}", auth_cfg.login_url)
+        )
+
+    def _normalize_cookie(self, item: dict[str, Any], fallback_url: str) -> dict[str, Any] | None:
+        cookie = {key: value for key, value in item.items() if key in {"name", "value", "url", "domain", "path", "httpOnly", "secure", "sameSite", "expires"}}
+        if not str(cookie.get("name") or "").strip():
+            return None
+        if "url" not in cookie and "domain" not in cookie and fallback_url:
+            cookie["url"] = fallback_url
+        if "path" not in cookie:
+            cookie["path"] = "/"
+        return cookie
+
     def assess(self, *, run_id: str, workspace_root: Path, target: str, run_config: dict[str, Any]) -> BrowserAssessmentResult:
         started_at = _utc_now()
         entry_url = _normalize_url((run_config.get("browser") or {}).get("entry_url") or target)
@@ -207,8 +355,11 @@ class BrowserRuntimeService:
         route_graph: list[dict[str, Any]] = []
         network_rows: list[dict[str, Any]] = []
         artifacts: list[dict[str, str]] = []
+        auth_transitions: list[dict[str, Any]] = []
+        dom_diffs: list[dict[str, Any]] = []
         current_url = entry_url
         auth_state = "not_attempted"
+        session_summary: dict[str, Any] = {}
 
         browser_root = workspace_root / "artifacts" / "browser"
         browser_root.mkdir(parents=True, exist_ok=True)
@@ -227,6 +378,9 @@ class BrowserRuntimeService:
                 route_graph=[],
                 blocked_actions=blocked_actions,
                 artifacts=[],
+                auth_transitions=[],
+                dom_diffs=[],
+                session_summary={"run_id": run_id, "authenticated": "failed"},
             )
         if not self._is_allowed_url(entry_url, policy):
             blocked_actions.append("entry-url-not-allowed-by-browser-policy")
@@ -242,6 +396,9 @@ class BrowserRuntimeService:
                 route_graph=[],
                 blocked_actions=blocked_actions,
                 artifacts=[],
+                auth_transitions=[],
+                dom_diffs=[],
+                session_summary={"run_id": run_id, "authenticated": "failed"},
             )
 
         try:
@@ -270,6 +427,9 @@ class BrowserRuntimeService:
                 route_graph=[],
                 blocked_actions=blocked_actions,
                 artifacts=artifacts,
+                auth_transitions=[],
+                dom_diffs=[],
+                session_summary={"run_id": run_id, "authenticated": "failed", "blocked_actions": blocked_actions},
             )
 
         with sync_playwright() as p:  # type: ignore[name-defined]
@@ -300,21 +460,94 @@ class BrowserRuntimeService:
 
             page.on("request", _record_request)
 
-            if policy.allow_auth and auth_cfg.login_url and auth_cfg.username and auth_cfg.password:
-                if self._is_allowed_url(auth_cfg.login_url, policy):
+            if policy.allow_auth and (auth_cfg.login_url or auth_cfg.steps or auth_cfg.session_cookies):
+                auth_url = _normalize_url(auth_cfg.login_url or entry_url)
+                if auth_url and self._is_allowed_url(auth_url, policy):
                     try:
-                        page.goto(auth_cfg.login_url, wait_until="domcontentloaded", timeout=15000)
-                        page.fill(auth_cfg.username_selector, auth_cfg.username)
-                        page.fill(auth_cfg.password_selector, auth_cfg.password)
-                        if policy.allow_form_submission:
-                            page.click(auth_cfg.submit_selector)
-                            page.wait_for_timeout(1200)
-                            auth_state = "success" if page.url != auth_cfg.login_url else "partial"
-                        else:
-                            blocked_actions.append("auth-submit-blocked-by-policy")
-                            auth_state = "partial"
-                    except Exception:  # noqa: BLE001
+                        applied_cookies = 0
+                        for item in auth_cfg.session_cookies:
+                            cookie = self._normalize_cookie(item, auth_url)
+                            if cookie is None:
+                                continue
+                            context.add_cookies([cookie])
+                            applied_cookies += 1
+                        if applied_cookies:
+                            auth_transitions.append(
+                                {
+                                    "stage": "cookie-import",
+                                    "status": "applied",
+                                    "cookie_count": applied_cookies,
+                                    "role_label": auth_cfg.role_label,
+                                }
+                            )
+                        page.goto(auth_url, wait_until="domcontentloaded", timeout=15000)
+                        pre_html = page.content()
+                        pre_auth = self._page_snapshot(page=page, context=context, html=pre_html, depth=0)
+                        auth_transitions.append(
+                            {
+                                "stage": "pre-auth",
+                                "status": "observed",
+                                "url": pre_auth["url"],
+                                "title": pre_auth["title"],
+                                "storage_summary": pre_auth["storage_summary"],
+                            }
+                        )
+                        if auth_cfg.steps:
+                            for step in auth_cfg.steps[:20]:
+                                action = str(step.get("action") or "").strip().lower()
+                                if action == "goto":
+                                    goto_url = _normalize_url(self._resolve_auth_value(step.get("url"), auth_cfg))
+                                    if goto_url and self._is_allowed_url(goto_url, policy):
+                                        page.goto(goto_url, wait_until="domcontentloaded", timeout=15000)
+                                elif action == "fill":
+                                    selector = str(step.get("selector") or "").strip()
+                                    if selector:
+                                        page.fill(selector, self._resolve_auth_value(step.get("value"), auth_cfg))
+                                elif action in {"click", "submit", "press"}:
+                                    if not policy.allow_form_submission:
+                                        blocked_actions.append("auth-submit-blocked-by-policy")
+                                        auth_state = "partial"
+                                        continue
+                                    selector = str(step.get("selector") or "").strip()
+                                    if action == "press":
+                                        page.press(selector, str(step.get("key") or "Enter"))
+                                    elif selector:
+                                        page.click(selector)
+                                elif action == "wait":
+                                    page.wait_for_timeout(max(0, min(int(step.get("ms") or 800), 10000)))
+                        elif auth_cfg.username and auth_cfg.password:
+                            page.fill(auth_cfg.username_selector, auth_cfg.username)
+                            page.fill(auth_cfg.password_selector, auth_cfg.password)
+                            if policy.allow_form_submission:
+                                page.click(auth_cfg.submit_selector)
+                            else:
+                                blocked_actions.append("auth-submit-blocked-by-policy")
+                                auth_state = "partial"
+                        page.wait_for_timeout(1200)
+                        post_html = page.content()
+                        post_auth = self._page_snapshot(page=page, context=context, html=post_html, depth=0)
+                        diff = self._dom_diff(pre_auth, post_auth, "auth-transition")
+                        dom_diffs.append(diff)
+                        auth_state = auth_state or "not_attempted"
+                        if auth_state != "partial":
+                            auth_state = (
+                                "success"
+                                if diff["navigated"] or diff["auth_like_form_removed"] or int(post_auth["storage_summary"].get("cookie_count") or 0) > int(pre_auth["storage_summary"].get("cookie_count") or 0)
+                                else "partial"
+                            )
+                        auth_transitions.append(
+                            {
+                                "stage": "post-auth",
+                                "status": auth_state,
+                                "url": post_auth["url"],
+                                "title": post_auth["title"],
+                                "storage_summary": post_auth["storage_summary"],
+                                "dom_diff": diff,
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
                         auth_state = "failed"
+                        auth_transitions.append({"stage": "post-auth", "status": "failed", "detail": str(exc)[:200]})
                 else:
                     blocked_actions.append("auth-login-url-not-allowed")
 
@@ -339,32 +572,31 @@ class BrowserRuntimeService:
                 visited.add(normalized)
                 current_url = page.url
                 html = page.content()
-                links = self._extract_links(html, current_url)
-                forms = self._extract_forms(html)
-                scripts = self._extract_scripts(html)
-                storage_summary: dict[str, Any] = {}
-                if policy.capture_storage:
-                    try:
-                        cookies = context.cookies()
-                        ls_count = page.evaluate("() => Object.keys(window.localStorage || {}).length")
-                        ss_count = page.evaluate("() => Object.keys(window.sessionStorage || {}).length")
-                        storage_summary = {
-                            "cookie_count": len(cookies),
-                            "local_storage_keys": int(ls_count),
-                            "session_storage_keys": int(ss_count),
-                            "has_http_only_cookie": any(bool(item.get("httpOnly")) for item in cookies),
-                        }
-                    except Exception:  # noqa: BLE001
-                        storage_summary = {"error": "storage-inspection-failed"}
-
+                snapshot = self._page_snapshot(page=page, context=context, html=html, depth=depth)
+                links = list(snapshot["links"])
+                forms = list(snapshot["forms"])
+                scripts = list(snapshot["scripts"])
+                storage_summary = dict(snapshot["storage_summary"]) if policy.capture_storage else {}
+                if observations:
+                    previous = observations[-1]
+                    prior_snapshot = {
+                        "url": previous.url,
+                        "title": previous.title,
+                        "dom_summary": previous.dom_summary,
+                        "storage_summary": previous.storage_summary,
+                    }
+                    dom_diffs.append(self._dom_diff(prior_snapshot, snapshot, "navigation"))
                 obs = BrowserObservation(
                     url=current_url,
-                    title=page.title() or "",
+                    title=str(snapshot["title"] or ""),
                     depth=depth,
                     links=links[:200],
                     forms=forms[:60],
                     storage_summary=storage_summary,
                     scripts=scripts,
+                    dom_summary=dict(snapshot["dom_summary"] or {}),
+                    route_hints=list(snapshot["route_hints"] or []),
+                    js_signals=list(snapshot["js_signals"] or []),
                 )
                 observations.append(obs)
                 route_nodes.setdefault(current_url, {"url": current_url, "depth": depth, "parents": set(), "children": set()})
@@ -386,6 +618,9 @@ class BrowserRuntimeService:
                     "links": obs.links[:200],
                     "scripts": obs.scripts,
                     "storage_summary": obs.storage_summary,
+                    "dom_summary": obs.dom_summary,
+                    "route_hints": obs.route_hints,
+                    "js_signals": obs.js_signals,
                     "captured_at": _utc_now(),
                 }
                 dom_path.write_text(json.dumps(dom_payload, indent=2), encoding="utf-8")
@@ -451,13 +686,50 @@ class BrowserRuntimeService:
         net_path = browser_root / "network-summary.json"
         net_path.write_text(json.dumps(net_summary, indent=2), encoding="utf-8")
         artifacts.append({"kind": "network-summary", "path": str(net_path)})
+        auth_state_path = browser_root / "browser-auth-state.json"
+        auth_state_path.write_text(
+            json.dumps({"auth_transitions": auth_transitions, "dom_diffs": dom_diffs, "captured_at": _utc_now()}, indent=2),
+            encoding="utf-8",
+        )
+        artifacts.append({"kind": "browser-auth-state", "path": str(auth_state_path)})
+        signal_path = browser_root / "browser-js-signals.json"
+        signal_path.write_text(
+            json.dumps(
+                {
+                    "pages": [
+                        {"url": obs.url, "js_signals": obs.js_signals, "route_hints": obs.route_hints, "dom_summary": obs.dom_summary}
+                        for obs in observations
+                    ],
+                    "captured_at": _utc_now(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        artifacts.append({"kind": "browser-js-signals", "path": str(signal_path)})
         sess_path = browser_root / "browser-session-summary.json"
-        sess_payload = {
+        final_storage = observations[-1].storage_summary if observations else {}
+        session_summary = {
+            "run_id": run_id,
             "entry_url": entry_url,
             "current_url": current_url,
             "authenticated": auth_state,
             "pages_visited": len(observations),
             "blocked_actions": blocked_actions,
+            "auth_transition_count": len(auth_transitions),
+            "dom_diff_count": len(dom_diffs),
+            "role_label": auth_cfg.role_label,
+            "final_storage_summary": final_storage,
+            "policy": {
+                "allow_auth": policy.allow_auth,
+                "allow_form_submission": policy.allow_form_submission,
+                "allow_sensitive_routes": policy.allow_sensitive_routes,
+                "max_depth": policy.max_depth,
+                "max_pages": policy.max_pages,
+            },
+        }
+        sess_payload = {
+            **session_summary,
             "captured_at": _utc_now(),
         }
         sess_path.write_text(json.dumps(sess_payload, indent=2), encoding="utf-8")
@@ -474,4 +746,7 @@ class BrowserRuntimeService:
             route_graph=route_graph,
             blocked_actions=blocked_actions,
             artifacts=artifacts,
+            auth_transitions=auth_transitions,
+            dom_diffs=dom_diffs,
+            session_summary=session_summary,
         )

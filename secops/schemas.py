@@ -487,6 +487,11 @@ class BrowserStateRead(BaseModel):
     network_summary: dict[str, Any] = Field(default_factory=dict)
     route_edges: list[dict[str, Any]] = Field(default_factory=list)
     forms: list[dict[str, Any]] = Field(default_factory=list)
+    session_summary: dict[str, Any] = Field(default_factory=dict)
+    auth_transitions: list[dict[str, Any]] = Field(default_factory=list)
+    dom_diffs: list[dict[str, Any]] = Field(default_factory=list)
+    js_signals: list[dict[str, Any]] = Field(default_factory=list)
+    route_hints: list[dict[str, Any]] = Field(default_factory=list)
     screenshots: list[str] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -587,6 +592,16 @@ class PlanningBundleRead(BaseModel):
     best_chains: list[AttackChainRead]
     ranking_rationale: list[dict[str, Any]]
     missing_evidence: list[str]
+
+
+class ReplayStateRead(BaseModel):
+    run_id: str
+    status: str
+    phase_history: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[RunEventRead] = Field(default_factory=list)
+    report_path: str = ""
+    report_json_path: str = ""
+    summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class FindingPromotionCreate(BaseModel):

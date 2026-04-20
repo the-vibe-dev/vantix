@@ -57,6 +57,21 @@ def test_browser_runtime_parsers_and_safety_helpers() -> None:
     assert cleaned["Authorization"] == "[REDACTED]"
     assert cleaned["x-test"] == "ok"
     assert runtime._is_sensitive_route("http://127.0.0.1:8080/admin")
+    signals = runtime._extract_js_signals("<script>window.__APP_CONFIG__={apiBaseUrl:'/api'}; //# sourceMappingURL=app.js.map</script>")
+    assert any(item["kind"] == "app-config" for item in signals)
+    hints = runtime._extract_route_hints("<script>const routes=['/admin','/graphql'];</script>", "http://127.0.0.1:8080")
+    assert any(item.endswith("/admin") for item in hints)
+    auth_cfg = runtime._auth_config(
+        {
+            "browser_auth": {
+                "login_url": "http://127.0.0.1:8080/login",
+                "steps": [{"action": "fill", "selector": "#u", "value": "${username}"}],
+                "session_cookies": [{"name": "sid", "value": "abc"}],
+            }
+        }
+    )
+    assert auth_cfg.steps[0]["selector"] == "#u"
+    assert auth_cfg.session_cookies[0]["name"] == "sid"
 
 
 def test_browser_phase_generates_facts_vectors_and_artifacts() -> None:
@@ -105,6 +120,9 @@ def test_browser_phase_generates_facts_vectors_and_artifacts() -> None:
                     forms=[{"id": "f1", "auth_like": True, "fields": [{"name": "password", "type": "password"}]}],
                     storage_summary={"cookie_count": 1},
                     scripts=["/assets/app.js"],
+                    dom_summary={"form_count": 1, "link_count": 1, "password_field_count": 1},
+                    route_hints=["http://127.0.0.1:8080/admin"],
+                    js_signals=[{"kind": "app-config", "signal": "window.__APP_CONFIG__"}],
                 )
             ],
             network_summary={"total_requests": 12, "endpoints": [{"endpoint": "GET /api/users", "count": 3}]},
@@ -118,6 +136,9 @@ def test_browser_phase_generates_facts_vectors_and_artifacts() -> None:
                 {"kind": "dom-snapshot", "path": str(dom_path)},
                 {"kind": "screenshot", "path": str(png_path)},
             ],
+            auth_transitions=[{"stage": "pre-auth", "status": "observed"}, {"stage": "post-auth", "status": "partial"}],
+            dom_diffs=[{"stage": "auth-transition", "form_delta": -1, "cookie_delta": 1}],
+            session_summary={"authenticated": "partial", "final_storage_summary": {"cookie_count": 1}},
         )
 
     manager.browser.assess = _fake_assess  # type: ignore[method-assign]
@@ -153,8 +174,19 @@ def test_browser_state_endpoint_payload_shape() -> None:
                     "authenticated": "success",
                     "pages_visited": 4,
                     "blocked_actions": [],
+                    "final_storage_summary": {"cookie_count": 2, "local_storage_keys": 1, "session_storage_keys": 0},
                 }
             ),
+            encoding="utf-8",
+        )
+        auth_path = Path(tempfile.gettempdir()) / "vantix-browser-state-auth.json"
+        auth_path.write_text(
+            json.dumps({"auth_transitions": [{"stage": "post-auth", "status": "success"}], "dom_diffs": [{"stage": "auth-transition", "cookie_delta": 1}]}),
+            encoding="utf-8",
+        )
+        js_path = Path(tempfile.gettempdir()) / "vantix-browser-state-js.json"
+        js_path.write_text(
+            json.dumps({"pages": [{"url": "http://127.0.0.1:8080/home", "js_signals": [{"kind": "app-config", "signal": "window.__APP_CONFIG__"}], "route_hints": ["/admin"]}]}),
             encoding="utf-8",
         )
         route_path = Path(tempfile.gettempdir()) / "vantix-browser-state-route.json"
@@ -163,6 +195,8 @@ def test_browser_state_endpoint_payload_shape() -> None:
             encoding="utf-8",
         )
         db.add(Artifact(run_id=run_id, kind="browser-session-summary", path=str(session_path), metadata_json={}))
+        db.add(Artifact(run_id=run_id, kind="browser-auth-state", path=str(auth_path), metadata_json={}))
+        db.add(Artifact(run_id=run_id, kind="browser-js-signals", path=str(js_path), metadata_json={}))
         db.add(Artifact(run_id=run_id, kind="route-discovery", path=str(route_path), metadata_json={}))
         db.commit()
 
@@ -171,6 +205,8 @@ def test_browser_state_endpoint_payload_shape() -> None:
     assert payload["run_id"] == run_id
     assert payload["authenticated"] == "success"
     assert payload["routes_discovered"] >= 1
+    assert payload["auth_transitions"][0]["status"] == "success"
+    assert payload["js_signals"][0]["kind"] == "app-config"
     assert "artifacts" in payload
 
 

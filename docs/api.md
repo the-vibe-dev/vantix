@@ -37,11 +37,18 @@ curl -s http://127.0.0.1:8787/api/v1/chat \
 
 ```bash
 curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/graph
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/workflow-state
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/events
 curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/messages
 curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/vectors
 curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/results
 curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/browser-state
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/source-status
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/replay
 ```
+
+`/workflow-state` exposes worker health, lease state, retry counts, blocker classes, stale-claim recovery counts, and phase duration metrics.  
+`/replay` returns phase history plus normalized run events for completed-run replay views.
 
 ## Skills
 

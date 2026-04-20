@@ -6,10 +6,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from secops.models import RunMetric, WorkerLease, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.models import RunMetric, WorkerLease, WorkerRuntimeStatus, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 from secops.services.workflows.checkpoints import CheckpointService
 from secops.services.workflows.phases import PHASE_SEQUENCE, next_phase
-from secops.services.workflows.types import PhaseStatus, WorkerLeaseState, WorkflowStatus
+from secops.services.workflows.types import PhaseStatus, RetryClass, WorkerLeaseState, WorkflowStatus
 
 
 def utcnow() -> datetime:
@@ -607,6 +607,103 @@ class WorkflowEngine:
             workflow.blocked_reason = reason[:255]
             workflow.updated_at = now
             workflow.completed_at = now
+
+    def scavenge_stale_runtime(
+        self,
+        db: Session,
+        *,
+        stale_worker_after_seconds: int = 180,
+    ) -> dict[str, int]:
+        now = utcnow()
+        recovered_claims = 0
+        stale_workers = 0
+
+        expired_claims = (
+            db.query(WorkflowPhaseRun)
+            .filter(
+                WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
+                WorkflowPhaseRun.lease_expires_at.is_not(None),
+                WorkflowPhaseRun.lease_expires_at < now,
+            )
+            .all()
+        )
+        for phase_run in expired_claims:
+            worker_id = str(phase_run.worker_id or "")
+            db.execute(
+                update(WorkerLease)
+                .where(
+                    WorkerLease.phase_run_id == phase_run.id,
+                    WorkerLease.status == WorkerLeaseState.ACTIVE.value,
+                )
+                .values(
+                    status=WorkerLeaseState.EXPIRED.value,
+                    released_at=now,
+                    heartbeat_at=now,
+                    lease_expires_at=now,
+                    metadata_json={"recovered_at": now.isoformat(), "reason": "lease_expired"},
+                )
+            )
+            metadata = dict(phase_run.metadata_json or {})
+            metadata.update(
+                {
+                    "stale_claim_recovered_at": now.isoformat(),
+                    "stale_worker_id": worker_id,
+                }
+            )
+            phase_run.status = PhaseStatus.RETRYING.value
+            phase_run.retry_class = RetryClass.TRANSIENT.value
+            phase_run.worker_id = ""
+            phase_run.lease_expires_at = None
+            phase_run.next_attempt_at = now
+            phase_run.error_json = {"class": "stale-lease", "message": "lease expired before phase completion"}
+            phase_run.metadata_json = metadata
+
+            workflow = db.get(WorkflowExecution, phase_run.workflow_id)
+            if workflow is not None and workflow.status not in {WorkflowStatus.CANCELLED.value, WorkflowStatus.COMPLETED.value, WorkflowStatus.FAILED.value}:
+                workflow.status = WorkflowStatus.RUNNING.value
+                workflow.current_phase = phase_run.phase_name
+                workflow.blocked_reason = ""
+                workflow.updated_at = now
+
+            run = db.get(WorkspaceRun, phase_run.run_id)
+            if run is not None and run.status not in {"cancelled", "completed", "failed"}:
+                run.status = "running"
+                run.updated_at = now
+
+            self._emit_metric(
+                db,
+                run_id=phase_run.run_id,
+                workflow_id=phase_run.workflow_id,
+                phase_name=phase_run.phase_name,
+                metric_name="stale_claim_recovered_total",
+                metric_value=1.0,
+                metric_unit="count",
+                tags=["workflow", "recovery", "lease"],
+                metadata={"worker_id": worker_id, "attempt": phase_run.attempt},
+            )
+            recovered_claims += 1
+
+        stale_before = now - timedelta(seconds=max(30, stale_worker_after_seconds))
+        stale_worker_rows = (
+            db.query(WorkerRuntimeStatus)
+            .filter(
+                WorkerRuntimeStatus.status.in_(["running", "claimed", "idle"]),
+                WorkerRuntimeStatus.heartbeat_at < stale_before,
+            )
+            .all()
+        )
+        for worker in stale_worker_rows:
+            if worker.status == "stale":
+                continue
+            worker.status = "stale"
+            worker.last_error = "worker heartbeat stale"
+            worker.updated_at = now
+            metadata = dict(worker.metadata_json or {})
+            metadata["stale_marked_at"] = now.isoformat()
+            worker.metadata_json = metadata
+            stale_workers += 1
+
+        return {"recovered_claims": recovered_claims, "stale_workers": stale_workers}
 
     def _emit_metric(
         self,

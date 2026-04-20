@@ -3,18 +3,20 @@
 ## Run Model
 
 1. Start or continue engagement via UI chat or `POST /api/v1/chat`.
-2. Scheduler seeds specialist tasks and phase state.
+2. Scheduler seeds initial control-plane state and activates additional specialists as phases become reachable.
 3. Workflow engine executes phases with policy gates and approvals.
 4. Operator reviews activity, vectors, artifacts, and results.
 5. Reporter phase writes report artifacts.
+
+The primary operator loop is now run-centric: mission chat, live timeline, control-center health, approvals, vectors, browser evidence, and report outputs are all scoped to the selected run.
 
 ## UI Workflow
 
 - Select module/mode and target.
 - Send objective in Mission Chat.
-- Watch phase progression, Agent Team status, and Live Activity.
+- Watch phase progression, Agent Team activation, Attack Timeline, and Live Activity.
 - Approve or reject gated actions when prompted.
-- Review Intel, vectors, results, and report outputs for the selected run.
+- Review Intel, vectors, browser evidence, results, and report outputs for the selected run.
 
 ## Approval and Scope Discipline
 
@@ -25,7 +27,16 @@
 
 ## Browser Assessment (Authorized Web Apps)
 
-The `browser-assessment` phase can capture route discovery, form maps, network summaries, DOM/screenshot artifacts, and session summaries for approved web targets. Authenticated browsing requires explicit run config and approval.
+The `browser-assessment` phase can capture route discovery, form maps, network summaries, DOM/screenshot artifacts, session summaries, auth transitions, DOM deltas, client-side signals, and hidden-route hints for approved web targets. Authenticated browsing requires explicit run config and approval.
+
+Use the Browser Assessment panel to review:
+
+- auth/session state and transitions
+- blocked browser actions
+- observed endpoints
+- hidden/admin/debug route hints
+- client-side signals
+- screenshots and browser artifacts
 
 ## CVE / Intel Workflow
 

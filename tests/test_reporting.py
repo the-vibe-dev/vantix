@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -13,6 +14,7 @@ os.environ["SECOPS_RUNTIME_ROOT"] = str(Path(tempfile.gettempdir()) / f"secops_r
 
 from secops.db import Base, SessionLocal, engine
 from secops.models import Artifact, Engagement, Fact, RunEvent, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.routers.runs import get_run_replay
 from secops.services.reporting import ReportingService
 
 
@@ -50,6 +52,24 @@ def test_reporting_service_writes_markdown_and_json_with_provenance() -> None:
         db.add(Fact(run_id=run.id, source="recon", kind="service", value="http", confidence=0.9, tags=["recon"]))
         db.add(RunEvent(run_id=run.id, sequence=1, event_type="approval", level="warning", message="Approval required", payload_json={}))
         db.add(Artifact(run_id=run.id, kind="recon-log", path="/tmp/recon.log", metadata_json={}))
+        auth_path = Path(tempfile.gettempdir()) / "vantix-report-browser-auth.json"
+        auth_path.write_text(
+            json.dumps({"auth_transitions": [{"stage": "post-auth", "status": "success"}], "dom_diffs": [{"stage": "auth-transition", "cookie_delta": 1}]}),
+            encoding="utf-8",
+        )
+        session_path = Path(tempfile.gettempdir()) / "vantix-report-browser-session.json"
+        session_path.write_text(
+            json.dumps({"entry_url": "http://127.0.0.1:8080", "current_url": "http://127.0.0.1:8080/home", "authenticated": "success", "pages_visited": 3, "blocked_actions": []}),
+            encoding="utf-8",
+        )
+        js_path = Path(tempfile.gettempdir()) / "vantix-report-browser-js.json"
+        js_path.write_text(
+            json.dumps({"pages": [{"url": "http://127.0.0.1:8080/home", "js_signals": [{"kind": "app-config", "signal": "window.__APP_CONFIG__"}], "route_hints": ["/admin"]}]}),
+            encoding="utf-8",
+        )
+        db.add(Artifact(run_id=run.id, kind="browser-auth-state", path=str(auth_path), metadata_json={}))
+        db.add(Artifact(run_id=run.id, kind="browser-session-summary", path=str(session_path), metadata_json={}))
+        db.add(Artifact(run_id=run.id, kind="browser-js-signals", path=str(js_path), metadata_json={}))
         db.commit()
 
         generated = ReportingService().generate(db, run)
@@ -58,3 +78,37 @@ def test_reporting_service_writes_markdown_and_json_with_provenance() -> None:
         assert Path(generated["markdown_path"]).exists()
         assert Path(generated["json_path"]).exists()
         assert generated["summary"]["workflow_id"] == workflow.id
+        assert generated["summary"]["browser_assessment"]["authenticated"] == "success"
+        assert generated["summary"]["browser_assessment"]["auth_transitions"][0]["status"] == "success"
+
+
+def test_run_replay_returns_phase_history_and_events() -> None:
+    reset_db()
+    with SessionLocal() as db:
+        run = _seed_run(db)
+        run.config_json = {
+            **(run.config_json or {}),
+            "phase_state": {
+                "current": "reporting",
+                "completed": ["flow-initialization", "recon", "knowledge-load"],
+                "pending": ["completed"],
+                "updated_at": "2026-01-01T00:00:00Z",
+                "reason": "report-ready",
+                "history": [
+                    {"at": "2026-01-01T00:00:00Z", "phase": "recon", "reason": "chat", "details": {}},
+                    {"at": "2026-01-01T00:05:00Z", "phase": "reporting", "reason": "finding-promoted", "details": {}},
+                ],
+            },
+        }
+        db.add(RunEvent(run_id=run.id, sequence=1, event_type="phase", level="info", message="Recon completed", payload_json={"phase": "recon"}))
+        db.add(RunEvent(run_id=run.id, sequence=2, event_type="approval", level="warning", message="Approval granted: continue", payload_json={"reason": "exploit_validation"}))
+        db.add(Artifact(run_id=run.id, kind="report", path="/tmp/report.md", metadata_json={}))
+        db.add(Artifact(run_id=run.id, kind="report-json", path="/tmp/report.json", metadata_json={}))
+        db.commit()
+
+        payload = get_run_replay(run.id, db=db)
+        assert payload["run_id"] == run.id
+        assert len(payload["phase_history"]) == 2
+        assert payload["report_path"] == "/tmp/report.md"
+        assert payload["events"][0]["event_type"] == "phase_transition"
+        assert payload["events"][1]["event_type"] == "approval_resolved"

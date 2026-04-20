@@ -41,7 +41,14 @@ class FindingPromotionService:
             run.id,
             "finding",
             f"Promoted {source_kind} to finding draft: {finding.title}",
-            payload={"source_kind": source_kind, "source_id": fact.id, "finding_id": finding.id},
+            payload={
+                "source_kind": source_kind,
+                "source_id": fact.id,
+                "finding_id": finding.id,
+                "finding_title": finding.title,
+                "finding_status": finding.status,
+                "severity": finding.severity,
+            },
         )
         return finding
 

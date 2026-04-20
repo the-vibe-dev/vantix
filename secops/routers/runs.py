@@ -5,6 +5,7 @@ import time
 import mimetypes
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -62,10 +63,12 @@ from secops.schemas import (
     FindingRead,
     RunProviderRouteCreate,
     PlanningBundleRead,
+    ReplayStateRead,
 )
 from secops.security import require_csrf, require_user
 from secops.services.context_builder import ContextBuilder
 from secops.services.execution import execution_manager
+from secops.services.events import normalize_event_payload
 from secops.services.finding_promotion import FindingPromotionService
 from secops.services.learning import LearningService
 from secops.services.phase_state import RunPhaseService
@@ -95,6 +98,56 @@ WORKFLOW_SPECIALIST_MAP = {
     "orchestrate": {"tasks": ["planning"], "agents": ["orchestrator"]},
     "report": {"tasks": ["reporting"], "agents": ["reporter"]},
 }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return max(0.0, (end - start).total_seconds())
+
+
+def _blocked_reason_class(reason: str) -> str:
+    lower = str(reason or "").strip().lower()
+    if not lower:
+        return "unknown"
+    if "scope" in lower or "out of scope" in lower or "denied range" in lower:
+        return "scope"
+    if "approval" in lower:
+        return "approval"
+    if "policy" in lower:
+        return "policy"
+    if "timeout" in lower:
+        return "timeout"
+    if "auth" in lower:
+        return "auth"
+    return "other"
+
+
+def _serialize_event(event: RunEvent) -> dict[str, Any]:
+    normalized_type, payload = normalize_event_payload(event.event_type, event.message, event.payload_json)
+    return {
+        "id": event.id,
+        "run_id": event.run_id,
+        "agent_session_id": event.agent_session_id,
+        "sequence": event.sequence,
+        "event_type": normalized_type,
+        "level": event.level,
+        "message": event.message,
+        "payload_json": payload,
+        "created_at": event.created_at,
+    }
+
+
+def _metric_sum(metric_rows: list[RunMetric], name: str) -> float:
+    total = 0.0
+    for row in metric_rows:
+        if row.metric_name == name:
+            total += float(row.metric_value or 0.0)
+    return total
 
 
 def _backfill_specialist_status(db: Session, run_id: str) -> None:
@@ -351,7 +404,7 @@ def list_run_events(
     since_sequence: int = 0,
     limit: int = 500,
     db: Session = Depends(get_db),
-) -> list[RunEvent]:
+) -> list[dict]:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -359,7 +412,8 @@ def list_run_events(
     q = db.query(RunEvent).filter(RunEvent.run_id == run_id)
     if since_sequence > 0:
         q = q.filter(RunEvent.sequence > int(since_sequence))
-    return q.order_by(RunEvent.sequence.asc()).limit(limit).all()
+    rows = q.order_by(RunEvent.sequence.asc()).limit(limit).all()
+    return [_serialize_event(row) for row in rows]
 
 
 @router.get("/{run_id}/terminal", response_model=TerminalRead)
@@ -540,18 +594,76 @@ def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
             if phase.status == "blocked" and str((phase.error_json or {}).get("message", "")).strip()
         }
     )
+    approval_rows = (
+        db.query(ApprovalRequest)
+        .filter(ApprovalRequest.run_id == run_id)
+        .order_by(ApprovalRequest.created_at.asc())
+        .all()
+    )
     retry_count = sum(1 for phase in phases if phase.status == "retrying")
     completed_count = sum(1 for phase in phases if phase.status == "completed")
     blocked_count = sum(1 for phase in phases if phase.status == "blocked")
     active_leases = [lease for lease in leases if lease.status == "active"]
+    stale_workers = [worker for worker in workers if worker.status in {"stale", "error"}]
+    approval_latencies = [
+        max(0.0, (approval.updated_at - approval.created_at).total_seconds())
+        for approval in approval_rows
+        if approval.status in {"approved", "rejected"}
+    ]
+    latest_phase = None
+    if workflow is not None:
+        latest_phase = (
+            db.query(WorkflowPhaseRun)
+            .filter(WorkflowPhaseRun.run_id == run_id, WorkflowPhaseRun.phase_name == workflow.current_phase)
+            .order_by(WorkflowPhaseRun.attempt.desc(), WorkflowPhaseRun.created_at.desc())
+            .first()
+        )
+    if latest_phase is None and phases:
+        latest_phase = max(
+            phases,
+            key=lambda row: (
+                1 if row.status in {"claimed", "retrying", "pending"} else 0,
+                row.updated_at or row.created_at,
+            ),
+        )
+    current_phase_duration_seconds = _seconds_between(
+        latest_phase.started_at if latest_phase is not None else None,
+        latest_phase.completed_at if latest_phase is not None and latest_phase.completed_at is not None else _utc_now(),
+    )
+    phase_durations: dict[str, float] = {}
+    for phase in phases:
+        duration = _seconds_between(phase.started_at, phase.completed_at or _utc_now())
+        if duration is None:
+            continue
+        phase_durations[phase.phase_name] = max(float(phase_durations.get(phase.phase_name, 0.0)), round(duration, 3))
+    latest_active_lease = active_leases[0] if active_leases else None
+    current_claim_age_seconds = (
+        max(0.0, (_utc_now() - latest_active_lease.created_at).total_seconds())
+        if latest_active_lease is not None
+        else 0.0
+    )
     metrics = {
         "workflow_id": workflow_id or "",
         "retry_count": retry_count,
         "completed_count": completed_count,
         "blocked_count": blocked_count,
         "active_lease_count": len(active_leases),
+        "active_worker_count": len([worker for worker in workers if worker.status in {"claimed", "running"}]),
+        "stale_worker_count": len(stale_workers),
         "latest_heartbeat_at": workers[0].heartbeat_at.isoformat() if workers else "",
         "metric_samples": len(metric_rows),
+        "approval_pending_count": len([approval for approval in approval_rows if approval.status == "pending"]),
+        "approval_resolved_count": len(approval_latencies),
+        "approval_latency_seconds_avg": round(sum(approval_latencies) / len(approval_latencies), 3) if approval_latencies else 0.0,
+        "approval_latency_seconds_latest": round(approval_latencies[-1], 3) if approval_latencies else 0.0,
+        "current_phase_duration_seconds": round(current_phase_duration_seconds or 0.0, 3),
+        "current_claim_age_seconds": round(current_claim_age_seconds, 3),
+        "phase_durations_seconds": phase_durations,
+        "blocked_reason_classes": sorted({_blocked_reason_class(reason) for reason in blocked_reasons if reason}),
+        "stale_claim_recovered_count": int(_metric_sum(metric_rows, "stale_claim_recovered_total")),
+        "phase_claimed_total": int(_metric_sum(metric_rows, "phase_claimed_total")),
+        "phase_completed_total": int(_metric_sum(metric_rows, "phase_completed_total")),
+        "phase_failed_total": int(_metric_sum(metric_rows, "phase_failed_total")),
     }
     return {
         "run_id": run_id,
@@ -570,6 +682,13 @@ def create_run_vector(run_id: str, payload: VectorCreate, db: Session = Depends(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     fact = create_vector_fact(db, run_id, payload.model_dump())
+    execution_manager.events.emit(
+        db,
+        run_id,
+        "vector",
+        f"Vector generated: {fact.value}",
+        payload={"vector_id": fact.id, "status": (fact.metadata_json or {}).get("status", "candidate"), "source": fact.source},
+    )
     db.commit()
     db.refresh(fact)
     return vector_from_fact(fact)
@@ -592,6 +711,13 @@ def select_run_vector(run_id: str, vector_id: str, db: Session = Depends(get_db)
     metadata.setdefault("safety_notes", "Selected vectors must remain inside authorized scope and require evidence capture.")
     fact.metadata_json = metadata
     fact.tags = sorted(set([*fact.tags, "planned"]))
+    execution_manager.events.emit(
+        db,
+        run_id,
+        "vector",
+        f"Vector selected: {fact.value}",
+        payload={"vector_id": fact.id, "status": metadata["status"], "source": fact.source},
+    )
     RunPhaseService().transition(run, "development", reason="vector-selected", details={"vector_id": vector_id})
     VantixScheduler().replan(db, run, reason="vector-selected")
     db.commit()
@@ -683,7 +809,21 @@ def get_browser_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="Run not found")
     artifacts = (
         db.query(Artifact)
-        .filter(Artifact.run_id == run_id, Artifact.kind.in_(["browser-session-summary", "route-discovery", "form-map", "network-summary", "screenshot", "dom-snapshot"]))
+        .filter(
+            Artifact.run_id == run_id,
+            Artifact.kind.in_(
+                [
+                    "browser-session-summary",
+                    "browser-auth-state",
+                    "browser-js-signals",
+                    "route-discovery",
+                    "form-map",
+                    "network-summary",
+                    "screenshot",
+                    "dom-snapshot",
+                ]
+            ),
+        )
         .order_by(Artifact.created_at.asc())
         .all()
     )
@@ -699,6 +839,11 @@ def get_browser_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         "network_summary": {},
         "route_edges": [],
         "forms": [],
+        "session_summary": {},
+        "auth_transitions": [],
+        "dom_diffs": [],
+        "js_signals": [],
+        "route_hints": [],
         "screenshots": [],
         "artifacts": [{"kind": item.kind, "path": item.path} for item in artifacts],
     }
@@ -706,7 +851,7 @@ def get_browser_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         if art.kind == "screenshot":
             state["screenshots"].append(art.path)
             continue
-        if art.kind not in {"browser-session-summary", "route-discovery", "form-map", "network-summary"}:
+        if art.kind not in {"browser-session-summary", "browser-auth-state", "browser-js-signals", "route-discovery", "form-map", "network-summary"}:
             continue
         try:
             payload = json.loads(Path(art.path).read_text(encoding="utf-8"))
@@ -719,6 +864,24 @@ def get_browser_state(run_id: str, db: Session = Depends(get_db)) -> dict:
             state["authenticated"] = str(payload.get("authenticated") or "not_attempted")
             state["pages_visited"] = int(payload.get("pages_visited") or 0)
             state["blocked_actions"] = [str(item) for item in (payload.get("blocked_actions") or [])][:100]
+            state["session_summary"] = payload if isinstance(payload, dict) else {}
+        elif art.kind == "browser-auth-state":
+            state["auth_transitions"] = [item for item in (payload.get("auth_transitions") or []) if isinstance(item, dict)][:40]
+            state["dom_diffs"] = [item for item in (payload.get("dom_diffs") or []) if isinstance(item, dict)][:80]
+        elif art.kind == "browser-js-signals":
+            pages = [item for item in (payload.get("pages") or []) if isinstance(item, dict)][:80]
+            signals: list[dict[str, Any]] = []
+            hints: list[dict[str, Any]] = []
+            for item in pages:
+                url = str(item.get("url") or "")
+                for signal in item.get("js_signals") or []:
+                    if isinstance(signal, dict):
+                        signals.append({"url": url, **signal})
+                for hint in item.get("route_hints") or []:
+                    if str(hint or "").strip():
+                        hints.append({"url": url, "hint": str(hint)})
+            state["js_signals"] = signals[:80]
+            state["route_hints"] = hints[:80]
         elif art.kind == "route-discovery":
             edges = payload.get("edges") or []
             state["route_edges"] = [edge for edge in edges if isinstance(edge, dict)][:300]
@@ -776,6 +939,13 @@ def create_attack_chain(run_id: str, payload: AttackChainCreate, db: Session = D
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     fact = create_attack_chain_fact(db, run_id, payload.model_dump())
+    execution_manager.events.emit(
+        db,
+        run_id,
+        "attack_chain",
+        f"Attack chain modelled: {fact.value}",
+        payload={"attack_chain_id": fact.id, "status": (fact.metadata_json or {}).get("status", "identified")},
+    )
     db.commit()
     db.refresh(fact)
     return attack_chain_from_fact(fact)
@@ -787,6 +957,51 @@ def get_planning_bundle(run_id: str, db: Session = Depends(get_db)) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return build_planning_bundle(db, run)
+
+
+@router.get("/{run_id}/replay", response_model=ReplayStateRead)
+def get_run_replay(run_id: str, limit: int = 400, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    limit = max(10, min(int(limit), 2000))
+    state = RunPhaseService().snapshot(run)
+    events = (
+        db.query(RunEvent)
+        .filter(RunEvent.run_id == run_id)
+        .order_by(RunEvent.sequence.asc())
+        .limit(limit)
+        .all()
+    )
+    artifacts = (
+        db.query(Artifact)
+        .filter(Artifact.run_id == run_id, Artifact.kind.in_(["report", "report-json"]))
+        .order_by(Artifact.created_at.asc())
+        .all()
+    )
+    report_path = next((row.path for row in artifacts if row.kind == "report"), "")
+    report_json_path = next((row.path for row in artifacts if row.kind == "report-json"), "")
+    summary = {
+        "event_count": len(events),
+        "phase_transition_count": len([event for event in events if normalize_event_payload(event.event_type, event.message, event.payload_json)[0] == "phase_transition"]),
+        "approval_count": len(
+            [
+                event
+                for event in events
+                if normalize_event_payload(event.event_type, event.message, event.payload_json)[0]
+                in {"approval_requested", "approval_resolved"}
+            ]
+        ),
+    }
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "phase_history": list(state.get("history") or []),
+        "events": [_serialize_event(event) for event in events],
+        "report_path": report_path,
+        "report_json_path": report_json_path,
+        "summary": summary,
+    }
 
 
 @router.get("/{run_id}/stream")
@@ -814,13 +1029,14 @@ def stream_run(run_id: str, db: Session = Depends(get_db)):
                 )
                 for event in events:
                     last_sequence = event.sequence
+                    normalized_type, payload = normalize_event_payload(event.event_type, event.message, event.payload_json)
                     payload = {
                         "id": event.id,
                         "sequence": event.sequence,
-                        "event_type": event.event_type,
+                        "event_type": normalized_type,
                         "level": event.level,
                         "message": event.message,
-                        "payload": event.payload_json,
+                        "payload": payload,
                         "created_at": event.created_at.isoformat(),
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
