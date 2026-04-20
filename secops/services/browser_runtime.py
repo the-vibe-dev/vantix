@@ -398,6 +398,31 @@ class BrowserRuntimeService:
             cookie["path"] = "/"
         return cookie
 
+    def _seed_urls(self, entry_url: str, run_config: dict[str, Any]) -> list[str]:
+        browser_cfg = dict(run_config.get("browser") or {})
+        configured = [str(item).strip() for item in (browser_cfg.get("seed_paths") or []) if str(item).strip()]
+        defaults = [
+            "/",
+            "/#/login",
+            "/#/register",
+            "/#/forgot-password",
+            "/#/search",
+            "/#/contact",
+            "/#/about",
+            "/#/photo-wall",
+            "/ftp/",
+            "/api-docs",
+        ]
+        seeds: list[str] = []
+        seen: set[str] = set()
+        for raw in [*configured, *defaults]:
+            normalized = _normalize_url(urljoin(entry_url, raw))
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            seeds.append(normalized)
+        return seeds[:40]
+
     def assess(self, *, run_id: str, workspace_root: Path, target: str, run_config: dict[str, Any]) -> BrowserAssessmentResult:
         started_at = _utc_now()
         entry_url = _normalize_url((run_config.get("browser") or {}).get("entry_url") or target)
@@ -525,6 +550,9 @@ class BrowserRuntimeService:
             page = context.new_page()
             requests_seen = 0
             queue: list[tuple[str, int, str]] = [(entry_url, 0, "entry")]
+            for seed in self._seed_urls(entry_url, run_config):
+                if seed != entry_url:
+                    queue.append((seed, 1, entry_url))
             visited: set[str] = set()
             route_nodes: dict[str, dict[str, Any]] = {}
 

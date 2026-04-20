@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import csv
 import html
 import json
+import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -167,7 +170,6 @@ class ReportingService:
                 severity_counts["info"] += 1
 
         screenshots = [art.path for art in artifacts if art.kind == "screenshot" and str(art.path).strip()]
-
         md_lines = [
             f"# Technical Security Assessment: {run.target or run.workspace_id}",
             "",
@@ -196,6 +198,8 @@ class ReportingService:
         ]
         if finding_rows:
             for idx, item in enumerate(finding_rows, start=1):
+                clean_evidence = self._strip_artifact_suffix(str(item.get("evidence") or "(not provided)"))
+                inline_artifacts = self._extract_artifact_paths(f"{item.get('evidence') or ''}\n{item.get('reproduction') or ''}")
                 md_lines.extend(
                     [
                         f"### {idx}. {item['title']}",
@@ -208,13 +212,33 @@ class ReportingService:
                         (item.get("reproduction") or "(not provided)"),
                         "",
                         "**Evidence**",
-                        (item.get("evidence") or "(not provided)"),
+                        clean_evidence,
                         "",
                         "**Remediation**",
                         (item.get("remediation") or "(not provided)"),
                         "",
                     ]
                 )
+                if inline_artifacts:
+                    md_lines.append("**Artifact Review**")
+                    for art_path in inline_artifacts:
+                        p = Path(art_path)
+                        md_lines.append(f"- evidence: {art_path}")
+                        if not p.exists() or not p.is_file():
+                            md_lines.append("  - Artifact missing on disk.")
+                            continue
+                        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+                            md_lines.append(f"  ![{p.name}]({art_path})")
+                            continue
+                        payload = self._read_text_artifact(p)
+                        if payload is None:
+                            md_lines.append("  - Binary artifact (non-text).")
+                            continue
+                        md_lines.append("")
+                        md_lines.append("```text")
+                        md_lines.append(payload.rstrip("\n"))
+                        md_lines.append("```")
+                        md_lines.append("")
         else:
             md_lines.append("- No findings were recorded for this run.")
 
@@ -289,6 +313,14 @@ class ReportingService:
         finding_cards: list[str] = []
         for idx, item in enumerate(findings, start=1):
             sev = str(item.get("severity") or "info").lower()
+            clean_evidence = self._strip_artifact_suffix(str(item.get("evidence") or "(not provided)"))
+            inline_artifacts = self._extract_artifact_paths(f"{item.get('evidence') or ''}\n{item.get('reproduction') or ''}")
+            artifact_blocks = []
+            for path in inline_artifacts:
+                artifact_blocks.append(self._render_artifact_html_block(path, kind_hint="evidence"))
+            artifact_html = ""
+            if artifact_blocks:
+                artifact_html = f"<h4>Artifact Review</h4>{''.join(artifact_blocks)}"
             finding_cards.append(
                 (
                     "<article class='finding'>"
@@ -298,18 +330,18 @@ class ReportingService:
                     f"<span>Confidence: {float(item.get('confidence') or 0.0):.2f}</span></div>"
                     f"<h4>Vector Explanation</h4><p>{esc(item.get('summary') or '(not provided)')}</p>"
                     f"<h4>PoC</h4><pre>{esc(item.get('reproduction') or '(not provided)')}</pre>"
-                    f"<h4>Evidence</h4><pre>{esc(item.get('evidence') or '(not provided)')}</pre>"
+                    f"<h4>Evidence</h4><pre>{esc(clean_evidence)}</pre>"
                     f"<h4>Remediation</h4><p>{esc(item.get('remediation') or '(not provided)')}</p>"
+                    f"{artifact_html}"
                     "</article>"
                 )
             )
         if not finding_cards:
             finding_cards.append("<p>No findings were recorded for this run.</p>")
 
-        image_blocks = "".join(f"<figure><img src='{esc(path)}' alt='screenshot'><figcaption>{esc(path)}</figcaption></figure>" for path in screenshots[:24])
+        image_blocks = "".join(self._render_artifact_html_block(path, kind_hint="screenshot") for path in screenshots[:24])
         if not image_blocks:
             image_blocks = "<p>No screenshots were captured.</p>"
-
         return (
             "<!doctype html><html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -326,6 +358,7 @@ class ReportingService:
             "pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto;font-size:12px;white-space:pre-wrap}"
             "figure{margin:0 0 14px 0} img{max-width:100%;height:auto;border:1px solid #d9e0ee;border-radius:6px}"
             "figcaption{font-size:12px;color:#475569;margin-top:4px;word-break:break-all}"
+            "details{margin:8px 0 12px 0} summary{cursor:pointer;font-weight:600;color:#0f172a}"
             ".muted{color:#475569;font-size:14px}"
             "</style></head><body>"
             "<div class='wrap'>"
@@ -339,6 +372,88 @@ class ReportingService:
             f"<section><h2>Evidence Images</h2>{image_blocks}</section>"
             "</div></body></html>"
         )
+
+    def _extract_artifact_paths(self, text: str) -> list[str]:
+        raw = str(text or "")
+        if not raw:
+            return []
+        found = re.findall(r"(/[A-Za-z0-9._~:/%+\\-]+)", raw)
+        paths: list[str] = []
+        seen: set[str] = set()
+        for token in found:
+            cleaned = token.rstrip(".,);]'\"")
+            p = Path(cleaned)
+            if not p.is_absolute():
+                continue
+            if not p.exists():
+                continue
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(key)
+        return paths
+
+    def _render_artifact_html_block(self, path: str, *, kind_hint: str = "artifact") -> str:
+        p = Path(str(path or ""))
+        label = f"{kind_hint}: {p}"
+        if not p.exists() or not p.is_file():
+            return (
+                "<details>"
+                f"<summary>{html.escape(label)} (missing)</summary>"
+                f"<pre>{html.escape(str(p))}</pre>"
+                "</details>"
+            )
+        suffix = p.suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+            data_uri = self._image_data_uri(p)
+            if data_uri:
+                return (
+                    "<details>"
+                    f"<summary>{html.escape(label)} (image)</summary>"
+                    "<figure>"
+                    f"<img src='{data_uri}' alt='{html.escape(p.name)}'>"
+                    f"<figcaption>{html.escape(str(p))}</figcaption>"
+                    "</figure>"
+                    "</details>"
+                )
+        text_payload = self._read_text_artifact(p)
+        if text_payload is None:
+            return (
+                "<details>"
+                f"<summary>{html.escape(label)} (binary)</summary>"
+                f"<pre>{html.escape(str(p))}</pre>"
+                "</details>"
+            )
+        return "<details>" f"<summary>{html.escape(label)}</summary>" f"<pre>{html.escape(text_payload)}</pre>" "</details>"
+
+    def _image_data_uri(self, path: Path) -> str:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return ""
+        mime, _ = mimetypes.guess_type(str(path))
+        if not mime:
+            mime = "image/png"
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+
+    def _read_text_artifact(self, path: Path) -> str | None:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return None
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                return raw.decode("latin-1")
+            except UnicodeDecodeError:
+                return None
+
+    def _strip_artifact_suffix(self, text: str) -> str:
+        value = str(text or "")
+        return re.sub(r"\s*Artifact:\s*/\S+\s*$", "", value).strip() or value
 
     def _build_artifact_index(self, run_id: str, artifacts: list[Artifact]) -> dict[str, Any]:
         return {
