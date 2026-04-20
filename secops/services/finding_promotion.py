@@ -4,8 +4,18 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from secops.config import settings
 from secops.models import Fact, Finding, WorkspaceRun
 from secops.services.events import RunEventService
+from secops.services.fingerprint import fingerprint_from_meta
+
+
+class ValidationRequired(ValueError):
+    """Raised when a fact is promoted without validation while the gate is active."""
+
+
+class SuppressedByNegativeEvidence(ValueError):
+    """Raised when a matching negative_evidence fact suppresses promotion."""
 
 
 class FindingPromotionService:
@@ -18,23 +28,85 @@ class FindingPromotionService:
         fact = db.get(Fact, source_id)
         if fact is None or fact.run_id != run.id:
             raise ValueError("Source record not found")
-        if source_kind == "vector" and fact.kind != "vector":
+        if source_kind == "vector" and fact.kind not in {"vector", "vector_hypothesis"}:
             raise ValueError("Source is not a vector")
         if source_kind == "attack_chain" and fact.kind != "attack_chain":
             raise ValueError("Source is not an attack chain")
 
+        fingerprint = fact.fingerprint or fingerprint_from_meta(
+            dict(fact.metadata_json or {}), fact_kind=fact.kind
+        )
+        if not fact.fingerprint:
+            fact.fingerprint = fingerprint
+
+        # P0-4: require validated=True when gate is active and source is a vector.
+        if (
+            settings.require_validated_promotion
+            and source_kind == "vector"
+            and not fact.validated
+        ):
+            raise ValidationRequired(
+                "Vector is not validated; run exploit_validation before promoting."
+            )
+
+        # P0-5: suppress when matching negative_evidence exists (newer than fact).
+        neg = self._matching_negative_evidence(db, run.id, fingerprint, fact)
+        if neg is not None:
+            self.events.emit(
+                db,
+                run.id,
+                "finding_suppressed",
+                f"Suppressed by negative evidence: {fingerprint[:8]}",
+                payload={
+                    "source_kind": source_kind,
+                    "source_id": fact.id,
+                    "negative_evidence_id": neg.id,
+                    "fingerprint": fingerprint,
+                },
+            )
+            raise SuppressedByNegativeEvidence(
+                f"Matching negative evidence ({neg.id}) supersedes this vector; not promoting."
+            )
+
+        # P0-6: dedup by fingerprint within the run.
+        existing = (
+            db.query(Finding)
+            .filter(Finding.run_id == run.id, Finding.fingerprint == fingerprint)
+            .first()
+        )
+        if existing is not None:
+            evidence_ids = list(existing.evidence_ids or [])
+            if fact.id not in evidence_ids:
+                evidence_ids.append(fact.id)
+                existing.evidence_ids = evidence_ids
+            self._tag_fact_as_promoted(fact, existing)
+            self.events.emit(
+                db,
+                run.id,
+                "dedup_merged",
+                f"Duplicate vector merged into finding {existing.id[:8]}",
+                payload={
+                    "source_kind": source_kind,
+                    "source_id": fact.id,
+                    "finding_id": existing.id,
+                    "fingerprint": fingerprint,
+                },
+            )
+            return existing
+
         data = self._finding_payload(fact, payload)
+        data["fingerprint"] = fingerprint
+        data["evidence_ids"] = [fact.id]
+        data["reproduction_script"] = str(
+            payload.get("reproduction_script")
+            or (fact.metadata_json or {}).get("reproduction_script")
+            or ""
+        )
         finding = Finding(run_id=run.id, **data)
         db.add(finding)
         db.flush()
 
-        metadata = dict(fact.metadata_json or {})
-        metadata["finding_id"] = finding.id
-        metadata["promoted"] = True
-        metadata["finding_status"] = finding.status
-        fact.metadata_json = metadata
-        if "finding" not in fact.tags:
-            fact.tags = sorted(set([*fact.tags, "finding"]))
+        self._tag_fact_as_promoted(fact, finding)
 
         self.events.emit(
             db,
@@ -48,9 +120,42 @@ class FindingPromotionService:
                 "finding_title": finding.title,
                 "finding_status": finding.status,
                 "severity": finding.severity,
+                "fingerprint": fingerprint,
             },
         )
         return finding
+
+    def _matching_negative_evidence(
+        self, db: Session, run_id: str, fingerprint: str, fact: Fact
+    ) -> Fact | None:
+        """Return a newer negative_evidence Fact with the same fingerprint, if any."""
+        if not fingerprint:
+            return None
+        q = (
+            db.query(Fact)
+            .filter(
+                Fact.run_id == run_id,
+                Fact.kind == "negative_evidence",
+                Fact.fingerprint == fingerprint,
+            )
+            .order_by(Fact.created_at.desc())
+        )
+        for candidate in q.all():
+            if candidate.id == fact.id:
+                continue
+            if candidate.created_at and fact.created_at and candidate.created_at < fact.created_at:
+                continue
+            return candidate
+        return None
+
+    def _tag_fact_as_promoted(self, fact: Fact, finding: Finding) -> None:
+        metadata = dict(fact.metadata_json or {})
+        metadata["finding_id"] = finding.id
+        metadata["promoted"] = True
+        metadata["finding_status"] = finding.status
+        fact.metadata_json = metadata
+        if "finding" not in fact.tags:
+            fact.tags = sorted(set([*fact.tags, "finding"]))
 
     def _finding_payload(self, fact: Fact, payload: dict[str, Any]) -> dict[str, Any]:
         meta = dict(fact.metadata_json or {})

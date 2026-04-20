@@ -61,6 +61,8 @@ class Settings:
     session_ttl_hours: int
     session_cookie_secure: bool
     service_token_enabled: bool
+    require_validated_promotion: bool
+    exploit_validation_http_timeout: float
 
 
 def _env_list(name: str, default: list[str]) -> list[str]:
@@ -132,4 +134,6 @@ settings = Settings(
     session_ttl_hours=int(os.getenv("SECOPS_SESSION_TTL_HOURS", "12")),
     session_cookie_secure=_env_bool("SECOPS_SESSION_COOKIE_SECURE", default=False),
     service_token_enabled=_env_bool("SECOPS_SERVICE_TOKEN_ENABLED", default=False),
+    require_validated_promotion=_env_bool("SECOPS_REQUIRE_VALIDATED_PROMOTION", default=False),
+    exploit_validation_http_timeout=float(os.getenv("SECOPS_EXPLOIT_VALIDATION_HTTP_TIMEOUT", "10.0")),
 )

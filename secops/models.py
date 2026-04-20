@@ -210,6 +210,8 @@ class Fact(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    validated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[WorkspaceRun] = relationship(back_populates="facts")
@@ -498,6 +500,9 @@ class WorkerRuntimeStatus(Base):
 
 class Finding(Base):
     __tablename__ = "findings"
+    __table_args__ = (
+        Index("ix_findings_run_fingerprint", "run_id", "fingerprint"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
@@ -509,6 +514,9 @@ class Finding(Base):
     reproduction: Mapped[str] = mapped_column(Text, default="")
     remediation: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reproduction_script: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[WorkspaceRun] = relationship(back_populates="findings")
