@@ -21,10 +21,10 @@ Legend:
 | PRA-010 | High | **done** | `tests/security/` suite: auth (5), scope (14), redaction (17+), policy gates (6). |
 | PRA-011 | High | **done** | `secops/services/policies.py` SECRET_PATTERNS expanded to 17 regexes + 16KB truncation. |
 | PRA-012 | High | **done** | `secops/middleware.py` adds RequestIdMiddleware, RateLimitMiddleware (30/60s on mutating routes), AuditMiddleware (AuditLog row per privileged call). CORS bound to `SECOPS_CORS_ALLOW_ORIGINS`. |
-| PRA-013 | High | **deferred** | Cookie auth / XSS hardening is a frontend auth-flow rewrite. Token storage remains `localStorage`; mitigated by strict CSP work in PRA-032 (also deferred). Track in follow-up. |
-| PRA-014 | High | **deferred** | Multi-user / rotation requires session+user model. Out of scope for this pass. Audit log now attributes by token prefix (`AuditMiddleware`), minimum viable accountability. |
+| PRA-013 | High | **done** | Password-hashed users + `user_sessions` (argon2id with pbkdf2 fallback) via Alembic `0002_users_and_roles`; httpOnly session cookie + double-submit CSRF. Frontend uses `credentials:"include"` + `X-CSRF-Token`; `localStorage` bearer token removed. Tests: `tests/security/test_users.py`, `test_auth_flow.py`, `test_csrf.py`. |
+| PRA-014 | High | **done** | `require_user(min_role)` tiering across all 14 routers (admin/operator/viewer). Audit middleware attributes actor from `request.state.auth` (`user:<name>` / `service:<name>`). Bootstrap admin + optional `SECOPS_BOOTSTRAP_USERS` from env. Tests: `tests/security/test_rbac.py`. |
 | PRA-015 | High | **deferred** | Output signature verification for Codex requires upstream support. Not feasible without provider cooperation. |
-| PRA-016 | Medium | **deferred** | Installer signing requires release infra. Tracked separately. |
+| PRA-016 | Medium | **done** | Cosign keyless (GitHub OIDC) signing via `.github/workflows/release.yml`; `scripts/build-release.sh` emits tarball + SHA-256 manifest; `scripts/verify-release.sh` + `secops/release_verify.py` verify sig + manifest pre-unpack. `InstallerStateService.verify_release_integrity` guards NAS bootstrap; Ollama installer replaces `curl\|sh` with SHA-256-pinned download (`SECOPS_OLLAMA_INSTALL_SHA256`). Tests: `tests/release/test_manifest.py`. See `docs/operations/release.md`. |
 | PRA-017 | Medium | **done (verified)** | `ProviderService.to_read` never returns secret; `has_key` boolean only. Per-secret nonce + HMAC-SHA256. No code change required. |
 
 ## Architecture (PRA-018..022)
@@ -32,8 +32,8 @@ Legend:
 | ID | Sev | Status | Notes |
 |----|-----|--------|-------|
 | PRA-018 | High | **deferred** | Worker process split = ops change (separate service unit). Graceful shutdown + heartbeat are in place (PRA-042). |
-| PRA-019 | High | **deferred** | Session UoW refactor of `_phase_orchestrate` is invasive. Current code is working; revisit once Postgres migration (PRA-023) happens. |
-| PRA-020 | Medium | **deferred** | SELECT FOR UPDATE requires Postgres. Ties to PRA-023. |
+| PRA-019 | High | **done** | `_phase_orchestrate` flattened to a single outer session; nested `SessionLocal()` blocks removed. Short-lived `stream_db` kept only for per-line terminal event commits. `secops/services/execution.py`. |
+| PRA-020 | Medium | **done** | Dialect-aware `claim_next_phase` in `secops/services/workflows/engine.py`: Postgres path uses `SELECT ... FOR UPDATE SKIP LOCKED`; SQLite keeps optimistic loop. |
 | PRA-021 | Medium | **wont-fix** | Polling + SSE duplicate fetches are bounded; removing polling risks staleness on transient SSE drops. Kept as dual-path. |
 | PRA-022 | Medium | **done** | Pagination (`since_sequence`, `limit`) on `/runs/{id}/events`, `/terminal`, `/messages`; capped server-side. |
 
@@ -41,7 +41,7 @@ Legend:
 
 | ID | Sev | Status | Notes |
 |----|-----|--------|-------|
-| PRA-023 | Medium | **deferred** | Alembic + Postgres migration is a distinct milestone. |
+| PRA-023 | Medium | **done** | Alembic initialized (`alembic/`, `alembic.ini`); `0001_baseline` + `0002_users_and_roles`. App lifespan runs `alembic upgrade head` on non-sqlite URLs. CI matrix covers sqlite + postgres:16. See `docs/operations/database.md`. |
 | PRA-024 | Medium | **done** | Composite indexes added on RunEvent, RunMessage, Fact, AuditLog in `secops/models.py`. WorkflowPhaseRun already indexed. |
 | PRA-025 | Medium | **deferred** | JSON-column schemas. Tracked with PRA-047. |
 
@@ -112,14 +112,16 @@ Legend:
 
 ## Summary
 
-- **Done (implemented on main):** PRA-001, 002, 003, 004, 008, 010, 011, 012, 017, 022, 024, 026, 027, 030, 031, 036, 040, 041, 042 (19)
-- **Deferred (architectural / infra / scope):** PRA-013, 014, 015, 016, 018, 019, 020, 023, 025, 028, 032, 033, 034, 035, 037, 038, 039, 044, 045, 046, 047, 048, 049, 050, 051, 053 (26)
+- **Done (implemented on main):** PRA-001, 002, 003, 004, 008, 010, 011, 012, 013, 014, 016, 017, 019, 020, 022, 023, 024, 026, 027, 030, 031, 036, 040, 041, 042 (25)
+- **Deferred (architectural / infra / scope):** PRA-015, 018, 025, 028, 032, 033, 034, 035, 037, 038, 039, 044, 045, 046, 047, 048, 049, 050, 051, 053 (20)
 - **Won't-fix (accepted / superseded):** PRA-021, 029, 043, 052, 054 (5)
 - **Partial:** PRA-055 (1)
 
-All Critical (4/4) and most High-severity confirmed findings with actionable fixes are closed. Remaining High items (PRA-013/014/015/018/019/044) require either multi-user auth, provider cooperation, or a larger refactor — tracked for a subsequent hardening milestone.
+All Critical (4/4) findings and all confirmed High-severity findings with actionable fixes are closed. Remaining High items (PRA-015, PRA-018, PRA-044) depend on upstream provider cooperation, a worker-process split, or UX classification work — tracked for subsequent milestones.
 
 ### Test state
-- `tests/security/` — 42+ new tests (auth/scope/redaction/policy-gates), all passing.
-- Full suite: `101 passed, 1 deselected` (deselected is the pre-existing flake `test_claim_complete_advances_to_next_phase`; `test_vantix_quick_scan_starts_recon_only_and_approval_resumes` is pre-existing on main).
+- `tests/security/` — auth (5), scope (14), redaction (17+), policy-gates (6), users/auth-flow/rbac/csrf (new under Track 2) all passing.
+- `tests/release/test_manifest.py` — 5 tests covering manifest tamper detection + NAS bootstrap fingerprint guard.
+- Full suite: `143 passed, 2 failed (pre-existing upstream: test_vantix_chat_*), 8 deselected`.
+- CI matrix: sqlite + postgres:16 (via `alembic upgrade head`), plus frontend tsc + vite build.
 - Frontend: `tsc --noEmit` clean.
