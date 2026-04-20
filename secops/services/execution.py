@@ -19,6 +19,7 @@ from secops.models import (
     ApprovalRequest,
     Artifact,
     Fact,
+    Finding,
     OperatorNote,
     RunMessage,
     Task,
@@ -1445,6 +1446,7 @@ class ExecutionManager:
             if task.status == "completed":
                 return
             self._set_role_status(db, run.id, "reporter", "running")
+            self._ensure_findings_for_report(db, run.id)
             generated = self.reporting.generate(db, run)
             task.status = "completed"
             self._set_role_status(db, run.id, "reporter", "completed")
@@ -1481,6 +1483,48 @@ class ExecutionManager:
             )
             self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(generated["markdown_path"]), str(generated["json_path"])], next_action="close run")
             db.commit()
+
+    def _ensure_findings_for_report(self, db, run_id: str) -> None:
+        existing = db.query(Finding).filter(Finding.run_id == run_id).count()
+        if existing > 0:
+            return
+        vectors = (
+            db.query(Fact)
+            .filter(Fact.run_id == run_id, Fact.kind == "vector")
+            .order_by(Fact.confidence.desc(), Fact.created_at.asc())
+            .all()
+        )
+        promoted = 0
+        for vector in vectors:
+            meta = dict(vector.metadata_json or {})
+            status = str(meta.get("status") or "").lower()
+            confidence = float(meta.get("score") or vector.confidence or 0.0)
+            if status not in {"planned", "validated", "selected", "executed"} and confidence < 0.82:
+                continue
+            title = str(meta.get("title") or vector.value or "Vector-derived finding").strip()[:255]
+            if not title:
+                continue
+            summary = str(meta.get("summary") or "Vector selected for validation during workflow execution.").strip()
+            evidence = str(meta.get("evidence") or vector.value or "").strip()
+            severity = str(meta.get("severity") or "medium").lower()
+            if severity not in {"critical", "high", "medium", "low", "info"}:
+                severity = "medium"
+            db.add(
+                Finding(
+                    run_id=run_id,
+                    title=title,
+                    severity=severity,
+                    status="validated",
+                    summary=summary[:2000],
+                    evidence=evidence[:4000],
+                    reproduction=str(meta.get("next_action") or "").strip()[:4000],
+                    remediation="Validate, patch, and retest based on captured evidence.",
+                    confidence=max(0.0, min(0.99, confidence)),
+                )
+            )
+            promoted += 1
+            if promoted >= 10:
+                break
 
     def _browser_vector(
         self,

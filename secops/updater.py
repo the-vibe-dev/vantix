@@ -195,11 +195,24 @@ class Updater:
             if proc.returncode != 0:
                 raise UpdateError("backend", "Failed to create Python virtual environment", {"stderr": proc.stderr})
         pip = [str(venv_python), "-m", "pip"]
-        commands = [[*pip, "install", "--upgrade", "pip"], [*pip, "install", "-e", ".[dev]"]]
+        commands = [
+            [*pip, "install", "--upgrade", "pip"],
+            [*pip, "install", "-e", ".[dev]"],
+            [*pip, "install", "passlib[argon2]", "argon2-cffi", "playwright"],
+        ]
         for command in commands:
             proc = self.run(command)
             if proc.returncode != 0:
                 raise UpdateError("backend", f"Dependency refresh failed: {' '.join(command)}", {"stderr": proc.stderr, "stdout": proc.stdout})
+        browser_install = self.run([str(venv_python), "-m", "playwright", "install", "--with-deps", "chromium"])
+        if browser_install.returncode != 0:
+            browser_install = self.run([str(venv_python), "-m", "playwright", "install", "chromium"])
+        if browser_install.returncode != 0:
+            raise UpdateError(
+                "backend",
+                "Playwright Chromium runtime install failed",
+                {"stderr": browser_install.stderr, "stdout": browser_install.stdout},
+            )
 
     def ensure_frontend(self) -> None:
         frontend = self.repo_root / "frontend"

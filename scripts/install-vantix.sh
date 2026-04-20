@@ -89,9 +89,13 @@ run_cmd "Upgrade pip" "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip
 
 step "Installer dependencies"
 run_cmd "Install Vantix editable package" "$ROOT_DIR/.venv/bin/python" -m pip install -e "$ROOT_DIR[dev]"
-echo "    -> Install Playwright Chromium runtime (best effort)"
-if ! "$ROOT_DIR/.venv/bin/python" -m playwright install chromium; then
-  echo "    [WARN] Playwright Chromium install failed during bootstrap. The interactive installer will retry."
+run_cmd "Install auth/browser runtime packages" "$ROOT_DIR/.venv/bin/python" -m pip install "passlib[argon2]" "argon2-cffi" "playwright"
+echo "    -> Install Playwright Chromium runtime"
+if ! "$ROOT_DIR/.venv/bin/python" -m playwright install --with-deps chromium; then
+  echo "    [WARN] Playwright --with-deps install failed; retrying browser-only install."
+  if ! "$ROOT_DIR/.venv/bin/python" -m playwright install chromium; then
+    echo "    [WARN] Playwright Chromium install failed during bootstrap. The interactive installer will retry."
+  fi
 fi
 
 step "Interactive wizard"

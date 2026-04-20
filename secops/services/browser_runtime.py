@@ -432,6 +432,40 @@ class BrowserRuntimeService:
                 session_summary={"run_id": run_id, "authenticated": "failed", "blocked_actions": blocked_actions},
             )
 
+        try:
+            with sync_playwright() as p:  # type: ignore[name-defined]
+                probe = p.chromium.launch(headless=True)
+                probe.close()
+        except Exception as exc:  # noqa: BLE001
+            blocked_actions.append("playwright-runtime-unavailable")
+            report = {
+                "run_id": run_id,
+                "entry_url": entry_url,
+                "blocked_actions": blocked_actions,
+                "note": "Install playwright chromium runtime and Linux deps to enable browser assessment.",
+                "detail": str(exc)[:500],
+                "at": _utc_now(),
+            }
+            path = browser_root / "browser_runtime_unavailable.json"
+            path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+            artifacts.append({"kind": "browser-session-summary", "path": str(path)})
+            completed_at = _utc_now()
+            return BrowserAssessmentResult(
+                started_at=started_at,
+                completed_at=completed_at,
+                entry_url=entry_url,
+                current_url=current_url,
+                authenticated="failed",
+                observations=[],
+                network_summary={"total_requests": 0, "by_method": {}, "by_host": {}, "endpoints": []},
+                route_graph=[],
+                blocked_actions=blocked_actions,
+                artifacts=artifacts,
+                auth_transitions=[],
+                dom_diffs=[],
+                session_summary={"run_id": run_id, "authenticated": "failed", "blocked_actions": blocked_actions},
+            )
+
         with sync_playwright() as p:  # type: ignore[name-defined]
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(ignore_https_errors=True)

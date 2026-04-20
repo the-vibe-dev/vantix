@@ -2,6 +2,7 @@ import os
 import time
 import tempfile
 from pathlib import Path
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
@@ -12,7 +13,8 @@ os.environ["SECOPS_RUNTIME_ROOT"] = str(Path(tempfile.gettempdir()) / f"secops_a
 
 from secops.app import create_app
 from secops.config import settings
-from secops.db import Base, engine
+from secops.db import Base, SessionLocal, engine
+from secops.models import ApprovalRequest, Engagement, WorkerLease, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 
 
 def reset_db() -> None:
@@ -27,6 +29,74 @@ def test_modes_endpoint() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert any(item["id"] == "ctf" for item in payload)
+
+
+def test_workflow_state_handles_naive_sqlite_datetimes() -> None:
+    reset_db()
+    client = TestClient(create_app())
+    with SessionLocal() as db:
+        engagement = Engagement(name="workflow-state", mode="pentest", target="10.10.10.10", tags=[])
+        db.add(engagement)
+        db.flush()
+        run = WorkspaceRun(
+            engagement_id=engagement.id,
+            mode="pentest",
+            workspace_id="ws-workflow-state",
+            status="blocked",
+            objective="test",
+            target="10.10.10.10",
+            config_json={},
+        )
+        db.add(run)
+        db.flush()
+        workflow = WorkflowExecution(run_id=run.id, status="running", current_phase="recon-sidecar")
+        db.add(workflow)
+        db.flush()
+        # Explicitly write naive datetimes to mirror sqlite behavior and ensure
+        # workflow-state calculations are timezone-safe.
+        db.add(
+            WorkflowPhaseRun(
+                run_id=run.id,
+                workflow_id=workflow.id,
+                phase_name="recon-sidecar",
+                attempt=1,
+                status="blocked",
+                worker_id="worker-local",
+                started_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.add(
+            WorkerLease(
+                run_id=run.id,
+                workflow_id=workflow.id,
+                phase_name="recon-sidecar",
+                worker_id="worker-local",
+                status="active",
+                created_at=datetime.utcnow(),
+                heartbeat_at=datetime.utcnow(),
+                lease_expires_at=datetime.utcnow(),
+            )
+        )
+        db.add(
+            ApprovalRequest(
+                run_id=run.id,
+                title="Approval",
+                detail="test",
+                reason="recon_high_noise-policy",
+                status="approved",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+        run_id = run.id
+
+    response = client.get(f"/api/v1/runs/{run_id}/workflow-state")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metrics"]["current_claim_age_seconds"] >= 0.0
+    assert payload["metrics"]["approval_latency_seconds_latest"] >= 0.0
 
 
 def test_create_engagement_and_run() -> None:

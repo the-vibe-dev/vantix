@@ -35,4 +35,15 @@ class EpssAdapter:
                     metadata=row,
                 )
             )
-        return SourceUpdateResult(source=self.name, records=records, cursor={"count": len(records), "date": data.get("status", {}).get("date", "")})
+        status = data.get("status")
+        if isinstance(status, dict):
+            status_date = str(status.get("date", ""))
+        elif isinstance(status, str):
+            status_date = status
+        else:
+            status_date = ""
+        return SourceUpdateResult(
+            source=self.name,
+            records=records,
+            cursor={"count": len(records), "date": status_date},
+        )

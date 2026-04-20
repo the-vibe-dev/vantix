@@ -25,6 +25,14 @@ The primary operator loop is now run-centric: mission chat, live timeline, contr
 - Reject or cancel when scope drifts or evidence is insufficient.
 - Use replan messages to adjust direction between phases.
 
+## Local User Management
+
+- Login users are stored in the local Vantix database, not re-read from `.env` after bootstrap.
+- Update/create users with:
+  - `bash scripts/vantix-user.sh upsert --username <name> --password '<pass>' --role admin|operator|viewer`
+  - `bash scripts/vantix-user.sh set-password --username <name> --password '<pass>'`
+  - `bash scripts/vantix-user.sh list`
+
 ## Browser Assessment (Authorized Web Apps)
 
 The `browser-assessment` phase can capture route discovery, form maps, network summaries, DOM/screenshot artifacts, session summaries, auth transitions, DOM deltas, client-side signals, and hidden-route hints for approved web targets. Authenticated browsing requires explicit run config and approval.

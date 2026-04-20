@@ -305,6 +305,26 @@ class Wizard:
             proc = self.run_visible(command, label=" ".join(command[3:]))
             if proc.returncode != 0:
                 raise RuntimeError(f"Failed backend bootstrap: {' '.join(command)}")
+        self.ensure_auth_dependencies()
+
+    def ensure_auth_dependencies(self) -> None:
+        """Make sure passlib and argon2 backend are usable for local auth."""
+        code = (
+            "import importlib.util, sys;"
+            "ok_passlib = importlib.util.find_spec('passlib') is not None;"
+            "ok_argon2 = importlib.util.find_spec('argon2') is not None;"
+            "print('1' if ok_passlib and ok_argon2 else '0')"
+        )
+        probe = self._repo_python(code)
+        if (probe.stdout or "").strip() == "1":
+            return
+        pip = [str(self.venv_python), "-m", "pip"]
+        proc = self.run_visible([*pip, "install", "passlib[argon2]", "argon2-cffi"], label="Install auth hashing dependencies")
+        if proc.returncode != 0:
+            raise RuntimeError("Failed to install auth dependencies (passlib/argon2-cffi)")
+        verify = self._repo_python(code)
+        if (verify.stdout or "").strip() != "1":
+            raise RuntimeError("Auth dependencies still unavailable after install")
 
     def ensure_browser_runtime(self) -> dict[str, Any]:
         pip = [str(self.venv_python), "-m", "pip"]
@@ -314,13 +334,36 @@ class Wizard:
             if install.returncode != 0:
                 return {"enabled": False, "reason": "playwright-install-failed"}
         browser_install = self.run_visible(
-            [str(self.venv_python), "-m", "playwright", "install", "chromium"],
-            label="Install Playwright Chromium runtime",
+            [str(self.venv_python), "-m", "playwright", "install", "--with-deps", "chromium"],
+            label="Install Playwright Chromium runtime (with deps)",
         )
         if browser_install.returncode != 0:
-            print("    [WARN] Playwright installed but Chromium runtime installation failed.")
-            print("    [HINT] Retry manually: .venv/bin/python -m playwright install chromium")
-            return {"enabled": False, "reason": "chromium-install-failed"}
+            browser_install = self.run_visible(
+                [str(self.venv_python), "-m", "playwright", "install", "chromium"],
+                label="Retry Playwright Chromium runtime install",
+            )
+            if browser_install.returncode != 0:
+                print("    [WARN] Playwright installed but Chromium runtime installation failed.")
+                print("    [HINT] Retry manually: .venv/bin/python -m playwright install --with-deps chromium")
+                return {"enabled": False, "reason": "chromium-install-failed"}
+        probe = self.run(
+            [
+                str(self.venv_python),
+                "-c",
+                (
+                    "from playwright.sync_api import sync_playwright;"
+                    "p=sync_playwright().start();"
+                    "b=p.chromium.launch(headless=True);"
+                    "b.close();"
+                    "p.stop();"
+                    "print('ok')"
+                ),
+            ]
+        )
+        if probe.returncode != 0:
+            print("    [WARN] Playwright package is installed but launch probe failed.")
+            print("    [HINT] Inspect with: .venv/bin/python -m playwright install --with-deps chromium")
+            return {"enabled": False, "reason": "playwright-launch-probe-failed"}
         return {"enabled": True, "reason": ""}
 
     def ensure_corepack(self) -> None:
@@ -577,15 +620,32 @@ class Wizard:
                 "SECOPS_ENABLE_WRITE_EXECUTION": "true",
             }
         )
+        default_admin_user = self.env_updates.get("SECOPS_ADMIN_USERNAME", "admin")
+        default_admin_pass = self.env_updates.get("SECOPS_ADMIN_PASSWORD", "")
+        admin_user = self.prompt("Bootstrap admin username", default_admin_user)
+        admin_pass = self.prompt("Bootstrap admin password", default_admin_pass)
+        extra_users = self.prompt(
+            "Optional bootstrap users (username:password:role, comma-separated)",
+            self.env_updates.get("SECOPS_BOOTSTRAP_USERS", ""),
+        )
+        self.env_updates["SECOPS_ADMIN_USERNAME"] = admin_user
+        self.env_updates["SECOPS_ADMIN_PASSWORD"] = admin_pass
+        self.env_updates["SECOPS_BOOTSTRAP_USERS"] = extra_users
 
     def bootstrap_database(self) -> None:
         code = (
             "from pathlib import Path;"
             "from secops.config import settings;"
             "from secops.db import Base, engine;"
+            "from secops.db import SessionLocal;"
+            "from secops.services.auth_service import bootstrap_users_if_needed;"
             "Path(settings.runtime_root).mkdir(parents=True, exist_ok=True);"
             "Path(settings.reports_root).mkdir(parents=True, exist_ok=True);"
             "Base.metadata.create_all(bind=engine);"
+            "db=SessionLocal();"
+            "created=bootstrap_users_if_needed(db);"
+            "db.commit() if created else None;"
+            "db.close();"
             "print('ok')"
         )
         proc = self._repo_python(code)
@@ -850,6 +910,18 @@ class Wizard:
         frontend_dist = (self.repo_root / "frontend" / "dist").exists()
         cve_status = self.run(["bash", str(self.repo_root / "scripts" / "secops-cve-search.sh"), "status"])
         cve_ready = cve_status.returncode == 0 and "HTTP:200" in (cve_status.stdout or "")
+        browser_probe = self.run(
+            [
+                str(self.venv_python),
+                "-c",
+                (
+                    "import importlib.util;"
+                    "spec=importlib.util.find_spec('playwright');"
+                    "print('1' if spec is not None else '0')"
+                ),
+            ]
+        )
+        browser_ready = (browser_probe.stdout or "").strip() == "1"
         ready = api_ready and (codex_ok or provider_count > 0)
         return {
             "ready": ready,
@@ -858,6 +930,7 @@ class Wizard:
             "codex_available": codex_ok,
             "provider_count": provider_count,
             "cve_ready": cve_ready,
+            "browser_ready": browser_ready,
             "installed_tools": sum(1 for row in tool_statuses if row.get("installed")),
             "tool_count": len(tool_statuses),
         }
@@ -901,6 +974,7 @@ class Wizard:
         verify = self.verify()
         print(f"    Ready: {bool(verify['ready'])}")
         print(f"    Frontend built: {bool(verify['frontend_built'])}")
+        print(f"    Browser runtime ready: {bool(verify.get('browser_ready'))}")
         print(f"    Tools installed: {verify['installed_tools']}/{verify['tool_count']}")
         self.section("Service startup", "Optionally installing user systemd services for API and UI.")
         services = self.configure_user_systemd()

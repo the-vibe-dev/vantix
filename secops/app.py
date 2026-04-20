@@ -47,24 +47,25 @@ def _run_migrations_if_needed() -> None:
     command.upgrade(cfg, "head")
 
 
-def _bootstrap_admin_if_needed() -> None:
+def _bootstrap_users_if_needed() -> None:
     try:
         from secops.db import SessionLocal
-        from secops.services.auth_service import bootstrap_admin_if_needed
+        from secops.services.auth_service import bootstrap_users_if_needed
         with SessionLocal() as db:
-            created = bootstrap_admin_if_needed(db)
-            if created is not None:
+            created = bootstrap_users_if_needed(db)
+            if created:
                 db.commit()
-                logger.warning("bootstrap admin user created: %s", created.username)
+                names = ", ".join(user.username for user in created)
+                logger.warning("bootstrap users created: %s", names)
     except Exception:  # noqa: BLE001
-        logger.exception("admin bootstrap failed")
+        logger.exception("user bootstrap failed")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _check_startup_config()
     _run_migrations_if_needed()
-    _bootstrap_admin_if_needed()
+    _bootstrap_users_if_needed()
     try:
         yield
     finally:

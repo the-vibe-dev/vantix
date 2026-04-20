@@ -1187,11 +1187,17 @@ function ControlCenterPanel({
 }
 
 function TimelinePanel({ events }: { events: EventRecord[] }) {
+  const visibleEvents = events.filter((event) => !(event.event_type === "terminal" && String(event.level || "info").toLowerCase() === "info"));
+  const hiddenTerminalCount = Math.max(0, events.length - visibleEvents.length);
   return (
-    <Panel title="Attack Timeline" meta={`${events.length} events`} style={{ gridColumn: "span 2" }}>
-      {events.length ? (
+    <Panel
+      title="Attack Timeline"
+      meta={`${visibleEvents.length} events${hiddenTerminalCount ? ` · ${hiddenTerminalCount} terminal lines hidden` : ""}`}
+      style={{ gridColumn: "span 2" }}
+    >
+      {visibleEvents.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
-          {events.map((event) => (
+          {visibleEvents.map((event) => (
             <div
               key={event.id}
               style={{

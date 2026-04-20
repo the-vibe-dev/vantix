@@ -27,6 +27,7 @@ fi
 
 "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null
 "$ROOT_DIR/.venv/bin/python" -m pip install -e "$ROOT_DIR[dev]" >/dev/null
-"$ROOT_DIR/.venv/bin/python" -m playwright install chromium >/dev/null || true
+"$ROOT_DIR/.venv/bin/python" -m pip install "passlib[argon2]" "argon2-cffi" "playwright" >/dev/null
+"$ROOT_DIR/.venv/bin/python" -m playwright install --with-deps chromium >/dev/null || "$ROOT_DIR/.venv/bin/python" -m playwright install chromium >/dev/null || true
 
 exec "$ROOT_DIR/.venv/bin/python" -m secops.updater --repo-root "$ROOT_DIR" "$@"

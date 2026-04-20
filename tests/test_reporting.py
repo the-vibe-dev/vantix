@@ -15,6 +15,7 @@ os.environ["SECOPS_RUNTIME_ROOT"] = str(Path(tempfile.gettempdir()) / f"secops_r
 from secops.db import Base, SessionLocal, engine
 from secops.models import Artifact, Engagement, Fact, RunEvent, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 from secops.routers.runs import get_run_replay
+from secops.services.execution import ExecutionManager
 from secops.services.reporting import ReportingService
 
 
@@ -112,3 +113,35 @@ def test_run_replay_returns_phase_history_and_events() -> None:
         assert payload["report_path"] == "/tmp/report.md"
         assert payload["events"][0]["event_type"] == "phase_transition"
         assert payload["events"][1]["event_type"] == "approval_resolved"
+
+
+def test_report_phase_promotes_high_signal_vectors_when_findings_empty() -> None:
+    reset_db()
+    with SessionLocal() as db:
+        run = _seed_run(db)
+        db.add(
+            Fact(
+                run_id=run.id,
+                source="recon-web",
+                kind="vector",
+                value="source-disclosure on 80",
+                confidence=0.85,
+                tags=["web", "candidate"],
+                metadata_json={
+                    "title": "source-disclosure on 80",
+                    "summary": "Potential source disclosure identified.",
+                    "status": "planned",
+                    "severity": "high",
+                    "evidence": "http://target/server.py",
+                    "next_action": "validate safely and capture proof",
+                    "score": 0.85,
+                },
+            )
+        )
+        db.commit()
+        manager = ExecutionManager()
+        manager._ensure_findings_for_report(db, run.id)
+        db.commit()
+        generated = ReportingService().generate(db, run)
+        assert generated["summary"]["findings"]
+        assert generated["summary"]["findings"][0]["title"] == "source-disclosure on 80"

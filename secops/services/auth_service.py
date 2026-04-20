@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from passlib.hash import argon2
+from passlib.hash import pbkdf2_sha256
+from passlib.exc import MissingBackendError
 from sqlalchemy.orm import Session
 
 from secops.config import settings
@@ -19,12 +23,21 @@ def utcnow() -> datetime:
 
 
 def hash_password(plaintext: str) -> str:
-    return argon2.hash(plaintext)
+    try:
+        return argon2.hash(plaintext)
+    except MissingBackendError:
+        # Keep auth operational when argon2 backend is unavailable (common on
+        # some local Python builds) and store a strong hash format.
+        return pbkdf2_sha256.hash(plaintext)
 
 
 def verify_password(plaintext: str, stored_hash: str) -> bool:
     try:
-        return argon2.verify(plaintext, stored_hash)
+        if (stored_hash or "").startswith("$argon2"):
+            return argon2.verify(plaintext, stored_hash)
+        if (stored_hash or "").startswith("$pbkdf2-sha256"):
+            return pbkdf2_sha256.verify(plaintext, stored_hash)
+        return False
     except Exception:
         return False
 
@@ -110,3 +123,75 @@ def bootstrap_admin_if_needed(db: Session) -> User | None:
     db.add(user)
     db.flush()
     return user
+
+
+def _parse_bootstrap_users(raw: str) -> list[dict[str, str]]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    # JSON list form: [{"username":"u","password":"p","role":"operator"}]
+    if text.startswith("["):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = []
+        if isinstance(payload, list):
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                username = str(item.get("username") or "").strip()
+                password = str(item.get("password") or "")
+                role = str(item.get("role") or "operator").strip().lower()
+                if not username or not password or username in seen:
+                    continue
+                if role not in {"viewer", "operator", "admin"}:
+                    role = "operator"
+                seen.add(username)
+                out.append({"username": username, "password": password, "role": role})
+        return out
+    # CSV form: username:password:role,username2:password2:role2
+    for chunk in text.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) < 2:
+            continue
+        username = parts[0].strip()
+        password = parts[1]
+        role = (parts[2].strip().lower() if len(parts) >= 3 else "operator")
+        if not username or not password or username in seen:
+            continue
+        if role not in {"viewer", "operator", "admin"}:
+            role = "operator"
+        seen.add(username)
+        out.append({"username": username, "password": password, "role": role})
+    return out
+
+
+def bootstrap_users_if_needed(db: Session) -> list[User]:
+    """Create first-boot users from SECOPS_ADMIN_* and optional SECOPS_BOOTSTRAP_USERS when users table is empty."""
+    if db.query(User).count() > 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    if settings.admin_username and settings.admin_password:
+        rows.append({"username": settings.admin_username, "password": settings.admin_password, "role": "admin"})
+    rows.extend(_parse_bootstrap_users(settings.bootstrap_users))
+    created: list[User] = []
+    seen: set[str] = set()
+    for row in rows:
+        username = str(row.get("username") or "").strip()
+        password = str(row.get("password") or "")
+        role = str(row.get("role") or "operator").lower()
+        if not username or not password or username in seen:
+            continue
+        if role not in {"viewer", "operator", "admin"}:
+            role = "operator"
+        user = User(username=username, password_hash=hash_password(password), role=role)
+        db.add(user)
+        db.flush()
+        created.append(user)
+        seen.add(username)
+    return created

@@ -59,6 +59,20 @@ Browser runtime note:
 curl -s http://127.0.0.1:8787/api/v1/system/status
 ```
 
+## Users and Login
+
+- First install/boot can seed users from `.env`:
+  - `SECOPS_ADMIN_USERNAME`
+  - `SECOPS_ADMIN_PASSWORD`
+  - optional `SECOPS_BOOTSTRAP_USERS` (`username:password:role,...`)
+- Manage users locally with:
+
+```bash
+bash scripts/vantix-user.sh list
+bash scripts/vantix-user.sh upsert --username admin --password 'change-me' --role admin
+bash scripts/vantix-user.sh set-password --username admin --password 'new-password'
+```
+
 ## Update
 
 ```bash

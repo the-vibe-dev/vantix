@@ -104,10 +104,20 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _seconds_between(start: datetime | None, end: datetime | None) -> float | None:
-    if start is None or end is None:
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
         return None
-    return max(0.0, (end - start).total_seconds())
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+    s = _as_utc(start)
+    e = _as_utc(end)
+    if s is None or e is None:
+        return None
+    return max(0.0, (e - s).total_seconds())
 
 
 def _blocked_reason_class(reason: str) -> str:
@@ -606,7 +616,7 @@ def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
     active_leases = [lease for lease in leases if lease.status == "active"]
     stale_workers = [worker for worker in workers if worker.status in {"stale", "error"}]
     approval_latencies = [
-        max(0.0, (approval.updated_at - approval.created_at).total_seconds())
+        (_seconds_between(approval.created_at, approval.updated_at) or 0.0)
         for approval in approval_rows
         if approval.status in {"approved", "rejected"}
     ]
@@ -638,7 +648,7 @@ def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         phase_durations[phase.phase_name] = max(float(phase_durations.get(phase.phase_name, 0.0)), round(duration, 3))
     latest_active_lease = active_leases[0] if active_leases else None
     current_claim_age_seconds = (
-        max(0.0, (_utc_now() - latest_active_lease.created_at).total_seconds())
+        (_seconds_between(latest_active_lease.created_at, _utc_now()) or 0.0)
         if latest_active_lease is not None
         else 0.0
     )
