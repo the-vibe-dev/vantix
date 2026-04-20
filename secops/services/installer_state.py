@@ -67,6 +67,74 @@ class InstallerStateService:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
         return payload
 
+    def verify_release_integrity(
+        self,
+        *,
+        current_git_sha: str,
+        current_manifest_sha256: str,
+        accept_change_env: str = "VANTIX_ACCEPT_VERSION_CHANGE",
+    ) -> dict[str, Any]:
+        """Guard against silent tampering of deployed state across releases.
+
+        On first call, records the current release fingerprint. On subsequent
+        calls, compares against the recorded values. If they differ, refuse to
+        proceed unless the operator has explicitly opted in by setting
+        ``accept_change_env`` to the new git sha.
+        """
+        import os
+
+        state = self.read()
+        recorded_sha = state.get("release_git_sha", "")
+        recorded_manifest = state.get("release_manifest_sha256", "")
+        if not recorded_sha:
+            self.merge(
+                {
+                    "release_git_sha": current_git_sha,
+                    "release_manifest_sha256": current_manifest_sha256,
+                }
+            )
+            self.append_update_history(
+                {"event": "release_fingerprint_recorded", "git_sha": current_git_sha}
+            )
+            return {"ok": True, "detail": "fingerprint recorded on first boot"}
+
+        if recorded_sha == current_git_sha and recorded_manifest == current_manifest_sha256:
+            return {"ok": True, "detail": "release fingerprint matches recorded state"}
+
+        ack = os.environ.get(accept_change_env, "").strip()
+        if ack and ack == current_git_sha:
+            self.merge(
+                {
+                    "release_git_sha": current_git_sha,
+                    "release_manifest_sha256": current_manifest_sha256,
+                }
+            )
+            self.append_update_history(
+                {
+                    "event": "release_fingerprint_accepted",
+                    "from": recorded_sha,
+                    "to": current_git_sha,
+                }
+            )
+            return {"ok": True, "detail": "operator-accepted version change"}
+
+        self.append_update_history(
+            {
+                "event": "release_fingerprint_mismatch",
+                "recorded_git_sha": recorded_sha,
+                "current_git_sha": current_git_sha,
+            }
+        )
+        return {
+            "ok": False,
+            "detail": (
+                "release fingerprint mismatch; refusing to proceed. "
+                f"Set {accept_change_env}={current_git_sha} to accept the version change."
+            ),
+            "recorded_git_sha": recorded_sha,
+            "current_git_sha": current_git_sha,
+        }
+
     def update_history(self, limit: int = 50) -> list[dict[str, Any]]:
         if not self.update_history_path.exists():
             return []

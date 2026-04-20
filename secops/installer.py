@@ -469,6 +469,27 @@ class Wizard:
         print("    [WARN] Codex login command attempts failed.")
         return False
 
+    def _download_and_verify_ollama_script(self, expected_sha256: str) -> Path | None:
+        import tempfile
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen("https://ollama.com/install.sh", timeout=30) as resp:  # noqa: S310
+                body = resp.read()
+        except Exception:  # noqa: BLE001
+            return None
+        digest = hashlib.sha256(body).hexdigest().lower()
+        if digest != expected_sha256.lower():
+            return None
+        fd, path = tempfile.mkstemp(prefix="ollama-install-", suffix=".sh")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(body)
+        except Exception:  # noqa: BLE001
+            Path(path).unlink(missing_ok=True)
+            return None
+        return Path(path)
+
     def bootstrap_provider_runtime(self, provider_type: str) -> dict[str, Any]:
         provider = (provider_type or "").strip().lower()
         if provider != "ollama":
@@ -482,16 +503,43 @@ class Wizard:
                 "detail": "curl missing; cannot auto-install ollama",
                 "hint": "Install curl and run: curl -fsSL https://ollama.com/install.sh | sh",
             }
-        proc = self.run_visible(
-            ["bash", "-lc", "curl -fsSL https://ollama.com/install.sh | sh"],
-            label="Install Ollama runtime",
-        )
+        # Download, verify SHA-256, then execute. Replaces the classic
+        # curl | sh pattern so a MITM cannot swap the installer payload.
+        ollama_script_sha256 = os.environ.get(
+            "SECOPS_OLLAMA_INSTALL_SHA256", ""
+        ).strip().lower()
+        if not ollama_script_sha256:
+            return {
+                "provider_type": provider,
+                "runtime_installed": False,
+                "detail": (
+                    "Refusing to run Ollama installer without a pinned SHA-256. "
+                    "Set SECOPS_OLLAMA_INSTALL_SHA256 after reviewing the script."
+                ),
+                "hint": (
+                    "curl -fsSL https://ollama.com/install.sh -o /tmp/ollama.sh && "
+                    "sha256sum /tmp/ollama.sh   # then export SECOPS_OLLAMA_INSTALL_SHA256=<digest>"
+                ),
+            }
+        staged = self._download_and_verify_ollama_script(ollama_script_sha256)
+        if staged is None:
+            return {
+                "provider_type": provider,
+                "runtime_installed": False,
+                "detail": "ollama install script digest mismatch or download failed",
+                "hint": "Review https://ollama.com/install.sh and update SECOPS_OLLAMA_INSTALL_SHA256",
+            }
+        proc = self.run_visible(["bash", str(staged)], label="Install Ollama runtime")
+        try:
+            staged.unlink(missing_ok=True)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
         if proc.returncode != 0 or not shutil.which("ollama"):
             return {
                 "provider_type": provider,
                 "runtime_installed": False,
                 "detail": "ollama install failed",
-                "hint": "Run manually: curl -fsSL https://ollama.com/install.sh | sh",
+                "hint": "Run manually after verifying the script: bash /path/to/verified-ollama-install.sh",
             }
         return {"provider_type": provider, "runtime_installed": True, "detail": "ollama installed"}
 

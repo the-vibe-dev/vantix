@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write  # required for cosign keyless OIDC signing
+
+jobs:
+  build-and-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npx vite build
+      - name: Build release tarball + manifest
+        run: bash scripts/build-release.sh
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign tarball (keyless via GitHub OIDC)
+        run: |
+          set -eux
+          tar=$(ls dist/*.tar.gz | head -1)
+          cosign sign-blob --yes \
+            --output-signature "${tar}.sig" \
+            --output-certificate "${tar}.pem" \
+            "${tar}"
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sig
+            dist/*.tar.gz.pem
+            dist/*.manifest.json
