@@ -313,28 +313,38 @@ export class ApiError extends Error {
   }
 }
 
-function authHeaders(extra?: HeadersInit): HeadersInit {
-  const token = getApiToken();
-  return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(extra || {}),
-  };
+export type AuthUser = { username: string; role: "admin" | "operator" | "viewer" | string };
+
+const MUTATING = new Set(["POST", "PUT", "DELETE", "PATCH"]);
+let csrfToken = "";
+
+export function setCsrfToken(token: string): void {
+  csrfToken = token || "";
 }
 
-export function getApiToken(): string {
-  return localStorage.getItem("vantix_api_token") || "";
+export function getCsrfToken(): string {
+  return csrfToken;
 }
 
-export function setApiToken(token: string): void {
-  if (token.trim()) localStorage.setItem("vantix_api_token", token.trim());
-  else localStorage.removeItem("vantix_api_token");
+export function hydrateCsrfFromCookie(): void {
+  const match = document.cookie.split("; ").find((row) => row.startsWith("vantix_csrf="));
+  if (match) csrfToken = decodeURIComponent(match.slice("vantix_csrf=".length));
+}
+
+function csrfHeaders(method: string | undefined, extra?: HeadersInit): HeadersInit {
+  const m = (method || "GET").toUpperCase();
+  if (MUTATING.has(m) && csrfToken) {
+    return { "X-CSRF-Token": csrfToken, ...(extra || {}) };
+  }
+  return extra || {};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...authHeaders(init?.headers),
+      ...csrfHeaders(init?.method, init?.headers),
     },
     ...init,
   });
@@ -355,7 +365,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function uploadRequest<T>(path: string, body: FormData): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
-    headers: authHeaders(),
+    credentials: "include",
+    headers: csrfHeaders("POST"),
     body,
   });
   if (!response.ok) {
@@ -431,7 +442,7 @@ export const api = {
   fetchRunFileBlob: async (runId: string, path: string): Promise<Blob> => {
     const response = await fetch(`/api/v1/runs/${runId}/file?path=${encodeURIComponent(path)}`, {
       method: "GET",
-      headers: authHeaders(),
+      credentials: "include",
     });
     if (!response.ok) {
       let detail = "";
@@ -450,8 +461,24 @@ export const api = {
   retryRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/retry`, { method: "POST" }),
   replanRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/replan`, { method: "POST" }),
   cancelRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/cancel`, { method: "POST" }),
-  addNote: (runId: string, content: string) =>
-    request(`/api/v1/runs/${runId}/operator-notes`, { method: "POST", body: JSON.stringify({ content }) }),
+  addNote: (runId: string, content: string, classification: "unrestricted" | "internal" | "sensitive" = "unrestricted") =>
+    request(`/api/v1/runs/${runId}/operator-notes`, { method: "POST", body: JSON.stringify({ content, classification }) }),
+  login: async (username: string, password: string) => {
+    const res = await request<{ user: AuthUser; csrf: string }>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setCsrfToken(res.csrf);
+    return res;
+  },
+  logout: async () => {
+    try {
+      await request<{ ok: boolean }>("/api/v1/auth/logout", { method: "POST" });
+    } finally {
+      setCsrfToken("");
+    }
+  },
+  me: () => request<AuthUser>("/api/v1/auth/me"),
   approve: (approvalId: string, note = "") =>
     request(`/api/v1/approvals/${approvalId}/approve`, { method: "POST", body: JSON.stringify({ note }) }),
   reject: (approvalId: string, note = "") =>

@@ -13,6 +13,7 @@ import {
   ApiError,
   Approval,
   AttackChain,
+  AuthUser,
   BrowserState,
   EventRecord,
   Fact,
@@ -26,9 +27,9 @@ import {
   Task,
   Vector,
   api,
-  getApiToken,
-  setApiToken as persistApiToken,
+  hydrateCsrfFromCookie,
 } from "./api";
+import Login from "./Login";
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 type Variant =
@@ -1644,14 +1645,19 @@ function SkillsPanel({
 function NotesPanel({
   note,
   setNote,
+  classification,
+  setClassification,
   onSave,
   canSave,
 }: {
   note: string;
   setNote: (v: string) => void;
+  classification: "unrestricted" | "internal" | "sensitive";
+  setClassification: (c: "unrestricted" | "internal" | "sensitive") => void;
   onSave: () => void;
   canSave: boolean;
 }) {
+  const warn = classification !== "unrestricted";
   return (
     <Panel title="Operator Notes">
       <textarea
@@ -1673,6 +1679,40 @@ function NotesPanel({
           boxSizing: "border-box",
         }}
       />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <Label>Classification</Label>
+        <select
+          value={classification}
+          onChange={(e) => setClassification(e.target.value as "unrestricted" | "internal" | "sensitive")}
+          style={{
+            padding: "6px 10px",
+            background: "rgba(6,12,12,.9)",
+            border: "1px solid rgba(140,185,165,.18)",
+            borderRadius: 8,
+            color: "#e8f4ee",
+            fontSize: ".76rem",
+          }}
+        >
+          <option value="unrestricted">Unrestricted</option>
+          <option value="internal">Internal</option>
+          <option value="sensitive">Sensitive</option>
+        </select>
+      </div>
+      {warn ? (
+        <div
+          style={{
+            padding: "8px 10px",
+            marginBottom: 8,
+            border: "1px solid rgba(249,115,22,.35)",
+            background: "rgba(249,115,22,.08)",
+            borderRadius: 8,
+            fontSize: ".72rem",
+            color: "#f4b860",
+          }}
+        >
+          This note is marked <strong>{classification}</strong>. Do not paste secrets or PII — content is persisted server-side.
+        </div>
+      ) : null}
       <Btn size="sm" onClick={onSave} disabled={!canSave}>
         Save Note
       </Btn>
@@ -1680,47 +1720,39 @@ function NotesPanel({
   );
 }
 
-// ─── API config ─────────────────────────────────────────────────────────────
-function ApiConfigPanel({
-  apiToken,
-  setApiTokenValue,
+// ─── Account ────────────────────────────────────────────────────────────────
+function AccountPanel({
+  user,
   connected,
   onTest,
   testing,
+  onLogout,
 }: {
-  apiToken: string;
-  setApiTokenValue: (v: string) => void;
+  user: AuthUser;
   connected: boolean;
   onTest: () => void;
   testing: boolean;
+  onLogout: () => void;
 }) {
   return (
-    <Panel title="API Connection" style={{ gridColumn: "span 2" }}>
+    <Panel title="Account" style={{ gridColumn: "span 2" }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div>
-          <Label>API Token</Label>
-          <input
-            type="password"
-            value={apiToken}
-            onChange={(e) => setApiTokenValue(e.target.value)}
-            placeholder="SECOPS_API_TOKEN"
-            style={{
-              width: "100%",
-              padding: "8px 12px",
-              background: "rgba(5,10,10,.9)",
-              border: "1px solid rgba(140,185,165,.18)",
-              borderRadius: 10,
-              color: "#e8f4ee",
-              fontSize: ".78rem",
-              marginBottom: 10,
-              boxSizing: "border-box",
-            }}
-          />
+          <Label>Signed in as</Label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: ".82rem", color: "#e8f4ee", fontWeight: 600 }}>{user.username}</span>
+            <Badge variant={user.role === "admin" ? "amber" : user.role === "operator" ? "blue" : "default"}>
+              {user.role}
+            </Badge>
+          </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <Btn size="sm" variant="primary" onClick={onTest} disabled={testing}>
               {testing ? "Testing…" : "Test Connection"}
             </Btn>
             <Badge variant={connected ? "ok" : "danger"}>{connected ? "Connected" : "Disconnected"}</Badge>
+            <Btn size="sm" variant="danger" onClick={onLogout}>
+              Sign out
+            </Btn>
           </div>
         </div>
         <div
@@ -1731,14 +1763,12 @@ function ApiConfigPanel({
             border: "1px solid rgba(140,185,165,.1)",
           }}
         >
-          <div style={{ fontSize: ".74rem", fontWeight: 600, color: "#e8f4ee", marginBottom: 8 }}>
-            API Access
-          </div>
+          <div style={{ fontSize: ".74rem", fontWeight: 600, color: "#e8f4ee", marginBottom: 8 }}>Session</div>
           <p style={{ margin: "0 0 8px", fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
-            Vantix now uses only live backend data. If the API is unavailable, actions and run data stay disabled.
+            Authentication uses an httpOnly session cookie. Mutating requests carry an X-CSRF-Token header.
           </p>
           <p style={{ margin: 0, fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
-            Supply a token above (stored in browser local storage) and click Test Connection to talk to the live API.
+            Role determines which actions are visible. Ask an admin to change your role.
           </p>
         </div>
       </div>
@@ -2212,9 +2242,12 @@ function TopBar({
 type Tab = "overview" | "intel" | "results" | "config";
 
 export default function App() {
-  const [apiToken, setApiTokenState] = useState(getApiToken());
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [note, setNote] = useState("");
+  const [noteClassification, setNoteClassification] = useState<"unrestricted" | "internal" | "sensitive">("unrestricted");
 
   const [runs, setRuns] = useState<Run[]>([]);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
@@ -2236,7 +2269,6 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [note, setNote] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
   const [mode, setMode] = useState("pentest");
   const [target, setTarget] = useState("");
@@ -2255,9 +2287,14 @@ export default function App() {
     window.setTimeout(() => setStatusMsg(""), 5000);
   }, []);
 
-  const setApiTokenValue = useCallback((value: string) => {
-    setApiTokenState(value);
-    persistApiToken(value);
+  const handleLogout = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      // ignore — we still drop client state below
+    }
+    setUser(null);
+    setConnected(false);
   }, []);
 
   const testConnection = useCallback(async () => {
@@ -2268,16 +2305,31 @@ export default function App() {
       flash("Connected to live API");
     } catch (error) {
       setConnected(false);
-      flash(`Cannot reach API: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof ApiError && error.status === 401) {
+        setUser(null);
+      } else {
+        flash(`Cannot reach API: ${error instanceof Error ? error.message : String(error)}`);
+      }
     } finally {
       setTesting(false);
     }
   }, [flash]);
 
-  // Initial connection probe
+  // Bootstrap: detect existing session via cookie, else show Login
   useEffect(() => {
-    testConnection();
-  }, [testConnection]);
+    hydrateCsrfFromCookie();
+    (async () => {
+      try {
+        const me = await api.me();
+        setUser(me);
+        setConnected(true);
+      } catch {
+        setUser(null);
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
+  }, []);
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -2378,10 +2430,6 @@ export default function App() {
     selectedRunRef.current = selectedRun.id;
     terminalSequenceRef.current[selectedRun.id] = 0;
     refreshRun(selectedRun.id, { incrementalTerminal: false });
-    if (apiToken) {
-      const interval = window.setInterval(() => refreshRun(selectedRun.id, { incrementalTerminal: true }), 3000);
-      return () => window.clearInterval(interval);
-    }
     try {
       const source = new EventSource(`/api/v1/runs/${selectedRun.id}/stream`);
       source.onmessage = (event) => {
@@ -2407,7 +2455,7 @@ export default function App() {
     } catch {
       // EventSource unavailable — silent
     }
-  }, [connected, selectedRun?.id, apiToken, refreshRun]);
+  }, [connected, selectedRun?.id, refreshRun]);
 
   function buildSourceInput(): SourceInput {
     if (sourceType === "github") return { type: "github", github: { url: githubUrl.trim(), ref: githubRef.trim() || undefined } };
@@ -2565,12 +2613,13 @@ export default function App() {
   async function handleSaveNote() {
     if (!selectedRun || !note.trim()) return;
     try {
-      await api.addNote(selectedRun.id, note);
+      await api.addNote(selectedRun.id, note, noteClassification);
     } catch (error) {
       flash(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
     setNote("");
+    setNoteClassification("unrestricted");
     flash("Note saved");
   }
 
@@ -2629,6 +2678,21 @@ export default function App() {
     } catch (error) {
       flash(`Open failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  if (!authChecked) {
+    return <div className="login-shell"><div className="muted">Loading…</div></div>;
+  }
+  if (!user) {
+    return (
+      <Login
+        onSuccess={(u) => {
+          setUser(u);
+          setAuthChecked(true);
+          testConnection();
+        }}
+      />
+    );
   }
 
   return (
@@ -2722,16 +2786,20 @@ export default function App() {
             <NotesPanel
               note={note}
               setNote={setNote}
+              classification={noteClassification}
+              setClassification={setNoteClassification}
               onSave={handleSaveNote}
-              canSave={Boolean(selectedRun && note.trim())}
+              canSave={Boolean(selectedRun && note.trim()) && user?.role !== "viewer"}
             />
-            <ApiConfigPanel
-              apiToken={apiToken}
-              setApiTokenValue={setApiTokenValue}
-              connected={connected}
-              onTest={testConnection}
-              testing={testing}
-            />
+            {user ? (
+              <AccountPanel
+                user={user}
+                connected={connected}
+                onTest={testConnection}
+                testing={testing}
+                onLogout={handleLogout}
+              />
+            ) : null}
           </div>
         )}
       </main>
