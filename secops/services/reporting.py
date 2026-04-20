@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,7 +145,7 @@ class ReportingService:
         executive_summary = (
             f"Assessment completed for {run.target or 'unknown target'}. "
             f"Discovered {len(port_values)} open ports and {len(service_values)} service fingerprints. "
-            f"Validated findings: {len(high_conf_findings)}. CVE references: {len(cve_values)}."
+            f"Validated findings: {len(validated_findings)}. CVE references: {len(cve_values)}."
         )
 
         md_lines = [
@@ -294,4 +295,291 @@ class ReportingService:
         paths.write_text(Path(md_path), "\n".join(md_lines) + "\n")
         report_json["executive_summary"] = executive_summary
         paths.write_json(Path(json_path), report_json)
-        return {"markdown_path": str(md_path), "json_path": str(json_path), "summary": report_json}
+        comprehensive_payload = self._build_comprehensive_payload(
+            run=run,
+            facts=facts,
+            findings=findings,
+            events=events,
+            artifacts=artifacts,
+            executive_summary=executive_summary,
+            port_values=port_values,
+            service_values=service_values,
+        )
+        comprehensive_md = self._render_comprehensive_markdown(comprehensive_payload)
+        comprehensive_md_path = paths.artifacts / "comprehensive_security_assessment_report.md"
+        comprehensive_json_path = paths.artifacts / "comprehensive_security_assessment_report.json"
+        artifact_index_json_path = paths.artifacts / "artifact_index.json"
+        artifact_index_md_path = paths.artifacts / "artifact_index.md"
+        timeline_csv_path = paths.artifacts / "timeline.csv"
+
+        paths.write_text(comprehensive_md_path, comprehensive_md)
+        paths.write_json(comprehensive_json_path, comprehensive_payload)
+        artifact_index = self._build_artifact_index(run.id, artifacts)
+        paths.write_json(artifact_index_json_path, artifact_index)
+        paths.write_text(artifact_index_md_path, self._render_artifact_index_markdown(artifact_index))
+        self._write_timeline_csv(timeline_csv_path, events)
+
+        return {
+            "markdown_path": str(md_path),
+            "json_path": str(json_path),
+            "summary": report_json,
+            "comprehensive_markdown_path": str(comprehensive_md_path),
+            "comprehensive_json_path": str(comprehensive_json_path),
+            "artifact_index_path": str(artifact_index_json_path),
+            "timeline_csv_path": str(timeline_csv_path),
+        }
+
+    def _build_artifact_index(self, run_id: str, artifacts: list[Artifact]) -> dict[str, Any]:
+        return {
+            "run_id": run_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "artifacts": [
+                {
+                    "id": art.id,
+                    "kind": art.kind,
+                    "path": art.path,
+                    "created_at": art.created_at.isoformat() if art.created_at else "",
+                    "metadata": dict(art.metadata_json or {}),
+                }
+                for art in artifacts
+            ],
+        }
+
+    def _render_artifact_index_markdown(self, payload: dict[str, Any]) -> str:
+        lines = [
+            f"# Artifact Index: {payload.get('run_id', '')}",
+            "",
+            f"- Generated at: {payload.get('generated_at', '')}",
+            f"- Total artifacts: {len(payload.get('artifacts') or [])}",
+            "",
+            "| kind | path | artifact_id |",
+            "|---|---|---|",
+        ]
+        for row in payload.get("artifacts") or []:
+            lines.append(f"| {row.get('kind','')} | {row.get('path','')} | {row.get('id','')} |")
+        return "\n".join(lines) + "\n"
+
+    def _write_timeline_csv(self, path: Path, events: list[RunEvent]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["sequence", "event_type", "level", "message", "created_at"],
+            )
+            writer.writeheader()
+            for ev in events:
+                writer.writerow(
+                    {
+                        "sequence": ev.sequence,
+                        "event_type": ev.event_type,
+                        "level": ev.level,
+                        "message": ev.message,
+                        "created_at": ev.created_at.isoformat() if ev.created_at else "",
+                    }
+                )
+
+    def _build_comprehensive_payload(
+        self,
+        *,
+        run: WorkspaceRun,
+        facts: list[Fact],
+        findings: list[Finding],
+        events: list[RunEvent],
+        artifacts: list[Artifact],
+        executive_summary: str,
+        port_values: list[str],
+        service_values: list[str],
+    ) -> dict[str, Any]:
+        categories = [
+            ("authentication", "Authentication Vulnerabilities"),
+            ("authorization", "Authorization Vulnerabilities"),
+            ("xss", "Cross-Site Scripting (XSS) Vulnerabilities"),
+            ("injection", "SQL/Command Injection Vulnerabilities"),
+            ("ssrf", "Server-Side Request Forgery (SSRF) Vulnerabilities"),
+        ]
+        category_summary: dict[str, Any] = {}
+        grouped_findings: dict[str, list[Finding]] = {key: [] for key, _ in categories}
+        for item in findings:
+            grouped_findings[self._finding_category(item)].append(item)
+        for key, label in categories:
+            rows = grouped_findings.get(key) or []
+            category_summary[key] = {
+                "label": label,
+                "status": "findings_validated" if rows else "no_validated_findings",
+                "count": len(rows),
+                "summary": (
+                    f"{len(rows)} validated finding(s) recorded in this category."
+                    if rows
+                    else "No validated findings were recorded in this category during this run."
+                ),
+            }
+
+        exploitation = []
+        for item in findings:
+            exploitation.append(
+                {
+                    "id": item.id,
+                    "title": item.title,
+                    "severity": item.severity,
+                    "status": item.status,
+                    "category": self._finding_category(item),
+                    "location": self._extract_location(item),
+                    "overview": item.summary or "",
+                    "impact": item.evidence or "",
+                    "prerequisites": self._extract_prerequisites(item),
+                    "steps": self._extract_steps(item),
+                    "proof_of_impact": item.evidence or "",
+                    "remediation": item.remediation or "",
+                }
+            )
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "run_id": run.id,
+            "workspace_id": run.workspace_id,
+            "target": run.target,
+            "mode": run.mode,
+            "objective": run.objective,
+            "executive_summary": executive_summary,
+            "vulnerability_type_summary": category_summary,
+            "network_reconnaissance": {
+                "open_ports": port_values,
+                "services": service_values,
+                "fact_count": len(facts),
+            },
+            "exploitation_evidence": exploitation,
+            "findings": [
+                {
+                    "id": item.id,
+                    "title": item.title,
+                    "severity": item.severity,
+                    "status": item.status,
+                    "summary": item.summary,
+                    "evidence": item.evidence,
+                    "reproduction": item.reproduction,
+                    "remediation": item.remediation,
+                    "confidence": item.confidence,
+                }
+                for item in findings
+            ],
+            "artifacts": [
+                {"id": art.id, "kind": art.kind, "path": art.path, "metadata": dict(art.metadata_json or {})}
+                for art in artifacts
+            ],
+            "timeline": [
+                {
+                    "sequence": ev.sequence,
+                    "event_type": ev.event_type,
+                    "level": ev.level,
+                    "message": ev.message,
+                    "created_at": ev.created_at.isoformat() if ev.created_at else "",
+                }
+                for ev in events
+            ],
+        }
+
+    def _finding_category(self, finding: Finding) -> str:
+        text = " ".join(
+            [
+                str(finding.title or ""),
+                str(finding.summary or ""),
+                str(finding.evidence or ""),
+            ]
+        ).lower()
+        if any(token in text for token in ["auth", "login", "jwt", "session", "password"]):
+            return "authentication"
+        if any(token in text for token in ["idor", "authorization", "access control", "privilege", "admin"]):
+            return "authorization"
+        if any(token in text for token in ["xss", "cross-site"]):
+            return "xss"
+        if any(token in text for token in ["sql", "injection", "command injection", "nosql", "xxe", "yaml"]):
+            return "injection"
+        if "ssrf" in text:
+            return "ssrf"
+        return "injection"
+
+    def _extract_location(self, finding: Finding) -> str:
+        text = " ".join([str(finding.evidence or ""), str(finding.summary or "")]).strip()
+        if not text:
+            return ""
+        return text.splitlines()[0][:240]
+
+    def _extract_prerequisites(self, finding: Finding) -> list[str]:
+        base = []
+        if finding.reproduction:
+            if "token" in finding.reproduction.lower():
+                base.append("Valid authentication token")
+            if "admin" in finding.reproduction.lower():
+                base.append("Elevated role/session where noted in reproduction")
+        if not base:
+            base.append("None beyond network reachability to target scope")
+        return base
+
+    def _extract_steps(self, finding: Finding) -> list[str]:
+        if finding.reproduction:
+            lines = [line.strip() for line in finding.reproduction.splitlines() if line.strip()]
+            return lines[:20]
+        if finding.evidence:
+            return [finding.evidence]
+        return ["Reproduction details not provided in finding record."]
+
+    def _render_comprehensive_markdown(self, payload: dict[str, Any]) -> str:
+        lines: list[str] = []
+        lines.append("# Security Assessment Report")
+        lines.append("")
+        lines.append("## Executive Summary")
+        lines.append(f"- **Target:** {payload.get('target') or '(unknown)'}")
+        lines.append(f"- **Assessment Date:** {str(payload.get('generated_at') or '')[:10]}")
+        lines.append("- **Scope:** Authentication, XSS, SQL and Command Injection, SSRF, Authorization testing")
+        lines.append("")
+        lines.append("## Summary by Vulnerability Type")
+        lines.append("")
+        for key in ["authentication", "authorization", "xss", "injection", "ssrf"]:
+            row = (payload.get("vulnerability_type_summary") or {}).get(key) or {}
+            lines.append(f"### {row.get('label', key)}")
+            lines.append(f"**Status:** {row.get('summary', '')}")
+            lines.append("")
+        lines.append("## Network Reconnaissance")
+        recon = payload.get("network_reconnaissance") or {}
+        ports = recon.get("open_ports") or []
+        services = recon.get("services") or []
+        lines.append(f"- Open Ports: {', '.join(ports) if ports else 'None recorded'}")
+        lines.append(f"- Services: {', '.join(services) if services else 'None recorded'}")
+        lines.append("")
+        lines.append("## Exploitation Evidence")
+        evidence = payload.get("exploitation_evidence") or []
+        if not evidence:
+            lines.append("")
+            lines.append("No validated exploitation evidence was recorded for this run.")
+        for row in evidence:
+            lines.append("")
+            lines.append(f"### {row.get('title','(untitled)')}")
+            lines.append("")
+            lines.append(f"- **Severity:** {row.get('severity','')}")
+            lines.append(f"- **Category:** {row.get('category','')}")
+            lines.append(f"- **Location:** {row.get('location','') or '(not provided)'}")
+            lines.append(f"- **Overview:** {row.get('overview','') or '(not provided)'}")
+            lines.append(f"- **Impact:** {row.get('impact','') or '(not provided)'}")
+            lines.append("")
+            lines.append("**Prerequisites:**")
+            for item in row.get("prerequisites") or []:
+                lines.append(f"- {item}")
+            lines.append("")
+            lines.append("**Exploitation Steps:**")
+            for idx, step in enumerate(row.get("steps") or [], start=1):
+                lines.append(f"{idx}. {step}")
+            lines.append("")
+            lines.append("**Proof of Impact:**")
+            lines.append(row.get("proof_of_impact", "") or "(not provided)")
+            lines.append("")
+            lines.append("**Remediation:**")
+            lines.append(row.get("remediation", "") or "(not provided)")
+        lines.append("")
+        lines.append("## Evidence Artifacts")
+        for art in payload.get("artifacts") or []:
+            lines.append(f"- {art.get('kind','')}: {art.get('path','')}")
+        lines.append("")
+        lines.append("## Timeline")
+        for row in (payload.get("timeline") or [])[:200]:
+            lines.append(f"- #{row.get('sequence','')} [{row.get('event_type','')}] {row.get('message','')}")
+        return "\n".join(lines) + "\n"

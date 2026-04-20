@@ -49,6 +49,7 @@ curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/replay
 
 `/workflow-state` exposes worker health, lease state, retry counts, blocker classes, stale-claim recovery counts, and phase duration metrics.  
 `/replay` returns phase history plus normalized run events for completed-run replay views.
+`/results` includes report package paths when available: `report_path`, `report_json_path`, `comprehensive_report_path`, `comprehensive_report_json_path`, `artifact_index_path`, and `timeline_csv_path`.
 
 ## Skills
 

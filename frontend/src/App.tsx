@@ -1833,6 +1833,28 @@ function ResultsPanel({
                     </Btn>
                   )}
                 </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {selectedRunId && results.comprehensive_report_path && (
+                    <Btn size="xs" variant="green" onClick={() => onOpenPath(results.comprehensive_report_path || "")}>
+                      Comprehensive MD
+                    </Btn>
+                  )}
+                  {selectedRunId && results.comprehensive_report_json_path && (
+                    <Btn size="xs" variant="ghost" onClick={() => onOpenPath(results.comprehensive_report_json_path || "")}>
+                      Comprehensive JSON
+                    </Btn>
+                  )}
+                  {selectedRunId && results.artifact_index_path && (
+                    <Btn size="xs" variant="ghost" onClick={() => onOpenPath(results.artifact_index_path || "")}>
+                      Artifact Index
+                    </Btn>
+                  )}
+                  {selectedRunId && results.timeline_csv_path && (
+                    <Btn size="xs" variant="ghost" onClick={() => onOpenPath(results.timeline_csv_path || "")}>
+                      Timeline CSV
+                    </Btn>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -2766,6 +2788,7 @@ export default function App() {
           flash(`Partial load: ${failures.join(", ")} unavailable`);
         }
         setSelectedRun(run);
+        setRuns((rows) => rows.map((item) => (item.id === run.id ? run : item)));
         setPhase(graph.phase);
         setWorkflowState(workflow);
         setSourceStatus(runSourceStatus);
@@ -2932,7 +2955,10 @@ export default function App() {
       flash(`Approve failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    if (selectedRun) refreshRun(selectedRun.id);
+    if (selectedRun) {
+      await refreshRun(selectedRun.id, { incrementalTerminal: true });
+      await refreshRuns();
+    }
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "approved" } : x)));
     flash(`Approved: ${a.title}`);
   }
@@ -2943,7 +2969,10 @@ export default function App() {
       flash(`Reject failed: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    if (selectedRun) refreshRun(selectedRun.id);
+    if (selectedRun) {
+      await refreshRun(selectedRun.id, { incrementalTerminal: true });
+      await refreshRuns();
+    }
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "rejected" } : x)));
     flash(`Rejected: ${a.title}`);
   }

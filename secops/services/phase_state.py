@@ -65,6 +65,24 @@ class RunPhaseService:
 
     def refresh(self, db: Session, run: WorkspaceRun, *, reason: str = "refresh") -> dict[str, Any]:
         derived = self.derive(db, run)
+        # Read paths (graph/workflow polling) must not mutate phase history.
+        # Otherwise every UI refresh appears as a fake phase transition.
+        if reason in {"graph-read", "phase-read", "workflow-read"}:
+            state = self.snapshot(run)
+            if str(state.get("current") or "") == derived:
+                return state
+            completed = [name for name in PHASE_ORDER if name != "completed" and PHASE_ORDER.index(name) < PHASE_ORDER.index(derived)]
+            if derived == "completed":
+                completed = [name for name in PHASE_ORDER if name != "completed"]
+            pending = [name for name in PHASE_ORDER if name not in completed and name != derived]
+            return {
+                "current": derived,
+                "completed": completed,
+                "pending": pending,
+                "updated_at": str(state.get("updated_at") or _now()),
+                "reason": str(state.get("reason") or "refresh"),
+                "history": list(state.get("history") or []),
+            }
         return self.transition(run, derived, reason=reason)
 
     def derive(self, db: Session, run: WorkspaceRun) -> str:

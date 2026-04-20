@@ -45,6 +45,7 @@ Manual setup and update workflow are in [Getting Started](docs/getting-started.m
 - [Capability Matrix](docs/capability-matrix.md)
 - [Browser Agent](docs/browser_agent.md)
 - [Browser Policies](docs/browser_policies.md)
+- [XBOW Evaluation Workflow](docs/xbow-evaluation.md)
 
 ## Authorized Use Only
 

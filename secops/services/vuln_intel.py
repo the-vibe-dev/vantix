@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from secops.models import IntelSource, VulnerabilityIntel, VulnerabilityIntelReference, utcnow
@@ -124,30 +126,49 @@ class VulnIntelService:
 
     def upsert_records(self, records: Iterable[IntelRecord], *, commit: bool = True) -> dict[str, Any]:
         counts = {"seen": 0, "upserted": 0, "skipped": 0, "references": 0}
+        normalized_records: list[IntelRecord] = []
         for raw_record in records:
             counts["seen"] += 1
             record = raw_record.normalized()
             if not record.source or not record.external_id:
                 counts["skipped"] += 1
                 continue
-            source = self.source(record.source)
-            intel = self.db.execute(
-                select(VulnerabilityIntel).where(
-                    VulnerabilityIntel.source_id == source.id,
-                    VulnerabilityIntel.external_id == record.external_id,
-                )
-            ).scalar_one_or_none()
-            if intel is None:
-                intel = VulnerabilityIntel(source_id=source.id, external_id=record.external_id)
-                self.db.add(intel)
-                self.db.flush()
-            self._apply_record(intel, record)
-            counts["upserted"] += 1
-            counts["references"] += self._sync_references(intel, record)
-            source.last_success_at = utcnow()
-            source.last_error = ""
-        if commit:
-            self.db.commit()
+            normalized_records.append(record)
+
+        max_attempts = 4
+        for attempt in range(1, max_attempts + 1):
+            try:
+                for record in normalized_records:
+                    source = self.source(record.source)
+                    intel = self.db.execute(
+                        select(VulnerabilityIntel).where(
+                            VulnerabilityIntel.source_id == source.id,
+                            VulnerabilityIntel.external_id == record.external_id,
+                        )
+                    ).scalar_one_or_none()
+                    if intel is None:
+                        intel = VulnerabilityIntel(source_id=source.id, external_id=record.external_id)
+                        self.db.add(intel)
+                        self.db.flush()
+                    self._apply_record(intel, record)
+                    counts["upserted"] += 1
+                    counts["references"] += self._sync_references(intel, record)
+                    source.last_success_at = utcnow()
+                    source.last_error = ""
+                if commit:
+                    self.db.commit()
+                return counts
+            except OperationalError as exc:
+                message = str(exc).lower()
+                if "database is locked" not in message and "database table is locked" not in message:
+                    raise
+                self.db.rollback()
+                if attempt >= max_attempts:
+                    raise
+                time.sleep(0.2 * attempt)
+                counts["upserted"] = 0
+                counts["references"] = 0
+                continue
         return counts
 
     def enrich_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:

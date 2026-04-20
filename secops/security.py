@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hmac
+import time
 from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc import OperationalError
 
 from secops.config import settings
 from secops.db import SessionLocal
@@ -88,7 +90,7 @@ def require_user(min_role: str = "operator") -> Callable[..., AuthContext]:
             ctx = AuthContext(kind="user", username=user.username, role=user.role)
             request.state.auth = ctx
             request.state.csrf_token = session.csrf_token
-            db.commit()  # persist last_seen_at bump
+            _commit_session_heartbeat(db)  # best-effort last_seen_at bump
             return ctx
 
         # unreachable
@@ -96,6 +98,26 @@ def require_user(min_role: str = "operator") -> Callable[..., AuthContext]:
         return AuthContext(kind="user", username="", role="")
 
     return _dependency
+
+
+def _commit_session_heartbeat(db) -> None:
+    """Persist session heartbeat without failing the whole request on transient sqlite locks."""
+    last_error: OperationalError | None = None
+    for delay in (0.0, 0.02, 0.05):
+        if delay > 0.0:
+            time.sleep(delay)
+        try:
+            db.commit()
+            return
+        except OperationalError as exc:
+            db.rollback()
+            msg = str(exc).lower()
+            if "database is locked" not in msg:
+                raise
+            last_error = exc
+    if last_error is not None:
+        # Session heartbeat is non-critical; continue request as authenticated.
+        return
 
 
 def require_csrf(request: Request) -> None:

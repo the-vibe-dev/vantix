@@ -590,6 +590,16 @@ def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         if worker_ids
         else []
     )
+    # If no run-specific worker has claimed yet, still surface recent runtime workers
+    # so the control center does not show a misleading "workers 0".
+    if not workers:
+        freshness_cutoff = _utc_now().timestamp() - 300.0
+        recent_workers = db.query(WorkerRuntimeStatus).order_by(WorkerRuntimeStatus.heartbeat_at.desc()).limit(10).all()
+        workers = [
+            row
+            for row in recent_workers
+            if row.heartbeat_at and _as_utc(row.heartbeat_at) is not None and _as_utc(row.heartbeat_at).timestamp() >= freshness_cutoff
+        ]
     metric_rows = (
         db.query(RunMetric)
         .filter(RunMetric.run_id == run_id)
@@ -597,10 +607,20 @@ def get_workflow_state(run_id: str, db: Session = Depends(get_db)) -> dict:
         .limit(200)
         .all()
     )
+    latest_by_phase: dict[str, WorkflowPhaseRun] = {}
+    for phase in phases:
+        existing = latest_by_phase.get(phase.phase_name)
+        if existing is None:
+            latest_by_phase[phase.phase_name] = phase
+            continue
+        existing_key = (int(existing.attempt or 0), _as_utc(existing.updated_at) or _as_utc(existing.created_at) or _utc_now())
+        phase_key = (int(phase.attempt or 0), _as_utc(phase.updated_at) or _as_utc(phase.created_at) or _utc_now())
+        if phase_key > existing_key:
+            latest_by_phase[phase.phase_name] = phase
     blocked_reasons = sorted(
         {
             str((phase.error_json or {}).get("message", "")).strip()
-            for phase in phases
+            for phase in latest_by_phase.values()
             if phase.status == "blocked" and str((phase.error_json or {}).get("message", "")).strip()
         }
     )
@@ -792,6 +812,10 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
     vectors = list_run_vectors(run_id, db)
     report = next((artifact.path for artifact in artifacts if artifact.kind == "report"), None)
     report_json = next((artifact.path for artifact in artifacts if artifact.kind == "report-json"), None)
+    comprehensive_report = next((artifact.path for artifact in artifacts if artifact.kind == "comprehensive-report"), None)
+    comprehensive_report_json = next((artifact.path for artifact in artifacts if artifact.kind == "comprehensive-report-json"), None)
+    artifact_index_path = next((artifact.path for artifact in artifacts if artifact.kind == "artifact-index"), None)
+    timeline_csv_path = next((artifact.path for artifact in artifacts if artifact.kind == "timeline-csv"), None)
     executive_summary = ""
     if report_json:
         try:
@@ -808,6 +832,10 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
         "terminal_summary": summarize_terminal(events),
         "report_path": report,
         "report_json_path": report_json,
+        "comprehensive_report_path": comprehensive_report,
+        "comprehensive_report_json_path": comprehensive_report_json,
+        "artifact_index_path": artifact_index_path,
+        "timeline_csv_path": timeline_csv_path,
         "executive_summary": executive_summary,
     }
 

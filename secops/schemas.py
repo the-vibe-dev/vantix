@@ -472,6 +472,10 @@ class RunResultsRead(BaseModel):
     terminal_summary: str
     report_path: str | None = None
     report_json_path: str | None = None
+    comprehensive_report_path: str | None = None
+    comprehensive_report_json_path: str | None = None
+    artifact_index_path: str | None = None
+    timeline_csv_path: str | None = None
     executive_summary: str = ""
 
 

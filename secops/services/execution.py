@@ -676,6 +676,50 @@ class ExecutionManager:
             db.add(Artifact(run_id=run.id, kind="cve-results", path=str(cve_path), metadata_json={"queries": len(results)}))
             db.commit()
 
+    def _browser_candidate_urls(self, run: WorkspaceRun) -> list[str]:
+        config = dict(run.config_json or {})
+        browser_cfg = dict(config.get("browser") or {})
+        explicit = str(browser_cfg.get("entry_url") or "").strip()
+        target = str(run.target or "").strip()
+        host = target
+        if "://" in host:
+            parsed = urlparse(host)
+            host = parsed.hostname or host
+        if ":" in host and not host.startswith("["):
+            host = host.split(":", 1)[0]
+        host = host.strip()
+        candidates: list[str] = []
+        if explicit:
+            candidates.append(explicit)
+        if host and "://" in target:
+            candidates.append(target)
+        ports = [str(port).strip() for port in (config.get("ports") or []) if str(port).strip().isdigit()]
+        services = [str(item).lower() for item in (config.get("services") or []) if str(item).strip()]
+        likely_web_ports = {"80", "443", "3000", "3001", "5000", "5173", "8000", "8080", "8443", "8888"}
+        for port in ports:
+            if port in likely_web_ports or int(port) >= 1024:
+                scheme = "https" if port in {"443", "8443"} else "http"
+                if host:
+                    candidates.append(f"{scheme}://{host}:{port}")
+        if any(token in " ".join(services) for token in ("http", "web", "nginx", "apache", "node", "nessus")) and host:
+            if not ports:
+                candidates.extend([f"http://{host}", f"http://{host}:3001", f"http://{host}:8080"])
+        if host:
+            candidates.extend([f"http://{host}", f"http://{host}:3001", f"http://{host}:8080"])
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            value = str(item or "").strip()
+            if not value:
+                continue
+            if "://" not in value:
+                value = f"http://{value}"
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
     def _phase_browser(self, run_id: str) -> None:
         with SessionLocal() as db:
             run = db.get(WorkspaceRun, run_id)
@@ -688,7 +732,8 @@ class ExecutionManager:
             session = self._create_agent_session(db, run.id, "browser", "Browser Analyst", paths)
             session.status = "running"
             self._set_role_status(db, run.id, "browser", "running")
-            target_url = str(((run.config_json or {}).get("browser") or {}).get("entry_url") or run.target or "").strip()
+            candidate_urls = self._browser_candidate_urls(run)
+            target_url = candidate_urls[0] if candidate_urls else str(((run.config_json or {}).get("browser") or {}).get("entry_url") or run.target or "").strip()
             action_kind = "browser_assessment"
             decision = self.policies.evaluate(run, action_kind=action_kind)
             self._emit_policy_decision(
@@ -769,15 +814,51 @@ class ExecutionManager:
                 run.id,
                 "terminal",
                 f"[browser] starting assessment: {target_url or '(none)'}",
-                payload={"agent": "browser"},
+                payload={"agent": "browser", "candidates": candidate_urls[:8]},
                 agent_session_id=session.id,
             )
-            result = self.browser.assess(
+            best_result = None
+            best_url = target_url
+            best_score = -1
+            for idx, url in enumerate((candidate_urls or [target_url])[:8], start=1):
+                cfg = dict(run.config_json or {})
+                browser_cfg = dict(cfg.get("browser") or {})
+                browser_cfg["entry_url"] = url
+                cfg["browser"] = browser_cfg
+                current = self.browser.assess(
+                    run_id=run.id,
+                    workspace_root=paths.root,
+                    target=url,
+                    run_config=cfg,
+                )
+                score = (len(current.observations) * 10) + int(current.network_summary.get("total_requests") or 0) + len(current.route_graph)
+                if score > best_score:
+                    best_score = score
+                    best_result = current
+                    best_url = url
+                if len(current.observations) > 0 and (len(current.route_graph) > 0 or int(current.network_summary.get("total_requests") or 0) > 3):
+                    break
+                if idx < len((candidate_urls or [target_url])[:8]):
+                    self.events.emit(
+                        db,
+                        run.id,
+                        "terminal",
+                        f"[browser] candidate {url} yielded limited evidence; trying next target",
+                        payload={"agent": "browser", "candidate": url},
+                        agent_session_id=session.id,
+                    )
+            result = best_result if best_result is not None else self.browser.assess(
                 run_id=run.id,
                 workspace_root=paths.root,
                 target=target_url,
                 run_config=dict(run.config_json or {}),
             )
+            target_url = best_url
+            config = dict(run.config_json or {})
+            browser_cfg = dict(config.get("browser") or {})
+            browser_cfg["entry_url"] = target_url
+            config["browser"] = browser_cfg
+            run.config_json = config
             for item in result.artifacts:
                 kind = str(item.get("kind") or "")
                 path = str(item.get("path") or "")
@@ -985,6 +1066,46 @@ class ExecutionManager:
                         metadata_json={"count": int(endpoint.get("count") or 0)},
                     )
                 )
+                endpoint_l = value.lower()
+                endpoint_tokens = ("login", "auth", "admin", "user", "order", "basket", "cart", "profile", "password", "token", "file", "upload", "search", "graphql")
+                if any(token in endpoint_l for token in endpoint_tokens):
+                    title = f"API surface candidate: {value}"
+                    if title not in emitted_vectors:
+                        emitted_vectors.add(title)
+                        severity = "high" if any(token in endpoint_l for token in ("admin", "auth", "password", "token")) else "medium"
+                        db.add(
+                            self._browser_vector(
+                                run_id=run.id,
+                                title=title,
+                                summary="Discovered browser-observed API endpoint requiring authorization and input validation checks.",
+                                severity=severity,
+                                evidence=f"Browser network summary observed endpoint pattern `{value}` with count={int(endpoint.get('count') or 0)}.",
+                                tags=["browser", "api-endpoint"],
+                                prerequisites=["authorization checks", "input validation checks"],
+                                noise_level="quiet",
+                                requires_approval=True,
+                            )
+                        )
+            for route in route_values[:30]:
+                route_l = route.lower()
+                route_tokens = ("admin", "profile", "account", "basket", "order", "payment", "search", "support", "chat", "file", "api")
+                if any(token in route_l for token in route_tokens):
+                    title = f"Route exposure candidate: {route}"
+                    if title not in emitted_vectors:
+                        emitted_vectors.add(title)
+                        db.add(
+                            self._browser_vector(
+                                run_id=run.id,
+                                title=title,
+                                summary="Browser route discovery found an application path that warrants access-control and business-logic validation.",
+                                severity="medium",
+                                evidence=f"Browser discovered route `{route}`.",
+                                tags=["browser", "route-surface"],
+                                prerequisites=["route authorization validation"],
+                                noise_level="quiet",
+                                requires_approval=True,
+                            )
+                        )
             if result.network_summary.get("endpoints"):
                 title = "Client-side/API mismatch candidate"
                 if title not in emitted_vectors:
@@ -1026,6 +1147,15 @@ class ExecutionManager:
                         metadata_json=chain_payload,
                     )
                 )
+            db.add(
+                RunMessage(
+                    run_id=run.id,
+                    role="system",
+                    author="System",
+                    content=f"Browser vector generation: {len(emitted_vectors)} candidate vector(s) from browser evidence.",
+                    metadata_json={"phase": "browser-assessment", "vector_count": len(emitted_vectors), "entry_url": target_url},
+                )
+            )
 
             session.status = "completed"
             session.completed_at = datetime.now(timezone.utc)
@@ -1451,7 +1581,14 @@ class ExecutionManager:
             task.status = "completed"
             self._set_role_status(db, run.id, "reporter", "completed")
             self._set_vantix_task_status(db, run.id, "reporting", "completed", {"source_phase": "report"})
-            task.result_json = {"report_path": generated["markdown_path"], "report_json_path": generated["json_path"]}
+            task.result_json = {
+                "report_path": generated["markdown_path"],
+                "report_json_path": generated["json_path"],
+                "comprehensive_report_path": generated.get("comprehensive_markdown_path", ""),
+                "comprehensive_report_json_path": generated.get("comprehensive_json_path", ""),
+                "artifact_index_path": generated.get("artifact_index_path", ""),
+                "timeline_csv_path": generated.get("timeline_csv_path", ""),
+            }
             db.add(
                 Artifact(
                     run_id=run.id,
@@ -1461,6 +1598,28 @@ class ExecutionManager:
                 )
             )
             db.add(Artifact(run_id=run.id, kind="report-json", path=str(generated["json_path"]), metadata_json={}))
+            if generated.get("comprehensive_markdown_path"):
+                db.add(
+                    Artifact(
+                        run_id=run.id,
+                        kind="comprehensive-report",
+                        path=str(generated["comprehensive_markdown_path"]),
+                        metadata_json={},
+                    )
+                )
+            if generated.get("comprehensive_json_path"):
+                db.add(
+                    Artifact(
+                        run_id=run.id,
+                        kind="comprehensive-report-json",
+                        path=str(generated["comprehensive_json_path"]),
+                        metadata_json={},
+                    )
+                )
+            if generated.get("artifact_index_path"):
+                db.add(Artifact(run_id=run.id, kind="artifact-index", path=str(generated["artifact_index_path"]), metadata_json={}))
+            if generated.get("timeline_csv_path"):
+                db.add(Artifact(run_id=run.id, kind="timeline-csv", path=str(generated["timeline_csv_path"]), metadata_json={}))
             self.events.emit(
                 db,
                 run.id,
@@ -1470,6 +1629,9 @@ class ExecutionManager:
                     "phase": "report",
                     "report_path": generated["markdown_path"],
                     "report_json_path": generated["json_path"],
+                    "comprehensive_report_path": generated.get("comprehensive_markdown_path", ""),
+                    "artifact_index_path": generated.get("artifact_index_path", ""),
+                    "timeline_csv_path": generated.get("timeline_csv_path", ""),
                 },
             )
             db.add(
@@ -1477,11 +1639,35 @@ class ExecutionManager:
                     run_id=run.id,
                     role="system",
                     author="System",
-                    content=f"Report generated: {generated['markdown_path']}",
-                    metadata_json={"phase": "report", "report_path": generated["markdown_path"]},
+                    content=f"Report package generated: {generated['markdown_path']}",
+                    metadata_json={
+                        "phase": "report",
+                        "report_path": generated["markdown_path"],
+                        "report_json_path": generated["json_path"],
+                        "comprehensive_report_path": generated.get("comprehensive_markdown_path", ""),
+                        "comprehensive_report_json_path": generated.get("comprehensive_json_path", ""),
+                        "artifact_index_path": generated.get("artifact_index_path", ""),
+                        "timeline_csv_path": generated.get("timeline_csv_path", ""),
+                    },
                 )
             )
-            self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(generated["markdown_path"]), str(generated["json_path"])], next_action="close run")
+            file_paths = [
+                str(generated["markdown_path"]),
+                str(generated["json_path"]),
+                str(generated.get("comprehensive_markdown_path", "")),
+                str(generated.get("comprehensive_json_path", "")),
+                str(generated.get("artifact_index_path", "")),
+                str(generated.get("timeline_csv_path", "")),
+            ]
+            self._write_memory(
+                db,
+                run,
+                mode="phase",
+                phase="report",
+                done=["report package generated"],
+                files=[path for path in file_paths if path],
+                next_action="close run",
+            )
             db.commit()
 
     def _ensure_findings_for_report(self, db, run_id: str) -> None:
@@ -1499,13 +1685,17 @@ class ExecutionManager:
             meta = dict(vector.metadata_json or {})
             status = str(meta.get("status") or "").lower()
             confidence = float(meta.get("score") or vector.confidence or 0.0)
-            if status not in {"planned", "validated", "selected", "executed"} and confidence < 0.82:
+            evidence = str(meta.get("evidence") or vector.value or "").strip()
+            if status not in {"planned", "validated", "selected", "executed", "candidate"} and confidence < 0.7:
+                continue
+            if confidence < 0.7:
+                continue
+            if not evidence:
                 continue
             title = str(meta.get("title") or vector.value or "Vector-derived finding").strip()[:255]
             if not title:
                 continue
             summary = str(meta.get("summary") or "Vector selected for validation during workflow execution.").strip()
-            evidence = str(meta.get("evidence") or vector.value or "").strip()
             severity = str(meta.get("severity") or "medium").lower()
             if severity not in {"critical", "high", "medium", "low", "info"}:
                 severity = "medium"

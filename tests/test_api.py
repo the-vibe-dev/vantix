@@ -311,6 +311,11 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         results = client.get(f"/api/v1/runs/{run_id}/results")
         assert results.status_code == 200
         assert results.json()["run_id"] == run_id
+        payload = results.json()
+        assert "comprehensive_report_path" in payload
+        assert "comprehensive_report_json_path" in payload
+        assert "artifact_index_path" in payload
+        assert "timeline_csv_path" in payload
 
         events = client.get(f"/api/v1/runs/{run_id}/events")
         assert events.status_code == 200

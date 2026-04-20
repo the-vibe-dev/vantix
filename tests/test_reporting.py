@@ -76,11 +76,24 @@ def test_reporting_service_writes_markdown_and_json_with_provenance() -> None:
         generated = ReportingService().generate(db, run)
         assert generated["markdown_path"].endswith("run_report.md")
         assert generated["json_path"].endswith("run_report.json")
+        assert generated["comprehensive_markdown_path"].endswith("comprehensive_security_assessment_report.md")
+        assert generated["comprehensive_json_path"].endswith("comprehensive_security_assessment_report.json")
+        assert generated["artifact_index_path"].endswith("artifact_index.json")
+        assert generated["timeline_csv_path"].endswith("timeline.csv")
         assert Path(generated["markdown_path"]).exists()
         assert Path(generated["json_path"]).exists()
+        assert Path(generated["comprehensive_markdown_path"]).exists()
+        assert Path(generated["comprehensive_json_path"]).exists()
+        assert Path(generated["artifact_index_path"]).exists()
+        assert Path(generated["timeline_csv_path"]).exists()
         assert generated["summary"]["workflow_id"] == workflow.id
         assert generated["summary"]["browser_assessment"]["authenticated"] == "success"
         assert generated["summary"]["browser_assessment"]["auth_transitions"][0]["status"] == "success"
+        comprehensive = json.loads(Path(generated["comprehensive_json_path"]).read_text(encoding="utf-8"))
+        assert "vulnerability_type_summary" in comprehensive
+        assert "timeline" in comprehensive
+        timeline_head = Path(generated["timeline_csv_path"]).read_text(encoding="utf-8").splitlines()[0]
+        assert timeline_head == "sequence,event_type,level,message,created_at"
 
 
 def test_run_replay_returns_phase_history_and_events() -> None:

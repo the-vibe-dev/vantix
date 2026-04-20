@@ -166,6 +166,10 @@ export type RunResults = {
   terminal_summary: string;
   report_path: string | null;
   report_json_path?: string | null;
+  comprehensive_report_path?: string | null;
+  comprehensive_report_json_path?: string | null;
+  artifact_index_path?: string | null;
+  timeline_csv_path?: string | null;
   executive_summary?: string;
 };
 

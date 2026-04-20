@@ -55,3 +55,7 @@ Use the Browser Assessment panel to review:
 ## Reports and Evidence
 
 Report outputs should be built from run artifacts, validated findings, and provenance-linked facts/vectors. Keep operator notes concise and evidence-backed.
+
+## XBOW Timed Evaluation
+
+For benchmark-style black-box vs white-box comparisons, use the API-driven workflow in [XBOW Evaluation Workflow](xbow-evaluation.md). It runs timed cases, records per-variant metrics, and generates aggregate comparison output without requiring UI stability.
