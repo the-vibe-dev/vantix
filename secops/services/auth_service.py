@@ -70,7 +70,10 @@ def lookup_session(db: Session, raw_token: str) -> tuple[User, UserSession] | No
     session_row = db.query(UserSession).filter(UserSession.token_hash == token_hash).first()
     if session_row is None or session_row.revoked:
         return None
-    if session_row.expires_at <= utcnow():
+    expires_at = session_row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= utcnow():
         return None
     user = db.get(User, session_row.user_id)
     if user is None or user.disabled:
