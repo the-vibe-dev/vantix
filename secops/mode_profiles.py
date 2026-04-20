@@ -27,8 +27,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         ruleset="standard-ctf",
         startup_paths=[
             "MEM.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
             "methods/ctf/ctfplaybook.md",
         ],
@@ -44,8 +42,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         ruleset="thm-koth",
         startup_paths=[
             "MEM.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
             "methods/thm_general/koth_playbook.md",
         ],
@@ -67,8 +63,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         ruleset="authorized-pentest",
         startup_paths=[
             "MEM.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
         ],
         pentest_keywords=[
@@ -89,8 +83,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         ruleset="bugbounty-safe",
         startup_paths=[
             "MEM.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
             "agent_ops/README.md",
         ],
@@ -112,8 +104,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         startup_paths=[
             "MEM.md",
             "WINDOWS.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
             "methods/windows/windows_pentest_playbook.md",
         ],
@@ -130,8 +120,6 @@ MODE_PROFILES: dict[str, ModeProfile] = {
         startup_paths=[
             "MEM.md",
             "WINDOWS.md",
-            "memory/compaction_handoffs.md",
-            "memory/session_journal.md",
             "PENTEST.md",
             "methods/windows/windows_koth.md",
         ],

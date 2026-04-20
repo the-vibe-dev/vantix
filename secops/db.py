@@ -64,6 +64,33 @@ def _build_engine():
     return engine
 
 
+def ensure_sqlite_compat_schema() -> None:
+    db_path = _sqlite_path()
+    if db_path is None:
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        facts_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(facts)").fetchall()}
+        if facts_columns:
+            if "validated" not in facts_columns:
+                conn.execute("ALTER TABLE facts ADD COLUMN validated BOOLEAN NOT NULL DEFAULT 0")
+            if "fingerprint" not in facts_columns:
+                conn.execute("ALTER TABLE facts ADD COLUMN fingerprint VARCHAR(64)")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_facts_fingerprint ON facts (fingerprint)")
+
+        findings_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(findings)").fetchall()}
+        if findings_columns:
+            if "fingerprint" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN fingerprint VARCHAR(64)")
+            if "evidence_ids" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN evidence_ids TEXT NOT NULL DEFAULT '[]'")
+            if "reproduction_script" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN reproduction_script TEXT NOT NULL DEFAULT ''")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_findings_run_fingerprint ON findings (run_id, fingerprint)")
+        conn.commit()
+
+
 engine = _build_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 

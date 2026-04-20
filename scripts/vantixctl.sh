@@ -34,6 +34,31 @@ log_file() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
 
+user_unit_for_service() {
+  case "$1" in
+    api) printf '%s\n' "vantix-api.service" ;;
+    ui) printf '%s\n' "vantix-ui.service" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
+user_systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1
+}
+
+has_user_unit() {
+  local unit
+  unit="$(user_unit_for_service "$1")"
+  [[ -n "$unit" ]] || return 1
+  user_systemd_available || return 1
+  systemctl --user list-unit-files 2>/dev/null | awk '{print $1}' | grep -Fxq "$unit"
+}
+
+user_unit_pid() {
+  local unit="$1"
+  systemctl --user show "$unit" --property MainPID --value 2>/dev/null | tr -d '[:space:]'
+}
+
 service_port() {
   case "$1" in
     api) printf '%s\n' "${SECOPS_PORT:-8787}" ;;
@@ -161,6 +186,18 @@ verify_started() {
 is_running() {
   local file pid name
   name="$1"
+  if has_user_unit "$name"; then
+    local unit
+    unit="$(user_unit_for_service "$name")"
+    if systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+      pid="$(user_unit_pid "$unit")"
+      if [[ -n "$pid" ]] && [[ "$pid" != "0" ]]; then
+        echo "$pid" >"$(pid_file "$name")"
+      fi
+      return 0
+    fi
+    return 1
+  fi
   file="$(pid_file "$1")"
   [[ -f "$file" ]] || return 1
   pid="$(cat "$file" 2>/dev/null || true)"
@@ -182,6 +219,22 @@ start_one() {
     echo "[OK] $name already running pid=$(service_pid "$name")"
     return 0
   fi
+  if has_user_unit "$name"; then
+    local unit pid
+    unit="$(user_unit_for_service "$name")"
+    systemctl --user start "$unit"
+    if systemctl --user is-active --quiet "$unit"; then
+      pid="$(user_unit_pid "$unit")"
+      if [[ -n "$pid" ]] && [[ "$pid" != "0" ]]; then
+        echo "$pid" >"$(pid_file "$name")"
+      fi
+      echo "[OK] $name running via user-systemd unit=$unit pid=${pid:-unknown}"
+      return 0
+    fi
+    echo "[ERR] failed to start $name via user-systemd unit=$unit" >&2
+    systemctl --user status "$unit" --no-pager -l >&2 || true
+    return 1
+  fi
   cleanup_conflicting_listener "$name"
   case "$name" in
     api)
@@ -201,6 +254,14 @@ start_one() {
 
 stop_one() {
   local name="$1" pid file
+  if has_user_unit "$name"; then
+    local unit
+    unit="$(user_unit_for_service "$name")"
+    systemctl --user stop "$unit" || true
+    rm -f "$(pid_file "$name")"
+    echo "[OK] stopped $name via user-systemd unit=$unit"
+    return 0
+  fi
   file="$(pid_file "$name")"
   if ! is_running "$name"; then
     rm -f "$file"

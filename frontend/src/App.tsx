@@ -2686,6 +2686,8 @@ export default function App() {
   const streamRef = useRef<EventSource | null>(null);
   const selectedRunRef = useRef<string>("");
   const terminalSequenceRef = useRef<Record<string, number>>({});
+  const refreshInFlightRef = useRef<Record<string, boolean>>({});
+  const refreshPendingRef = useRef<Record<string, { incrementalTerminal: boolean } | null>>({});
 
   const flash = useCallback((msg: string) => {
     setStatusMsg(msg);
@@ -2752,8 +2754,22 @@ export default function App() {
 
   const refreshRun = useCallback(
     async (runId: string, opts?: { incrementalTerminal?: boolean }) => {
+      const requestedIncremental = Boolean(opts?.incrementalTerminal);
+      if (refreshInFlightRef.current[runId]) {
+        const existing = refreshPendingRef.current[runId];
+        refreshPendingRef.current[runId] = {
+          incrementalTerminal: Boolean(existing?.incrementalTerminal) && requestedIncremental,
+        };
+        return;
+      }
+      refreshInFlightRef.current[runId] = true;
       try {
-        const incrementalTerminal = Boolean(opts?.incrementalTerminal);
+        const incrementalTerminal = requestedIncremental;
+        const fullRefresh = !incrementalTerminal;
+        const loadOverview = fullRefresh || tab === "overview";
+        const loadIntel = fullRefresh || tab === "intel";
+        const loadResults = fullRefresh || tab === "results";
+        const loadConfig = fullRefresh || tab === "config";
         const sinceSequence = terminalSequenceRef.current[runId] || 0;
         const failures: string[] = [];
         const track = <T,>(label: string, fallback: T) =>
@@ -2763,6 +2779,8 @@ export default function App() {
             console.warn(`[refreshRun] ${label} failed:`, err);
             return fallback;
           };
+        const maybeLoad = <T,>(enabled: boolean, task: Promise<T>, label: string, fallback: T) =>
+          enabled ? task.catch(track<T>(label, fallback)) : Promise.resolve(undefined as T | undefined);
         const [run, graph, runApprovals, workflow, runSourceStatus, runReplay, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runBrowserState, runTerminal] =
           await Promise.all([
             api.getRun(runId),
@@ -2770,16 +2788,16 @@ export default function App() {
             api.getApprovals(runId).catch(track<Approval[]>("approvals", [])),
             api.getWorkflowState(runId).catch(track<WorkflowState | null>("workflow", null)),
             api.getSourceStatus(runId).catch(track<SourceStatus | null>("source", null)),
-            api.getReplay(runId).catch(track<ReplayState | null>("replay", null)),
-            api.getFacts(runId).catch(track<Fact[]>("facts", [])),
-            api.getLearning(runId).catch(track("learning", { run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> })),
-            api.getMessages(runId).catch(track<RunMessage[]>("messages", [])),
-            api.getEvents(runId, 0, 300).catch(track<EventRecord[]>("events", [])),
-            api.getVectors(runId).catch(track<Vector[]>("vectors", [])),
-            api.getResults(runId).catch(track<RunResults | null>("results", null)),
-            api.getSkills(runId).catch(track<RunSkillApplication[]>("skills", [])),
-            api.getAttackChains(runId).catch(track<AttackChain[]>("chains", [])),
-            api.getBrowserState(runId).catch(track<BrowserState | null>("browser", null)),
+            maybeLoad(loadConfig, api.getReplay(runId), "replay", null),
+            maybeLoad(loadIntel, api.getFacts(runId), "facts", [] as Fact[]),
+            maybeLoad(loadIntel, api.getLearning(runId), "learning", { run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> }),
+            maybeLoad(loadOverview, api.getMessages(runId), "messages", [] as RunMessage[]),
+            maybeLoad(loadOverview, api.getEvents(runId, 0, 300), "events", [] as EventRecord[]),
+            maybeLoad(loadOverview || loadResults, api.getVectors(runId), "vectors", [] as Vector[]),
+            maybeLoad(loadOverview || loadResults, api.getResults(runId), "results", null),
+            maybeLoad(loadIntel, api.getSkills(runId), "skills", [] as RunSkillApplication[]),
+            maybeLoad(loadIntel, api.getAttackChains(runId), "chains", [] as AttackChain[]),
+            maybeLoad(loadOverview || loadResults, api.getBrowserState(runId), "browser", null),
             api.getTerminal(runId, incrementalTerminal ? sinceSequence : 0, 250, !incrementalTerminal).catch(
               track("terminal", { run_id: runId, content: "", last_sequence: sinceSequence }),
             ),
@@ -2793,20 +2811,22 @@ export default function App() {
         setPhase(graph.phase);
         setWorkflowState(workflow);
         setSourceStatus(runSourceStatus);
-        setReplayState(runReplay);
         setAgents(graph.agents);
         setTasks(graph.tasks);
         setApprovals(runApprovals.length ? runApprovals : graph.approvals);
-        setFacts(runFacts);
-        setLearning(learningHits.results);
-        setEvents(runEvents);
-        setMessages(mergeTimeline(runMessages, runEvents));
-        setVectors(runVectors);
-        setResults(runResults);
-        setFindings(runResults?.findings || []);
-        setSkillApps(runSkills);
-        setChains(runChains);
-        setBrowserState(runBrowserState);
+        if (runReplay !== undefined) setReplayState(runReplay);
+        if (runFacts !== undefined) setFacts(runFacts);
+        if (learningHits !== undefined) setLearning(learningHits.results);
+        if (runEvents !== undefined) setEvents(runEvents);
+        if (runMessages !== undefined && runEvents !== undefined) setMessages(mergeTimeline(runMessages, runEvents));
+        if (runVectors !== undefined) setVectors(runVectors);
+        if (runResults !== undefined) {
+          setResults(runResults);
+          setFindings(runResults?.findings || []);
+        }
+        if (runSkills !== undefined) setSkillApps(runSkills);
+        if (runChains !== undefined) setChains(runChains);
+        if (runBrowserState !== undefined) setBrowserState(runBrowserState);
         const delta = runTerminal?.content ? runTerminal.content.split("\n").filter(Boolean) : [];
         terminalSequenceRef.current[runId] = runTerminal?.last_sequence || terminalSequenceRef.current[runId] || 0;
         if (!incrementalTerminal) {
@@ -2826,9 +2846,16 @@ export default function App() {
           return;
         }
         flash(`Load error: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        refreshInFlightRef.current[runId] = false;
+        const pending = refreshPendingRef.current[runId];
+        refreshPendingRef.current[runId] = null;
+        if (pending && selectedRunRef.current === runId) {
+          void refreshRun(runId, pending);
+        }
       }
     },
-    [flash, refreshRuns],
+    [flash, refreshRuns, tab],
   );
 
   // Load run list when connected
@@ -2851,7 +2878,7 @@ export default function App() {
     const pollHandle = window.setInterval(() => {
       if (selectedRunRef.current !== selectedRun.id) return;
       refreshRun(selectedRun.id, { incrementalTerminal: true });
-    }, 2000);
+    }, 5000);
     let source: EventSource | null = null;
     try {
       source = new EventSource(`/api/v1/runs/${selectedRun.id}/stream`);

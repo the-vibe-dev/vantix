@@ -257,6 +257,87 @@ def test_cve_search_service_live_fallback_uses_external_intel() -> None:
     assert payload["results"][0]["id"] == "CVE-2025-99999"
 
 
+def test_cve_search_service_expands_alias_queries_for_jetdirect() -> None:
+    reset_db()
+
+    class FakeResponse:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def raise_for_status(self):  # noqa: ANN201
+            return self
+
+        def json(self):  # noqa: ANN201
+            if self.url.endswith("/api/search/hp/jetdirect"):
+                return {"data": [{"id": "CVE-2008-4419", "cvss": 7.5, "summary": "JetDirect path traversal"}]}
+            return {"data": []}
+
+    class FakeClient:
+        def __init__(self, timeout: float = 10.0) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):  # noqa: ANN201
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url):  # noqa: ANN001, ANN201
+            return FakeResponse(url)
+
+    import secops.services.cve_search as cve_service
+
+    original_http_client = cve_service.httpx.Client
+    original_available_sources = cve_service.available_sources
+    cve_service.httpx.Client = lambda timeout=10.0: FakeClient(timeout=timeout)  # type: ignore[assignment]
+    cve_service.available_sources = lambda include_optional=False: []  # type: ignore[assignment]
+    try:
+        payload = CVESearchService().search(vendor="jetdirect", product="jetdirect", live_on_miss=True)
+    finally:
+        cve_service.httpx.Client = original_http_client  # type: ignore[assignment]
+        cve_service.available_sources = original_available_sources  # type: ignore[assignment]
+
+    assert "hp/jetdirect" in payload.get("queries", [])
+    assert payload["results"]
+    assert payload["results"][0]["id"] == "CVE-2008-4419"
+
+
+def test_cve_search_service_accepts_results_key_from_local_api() -> None:
+    reset_db()
+
+    class FakeResponse:
+        def raise_for_status(self):  # noqa: ANN201
+            return self
+
+        def json(self):  # noqa: ANN201
+            return {"results": [{"id": "CVE-2024-99999", "cvss": 8.1, "summary": "format compatibility"}]}
+
+    class FakeClient:
+        def __init__(self, timeout: float = 10.0) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):  # noqa: ANN201
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url):  # noqa: ANN001, ANN201
+            return FakeResponse()
+
+    import secops.services.cve_search as cve_service
+
+    original_http_client = cve_service.httpx.Client
+    cve_service.httpx.Client = lambda timeout=10.0: FakeClient(timeout=timeout)  # type: ignore[assignment]
+    try:
+        payload = CVESearchService().search(vendor="tenable", product="nessus", live_on_miss=False, always_search_external=False)
+    finally:
+        cve_service.httpx.Client = original_http_client  # type: ignore[assignment]
+
+    assert payload["results"]
+    assert payload["results"][0]["id"] == "CVE-2024-99999"
+
+
 def test_upsert_references_dedupes_url_for_multi_cve_record() -> None:
     reset_db()
     with SessionLocal() as db:

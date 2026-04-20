@@ -22,6 +22,7 @@ SERVICE_NAMES = {
     "api": "vantix-api.service",
     "ui": "vantix-ui.service",
 }
+CVE_SERVICE_NAME = "cvesearch-web.service"
 
 EMBEDDED_BANNER = r"""
 {}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}
@@ -113,6 +114,28 @@ def render_user_systemd_unit(*, description: str, repo_root: Path, script_path: 
         f"WorkingDirectory={_systemd_quote(repo_root)}\n"
         f"EnvironmentFile=-{_systemd_quote(repo_root / '.env')}\n"
         f"ExecStart=/usr/bin/env bash {_systemd_quote(script_path)}\n"
+        "Restart=on-failure\n"
+        "RestartSec=3\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+
+def render_cve_user_systemd_unit(*, repo_root: Path, cve_root: Path) -> str:
+    python_path = cve_root / ".venv" / "bin" / "python"
+    script_path = cve_root / "web" / "index.py"
+    return (
+        "[Unit]\n"
+        "Description=Vantix CVE Search Web\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"WorkingDirectory={_systemd_quote(cve_root)}\n"
+        f"EnvironmentFile=-{_systemd_quote(repo_root / '.env')}\n"
+        f"ExecStart={_systemd_quote(python_path)} {_systemd_quote(script_path)}\n"
         "Restart=on-failure\n"
         "RestartSec=3\n"
         "\n"
@@ -734,7 +757,15 @@ class Wizard:
         deploy = self.confirm("Use local CVE search and MCP", default=True)
         refresh = self.choose("CVE refresh cadence", ["manual", "daily", "weekly"], "weekly")
         url = self.env_updates.get("SECOPS_CVE_SEARCH_URL", "http://127.0.0.1:5000")
-        result = {"selected": deploy, "deployed": False, "refresh_cadence": refresh, "degraded": False, "url": url, "existing": False}
+        result = {
+            "selected": deploy,
+            "deployed": False,
+            "refresh_cadence": refresh,
+            "degraded": False,
+            "url": url,
+            "existing": False,
+            "service_mode": "manual",
+        }
         if not deploy:
             self.env_updates["SECOPS_ENABLE_CVE_MCP"] = "false"
             self._configure_cve_refresh(refresh="manual")
@@ -769,9 +800,15 @@ class Wizard:
                 result["degraded"] = True
                 break
         if not result["degraded"]:
-            proc = self.run_visible(["bash", str(self.repo_root / "scripts" / "secops-cve-search.sh"), "start"], label="Start local CVE search")
-            if proc.returncode != 0:
-                raise RuntimeError("Failed to start local CVE search")
+            cve_service = self.configure_cve_user_systemd(cve_root)
+            result["service"] = cve_service
+            if cve_service.get("mode") == "user-systemd":
+                result["service_mode"] = "user-systemd"
+                self.env_updates["CVE_WEB_UNIT"] = str(cve_service.get("unit_name") or CVE_SERVICE_NAME)
+            else:
+                proc = self.run_visible(["bash", str(self.repo_root / "scripts" / "secops-cve-search.sh"), "start"], label="Start local CVE search")
+                if proc.returncode != 0:
+                    raise RuntimeError("Failed to start local CVE search")
             result["deployed"] = self.cve_api_ready(url)
             if not result["deployed"]:
                 print("    [WARN] CVE start command completed, but the API probe is not ready yet.")
@@ -862,6 +899,47 @@ class Wizard:
             written.append(str(path))
             print(f"    Wrote {path}")
         return {"unit_dir": str(unit_dir), "unit_files": written, "unit_names": list(units)}
+
+    def install_cve_user_systemd_unit(self, cve_root: Path) -> dict[str, Any]:
+        unit_dir = self._user_systemd_dir()
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        unit_name = CVE_SERVICE_NAME
+        unit_path = unit_dir / unit_name
+        unit_path.write_text(
+            render_cve_user_systemd_unit(repo_root=self.repo_root, cve_root=cve_root),
+            encoding="utf-8",
+        )
+        print(f"    Wrote {unit_path}")
+        return {"unit_dir": str(unit_dir), "unit_file": str(unit_path), "unit_name": unit_name}
+
+    def configure_cve_user_systemd(self, cve_root: Path) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "mode": "manual",
+            "installed": False,
+            "enabled": False,
+            "started": False,
+            "unit": CVE_SERVICE_NAME,
+        }
+        if not shutil.which("systemctl"):
+            return result
+        if not self.confirm("Install cve-search web as a user systemd service", default=True):
+            return result
+        unit_info = self.install_cve_user_systemd_unit(cve_root)
+        result.update({"mode": "user-systemd", "installed": True, **unit_info})
+        proc = self.run_visible(["systemctl", "--user", "daemon-reload"], label="Reload user systemd manager (CVE)")
+        if proc.returncode != 0:
+            raise RuntimeError("Failed to reload user systemd manager for cve-search")
+        if self.confirm("Enable and start cve-search service now", default=True):
+            proc = self.run_visible(
+                ["systemctl", "--user", "enable", "--now", CVE_SERVICE_NAME],
+                label="Enable/start cve-search user service",
+            )
+            if proc.returncode != 0:
+                raise RuntimeError("Failed to enable/start cve-search user service")
+            result.update({"enabled": True, "started": True})
+        status = self.run(["systemctl", "--user", "is-active", CVE_SERVICE_NAME])
+        result["active"] = (status.stdout or "").strip()
+        return result
 
     def configure_user_systemd(self) -> dict[str, Any]:
         result: dict[str, Any] = {

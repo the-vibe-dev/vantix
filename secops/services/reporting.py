@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -148,186 +149,196 @@ class ReportingService:
             f"Validated findings: {len(validated_findings)}. CVE references: {len(cve_values)}."
         )
 
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        finding_rows = sorted(
+            report_json["findings"],
+            key=lambda item: (
+                severity_order.get(str(item.get("severity") or "").lower(), 5),
+                -float(item.get("confidence") or 0.0),
+                str(item.get("title") or "").lower(),
+            ),
+        )
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for item in finding_rows:
+            sev = str(item.get("severity") or "info").lower()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+            else:
+                severity_counts["info"] += 1
+
+        screenshots = [art.path for art in artifacts if art.kind == "screenshot" and str(art.path).strip()]
+
         md_lines = [
-            f"# Run Report: {run.workspace_id}",
+            f"# Technical Security Assessment: {run.target or run.workspace_id}",
             "",
             "## Executive Summary",
             executive_summary,
             "",
-            "## Engagement Overview",
-            f"- Run ID: {run.id}",
-            f"- Mode: {run.mode}",
-            f"- Target: {run.target}",
+            "## Scope",
+            f"- Run ID: `{run.id}`",
+            f"- Mode: `{run.mode}`",
+            f"- Target: `{run.target}`",
             f"- Objective: {run.objective}",
-            f"- Workflow: {report_json['workflow_id'] or '(none)'}",
-            f"- Workflow status: {report_json['workflow_status']}",
-            "",
-            "## Scope And Method",
-            "- Scope: single-target assessment based on operator objective.",
-            "- Method: phased recon, intelligence correlation, orchestrated validation, and evidence-backed reporting.",
             "",
             "## Attack Surface",
             f"- Open TCP ports: {', '.join(port_values) if port_values else 'none observed'}",
-            f"- Service fingerprints: {', '.join(service_values) if service_values else 'none observed'}",
-            f"- CVE references: {', '.join(cve_values[:20]) if cve_values else 'none observed'}",
-            f"- Observation facts: {len(observation_facts)}",
-            f"- Hypothesis vectors/chains: {len(hypothesis_facts)}",
-            f"- Validated findings: {len(validated_findings)}",
+            f"- Services: {', '.join(service_values) if service_values else 'none observed'}",
+            f"- CVE references observed: {', '.join(cve_values[:20]) if cve_values else 'none observed'}",
             "",
-            "## Phase Timeline",
+            "## Findings Summary",
+            f"- Critical: {severity_counts['critical']}",
+            f"- High: {severity_counts['high']}",
+            f"- Medium: {severity_counts['medium']}",
+            f"- Low: {severity_counts['low']}",
+            f"- Informational: {severity_counts['info']}",
+            "",
+            "## Technical Findings",
         ]
-        for phase in report_json["phase_attempts"]:
-            md_lines.append(
-                f"- {phase['phase']} attempt={phase['attempt']} status={phase['status']} retry={phase['retry_class']} worker={phase['worker_id'] or 'n/a'}"
-            )
-        md_lines.extend(["", "## Findings"])
-        if report_json["findings"]:
-            for item in report_json["findings"]:
+        if finding_rows:
+            for idx, item in enumerate(finding_rows, start=1):
                 md_lines.extend(
                     [
-                        f"### {item['title']} [{item['severity']}]",
-                        f"- Status: {item['status']}",
-                        f"- Confidence: {item['confidence']}",
-                        f"- Summary: {item['summary'] or '(none)'}",
-                        f"- Evidence: {item['evidence'] or '(none)'}",
-                        f"- Reproduction: {item['reproduction'] or '(not provided)'}",
-                        f"- Remediation: {item['remediation'] or '(not provided)'}",
+                        f"### {idx}. {item['title']}",
+                        f"- Severity: {str(item.get('severity') or 'info').upper()}",
+                        f"- Status: {item.get('status') or 'validated'}",
+                        f"- Confidence: {float(item.get('confidence') or 0.0):.2f}",
+                        f"- Vector Explanation: {item.get('summary') or '(not provided)'}",
+                        "",
+                        "**Proof Of Concept**",
+                        (item.get("reproduction") or "(not provided)"),
+                        "",
+                        "**Evidence**",
+                        (item.get("evidence") or "(not provided)"),
+                        "",
+                        "**Remediation**",
+                        (item.get("remediation") or "(not provided)"),
                         "",
                     ]
                 )
         else:
-            md_lines.append("- No promoted findings were recorded for this run.")
-        md_lines.extend(["", "## Evidence Model"])
-        md_lines.append("### Observations")
-        if observation_facts:
-            for fact in observation_facts[:80]:
-                md_lines.append(f"- [{fact.kind}] {fact.value} (source={fact.source}, confidence={fact.confidence:.2f})")
-        else:
-            md_lines.append("- No observation facts captured.")
-        md_lines.append("")
-        md_lines.append("### Hypotheses")
-        if hypothesis_facts:
-            for fact in hypothesis_facts[:80]:
-                meta = dict(fact.metadata_json or {})
-                title = str(meta.get("title") or fact.value or fact.kind)
-                status = str(meta.get("status") or "candidate")
-                evidence = str(meta.get("evidence") or "")
-                md_lines.append(f"- {title} [{status}]")
-                if evidence:
-                    md_lines.append(f"  - Evidence: {evidence}")
-        else:
-            md_lines.append("- No hypothesis vectors/chains captured.")
-        md_lines.append("")
-        md_lines.append("### Validated Results")
-        if validated_findings:
-            for finding in validated_findings:
-                md_lines.append(f"- {finding.title} [{finding.severity}] (confidence={finding.confidence:.2f})")
-                if finding.evidence:
-                    md_lines.append(f"  - Evidence: {finding.evidence}")
-                if finding.reproduction:
-                    md_lines.append(f"  - Reproduction: {finding.reproduction}")
-        else:
-            md_lines.append("- No validated findings were recorded in this run.")
-        md_lines.extend(["", "## Proof Of Concept Notes"])
-        for line in exec_evidence[:40]:
-            md_lines.append(f"- {line}")
-        md_lines.extend(["", "## Browser Assessment"])
-        if browser_summary["enabled"]:
-            md_lines.append(f"- Authenticated state: {browser_summary['authenticated']}")
-            md_lines.append(f"- Pages visited: {browser_summary['pages_visited']}")
-            md_lines.append(f"- Routes discovered: {browser_summary['routes_discovered']}")
-            md_lines.append(f"- Forms discovered: {browser_summary['forms_discovered']}")
-            md_lines.append(f"- Browser artifacts: {browser_summary['artifact_count']}")
-            if browser_summary["auth_transitions"]:
-                md_lines.append("- Auth/session transitions:")
-                for item in browser_summary["auth_transitions"][:8]:
-                    md_lines.append(
-                        f"  - {item.get('stage', 'state')} status={item.get('status', 'observed')} url={item.get('url', '(none)')}"
-                    )
-            if browser_summary["dom_diffs"]:
-                md_lines.append("- Browser state deltas:")
-                for item in browser_summary["dom_diffs"][:8]:
-                    md_lines.append(
-                        f"  - {item.get('stage', 'navigation')}: forms={item.get('form_delta', 0)} links={item.get('link_delta', 0)} cookies={item.get('cookie_delta', 0)}"
-                    )
-            if browser_summary["route_hints"]:
-                md_lines.append("- Hidden/privileged route hints:")
-                for item in browser_summary["route_hints"][:10]:
-                    md_lines.append(f"  - {item.get('hint', '(none)')} (page={item.get('url', '(unknown)')})")
-            if browser_summary["js_signals"]:
-                md_lines.append("- Client-side signals:")
-                for item in browser_summary["js_signals"][:10]:
-                    md_lines.append(
-                        f"  - {item.get('kind', 'signal')}: {item.get('signal', '')} (page={item.get('url', '(unknown)')})"
-                    )
-            if browser_summary["blocked_actions"]:
-                md_lines.append("- Policy-gated browser actions:")
-                for item in browser_summary["blocked_actions"][:20]:
-                    md_lines.append(f"  - {item}")
-        else:
-            md_lines.append("- Browser assessment was not executed for this run.")
-        md_lines.extend(["", "## Artifacts With Provenance"])
-        for art in report_json["artifacts"][:80]:
-            md_lines.append(f"- {art['kind']}: {art['path']} (artifact_id={art['id']})")
-        if report_json["negative_evidence"]:
-            md_lines.extend(["", "## Negative Evidence"])
-            for item in report_json["negative_evidence"][:40]:
-                md_lines.append(f"- {item}")
-        md_lines.extend(["", "## Approvals And Blocked Actions"])
-        for event in report_json["events"]:
-            if event["type"] in {"approval", "run_status"} or "blocked" in event["message"].lower():
-                md_lines.append(f"- [{event['type']}] {event['message']}")
+            md_lines.append("- No findings were recorded for this run.")
+
+        if screenshots:
+            md_lines.extend(["## Browser Evidence Images"])
+            for img in screenshots[:24]:
+                md_lines.append(f"- {img}")
+                md_lines.append(f"![Screenshot]({img})")
+            md_lines.append("")
+
+        if exec_evidence:
+            md_lines.extend(["## Validation Notes"])
+            for line in exec_evidence[:40]:
+                md_lines.append(f"- {line}")
+            md_lines.append("")
+
         md_lines.extend(
             [
-                "",
-                "## Remediation Roadmap",
-                "- Prioritize findings marked high/critical and validate fixes with a focused re-test.",
-                "- Reduce attack surface for externally exposed management and telemetry endpoints.",
-                "- Preserve artifacts and timeline for customer handoff and audit retention.",
-                "",
-                "## Final Recommendation",
-                "- Submit this report as the customer-facing baseline and append retest deltas after remediation.",
+                "## Recommendations",
+                "- Prioritize critical and high findings first, then re-run focused validation.",
+                "- Add automated regression checks for every validated PoC path.",
+                "- Keep this report as the baseline and compare deltas on retest.",
             ]
         )
 
         md_path = paths.artifacts / "run_report.md"
-        json_path = paths.artifacts / "run_report.json"
-        paths.write_text(Path(md_path), "\n".join(md_lines) + "\n")
+        html_path = paths.artifacts / "run_report.html"
         report_json["executive_summary"] = executive_summary
-        paths.write_json(Path(json_path), report_json)
-        comprehensive_payload = self._build_comprehensive_payload(
-            run=run,
-            facts=facts,
-            findings=findings,
-            events=events,
-            artifacts=artifacts,
-            executive_summary=executive_summary,
-            port_values=port_values,
-            service_values=service_values,
+        paths.write_text(Path(md_path), "\n".join(md_lines) + "\n")
+        paths.write_text(
+            Path(html_path),
+            self._render_human_html(
+                run=run,
+                executive_summary=executive_summary,
+                port_values=port_values,
+                service_values=service_values,
+                severity_counts=severity_counts,
+                findings=finding_rows,
+                screenshots=screenshots,
+            ),
         )
-        comprehensive_md = self._render_comprehensive_markdown(comprehensive_payload)
-        comprehensive_md_path = paths.artifacts / "comprehensive_security_assessment_report.md"
-        comprehensive_json_path = paths.artifacts / "comprehensive_security_assessment_report.json"
-        artifact_index_json_path = paths.artifacts / "artifact_index.json"
-        artifact_index_md_path = paths.artifacts / "artifact_index.md"
-        timeline_csv_path = paths.artifacts / "timeline.csv"
-
-        paths.write_text(comprehensive_md_path, comprehensive_md)
-        paths.write_json(comprehensive_json_path, comprehensive_payload)
-        artifact_index = self._build_artifact_index(run.id, artifacts)
-        paths.write_json(artifact_index_json_path, artifact_index)
-        paths.write_text(artifact_index_md_path, self._render_artifact_index_markdown(artifact_index))
-        self._write_timeline_csv(timeline_csv_path, events)
 
         return {
             "markdown_path": str(md_path),
-            "json_path": str(json_path),
+            "html_path": str(html_path),
+            "json_path": "",
+            "comprehensive_markdown_path": "",
+            "comprehensive_json_path": "",
+            "artifact_index_path": "",
+            "timeline_csv_path": "",
             "summary": report_json,
-            "comprehensive_markdown_path": str(comprehensive_md_path),
-            "comprehensive_json_path": str(comprehensive_json_path),
-            "artifact_index_path": str(artifact_index_json_path),
-            "timeline_csv_path": str(timeline_csv_path),
         }
+
+    def _render_human_html(
+        self,
+        *,
+        run: WorkspaceRun,
+        executive_summary: str,
+        port_values: list[str],
+        service_values: list[str],
+        severity_counts: dict[str, int],
+        findings: list[dict[str, Any]],
+        screenshots: list[str],
+    ) -> str:
+        def esc(value: Any) -> str:
+            return html.escape(str(value or ""))
+
+        chips = "".join(
+            f"<span class='chip {sev}'>{sev.upper()}: {severity_counts.get(sev, 0)}</span>"
+            for sev in ("critical", "high", "medium", "low", "info")
+        )
+        finding_cards: list[str] = []
+        for idx, item in enumerate(findings, start=1):
+            sev = str(item.get("severity") or "info").lower()
+            finding_cards.append(
+                (
+                    "<article class='finding'>"
+                    f"<h3>{idx}. {esc(item.get('title'))}</h3>"
+                    f"<div class='meta'><span class='badge {esc(sev)}'>{esc(sev.upper())}</span>"
+                    f"<span>Status: {esc(item.get('status') or 'validated')}</span>"
+                    f"<span>Confidence: {float(item.get('confidence') or 0.0):.2f}</span></div>"
+                    f"<h4>Vector Explanation</h4><p>{esc(item.get('summary') or '(not provided)')}</p>"
+                    f"<h4>PoC</h4><pre>{esc(item.get('reproduction') or '(not provided)')}</pre>"
+                    f"<h4>Evidence</h4><pre>{esc(item.get('evidence') or '(not provided)')}</pre>"
+                    f"<h4>Remediation</h4><p>{esc(item.get('remediation') or '(not provided)')}</p>"
+                    "</article>"
+                )
+            )
+        if not finding_cards:
+            finding_cards.append("<p>No findings were recorded for this run.</p>")
+
+        image_blocks = "".join(f"<figure><img src='{esc(path)}' alt='screenshot'><figcaption>{esc(path)}</figcaption></figure>" for path in screenshots[:24])
+        if not image_blocks:
+            image_blocks = "<p>No screenshots were captured.</p>"
+
+        return (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            f"<title>Security Report - {esc(run.target or run.workspace_id)}</title>"
+            "<style>"
+            "body{font-family:Inter,Arial,sans-serif;background:#f5f7fb;color:#1a1f2b;margin:0;padding:0;line-height:1.45}"
+            ".wrap{max-width:1100px;margin:0 auto;padding:24px}"
+            "h1,h2,h3,h4{margin:0 0 10px 0}"
+            "section{background:#fff;border:1px solid #d9e0ee;border-radius:8px;padding:18px;margin:0 0 16px 0}"
+            ".chip,.badge{display:inline-block;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:600;border:1px solid #cdd6e6;margin-right:6px}"
+            ".critical{background:#fee2e2}.high{background:#ffedd5}.medium{background:#fef9c3}.low{background:#dcfce7}.info{background:#e0f2fe}"
+            ".finding{border-top:1px solid #e7ecf6;padding-top:14px;margin-top:14px}"
+            ".meta{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px 0;font-size:13px}"
+            "pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto;font-size:12px;white-space:pre-wrap}"
+            "figure{margin:0 0 14px 0} img{max-width:100%;height:auto;border:1px solid #d9e0ee;border-radius:6px}"
+            "figcaption{font-size:12px;color:#475569;margin-top:4px;word-break:break-all}"
+            ".muted{color:#475569;font-size:14px}"
+            "</style></head><body>"
+            "<div class='wrap'>"
+            f"<section><h1>Security Assessment Report</h1><p class='muted'>Target: {esc(run.target)} | Run: {esc(run.id)}</p>"
+            f"<p>{esc(executive_summary)}</p><div>{chips}</div></section>"
+            "<section><h2>Attack Surface</h2>"
+            f"<p><strong>Open Ports:</strong> {esc(', '.join(port_values) if port_values else 'none observed')}</p>"
+            f"<p><strong>Services:</strong> {esc(', '.join(service_values) if service_values else 'none observed')}</p>"
+            "</section>"
+            f"<section><h2>Findings And PoC</h2>{''.join(finding_cards)}</section>"
+            f"<section><h2>Evidence Images</h2>{image_blocks}</section>"
+            "</div></body></html>"
+        )
 
     def _build_artifact_index(self, run_id: str, artifacts: list[Artifact]) -> dict[str, Any]:
         return {

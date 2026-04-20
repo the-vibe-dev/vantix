@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import OperationalError
 
 from secops.config import settings
-from secops.db import Base, engine
+from secops.db import Base, engine, ensure_sqlite_compat_schema
 from secops.middleware import AuditMiddleware, RateLimitMiddleware, RequestIdMiddleware
 from secops.routers import approvals, auth, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, sources, system, tasks, tools
 
@@ -37,16 +37,20 @@ def _check_startup_config() -> None:
 
 
 def _run_migrations_if_needed() -> None:
-    """Postgres: run alembic upgrade head. SQLite: fall back to create_all (fast-path for dev/tests)."""
-    dialect = engine.dialect.name
-    if dialect == "sqlite":
+    """Run Alembic upgrades for live databases; fall back to create_all only if unavailable."""
+    if engine.dialect.name == "sqlite":
         Base.metadata.create_all(bind=engine)
+        ensure_sqlite_compat_schema()
         return
     from alembic import command
     from alembic.config import Config as AlembicConfig
-    cfg = AlembicConfig(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(cfg, "head")
+    cfg_path = Path(__file__).resolve().parent.parent / "alembic.ini"
+    if cfg_path.exists():
+        cfg = AlembicConfig(str(cfg_path))
+        cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        command.upgrade(cfg, "head")
+        return
+    Base.metadata.create_all(bind=engine)
 
 
 def _bootstrap_users_if_needed() -> None:
