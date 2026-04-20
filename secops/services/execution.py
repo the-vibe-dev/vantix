@@ -956,16 +956,15 @@ class ExecutionManager:
 
             log_path = Path(session.log_path)
             codex_policy = self.policies.evaluate(run, action_kind="codex")
-            with SessionLocal() as inner_db:
-                self._emit_policy_decision(
-                    inner_db,
-                    run_id=run.id,
-                    action_kind="codex",
-                    verdict=codex_policy.verdict,
-                    reason=codex_policy.reason,
-                    audit=codex_policy.audit,
-                )
-                inner_db.commit()
+            self._emit_policy_decision(
+                db,
+                run_id=run.id,
+                action_kind="codex",
+                verdict=codex_policy.verdict,
+                reason=codex_policy.reason,
+                audit=codex_policy.audit,
+            )
+            db.commit()
             if codex_policy.verdict in {"block", "require_approval"}:
                 simulated = (
                     f"Codex execution policy verdict: {codex_policy.verdict}.\n"
@@ -973,119 +972,110 @@ class ExecutionManager:
                     "Review policy status, then retry/replan.\n"
                 )
                 paths.write_text(log_path, simulated)
-                with SessionLocal() as inner_db:
-                    inner_run = inner_db.get(WorkspaceRun, run.id)
-                    if inner_run is not None:
-                        inner_run.status = "blocked"
-                    refreshed = inner_db.get(AgentSession, session.id)
-                    refreshed.status = "blocked"
-                    refreshed.completed_at = datetime.now(timezone.utc)
-                    self._set_role_status(inner_db, run.id, "orchestrator", "blocked")
-                    task = self._task_by_kind(inner_db, run.id, "orchestrate")
-                    task.status = "blocked"
-                    task.result_json = {"reason": codex_policy.reason, "verdict": codex_policy.verdict}
-                    self.events.emit(inner_db, run.id, "terminal", simulated.strip(), level="warning", agent_session_id=session.id)
-                    self._write_memory(inner_db, inner_db.get(WorkspaceRun, run.id), mode="handoff", phase="orchestrate-blocked", issues=[codex_policy.reason], files=[str(log_path)], next_action="review approval/policy and retry")
-                    self._create_approval(
-                        inner_db,
-                        run.id,
-                        title="Codex execution policy blocked run",
-                        detail=codex_policy.reason,
-                        reason="codex-policy",
-                    )
-                    inner_db.commit()
+                run.status = "blocked"
+                session.status = "blocked"
+                session.completed_at = datetime.now(timezone.utc)
+                self._set_role_status(db, run.id, "orchestrator", "blocked")
+                task = self._task_by_kind(db, run.id, "orchestrate")
+                task.status = "blocked"
+                task.result_json = {"reason": codex_policy.reason, "verdict": codex_policy.verdict}
+                self.events.emit(db, run.id, "terminal", simulated.strip(), level="warning", agent_session_id=session.id)
+                self._write_memory(db, run, mode="handoff", phase="orchestrate-blocked", issues=[codex_policy.reason], files=[str(log_path)], next_action="review approval/policy and retry")
+                self._create_approval(
+                    db,
+                    run.id,
+                    title="Codex execution policy blocked run",
+                    detail=codex_policy.reason,
+                    reason="codex-policy",
+                )
+                db.commit()
                 return
             if settings.enable_codex_execution:
                 runner = CodexRunner(workspace_dir=Path(session.workspace_path))
                 if not runner.is_available():
                     message = f"Codex binary not found: {settings.codex_bin}\n"
                     paths.write_text(log_path, message)
-                    with SessionLocal() as inner_db:
-                        inner_run = inner_db.get(WorkspaceRun, run.id)
-                        if inner_run is not None:
-                            inner_run.status = "blocked"
-                        refreshed = inner_db.get(AgentSession, session.id)
-                        refreshed.status = "blocked"
-                        refreshed.completed_at = datetime.now(timezone.utc)
-                        self._set_role_status(inner_db, run.id, "orchestrator", "blocked")
-                        task = self._task_by_kind(inner_db, run.id, "orchestrate")
-                        task.status = "blocked"
-                        task.result_json = {"reason": "codex-unavailable", "codex_bin": settings.codex_bin}
-                        self.events.emit(
-                            inner_db,
-                            run.id,
-                            "terminal",
-                            message.strip(),
-                            level="warning",
-                            agent_session_id=session.id,
+                    run.status = "blocked"
+                    session.status = "blocked"
+                    session.completed_at = datetime.now(timezone.utc)
+                    self._set_role_status(db, run.id, "orchestrator", "blocked")
+                    task = self._task_by_kind(db, run.id, "orchestrate")
+                    task.status = "blocked"
+                    task.result_json = {"reason": "codex-unavailable", "codex_bin": settings.codex_bin}
+                    self.events.emit(
+                        db,
+                        run.id,
+                        "terminal",
+                        message.strip(),
+                        level="warning",
+                        agent_session_id=session.id,
+                    )
+                    self._create_approval(
+                        db,
+                        run.id,
+                        title="Codex binary unavailable",
+                        detail=message.strip(),
+                        reason="codex-unavailable",
+                    )
+                    db.add(
+                        Artifact(
+                            run_id=run.id,
+                            kind="terminal-log",
+                            path=str(log_path),
+                            metadata_json={"agent_session_id": session.id},
                         )
-                        self._create_approval(
-                            inner_db,
-                            run.id,
-                            title="Codex binary unavailable",
-                            detail=message.strip(),
-                            reason="codex-unavailable",
-                        )
-                        inner_db.add(
-                            Artifact(
-                                run_id=run.id,
-                                kind="terminal-log",
-                                path=str(log_path),
-                                metadata_json={"agent_session_id": session.id},
-                            )
-                        )
-                        inner_db.commit()
+                    )
+                    db.commit()
                     return
                 plan = runner.build_plan(prompt)
                 with log_path.open("w", encoding="utf-8") as handle:
                     def on_line(line: str) -> None:
                         handle.write(line)
                         handle.flush()
-                        with SessionLocal() as inner_db:
+                        # Streaming events need their own short-lived session so
+                        # they do not collide with the outer unit-of-work.
+                        with SessionLocal() as stream_db:
                             self.events.emit(
-                                inner_db,
+                                stream_db,
                                 run.id,
                                 "terminal",
                                 line.rstrip("\n"),
                                 payload={"agent": "orchestrator"},
                                 agent_session_id=session.id,
                             )
-                            inner_db.commit()
+                            stream_db.commit()
 
                     result = runner.execute_streaming(plan, on_line=on_line, stop_event=None)
-                with SessionLocal() as inner_db:
-                    inner_run = inner_db.get(WorkspaceRun, run.id)
-                    if inner_run is not None and result.returncode != 0:
-                        inner_run.status = "failed"
-                    refreshed = inner_db.get(AgentSession, session.id)
-                    refreshed.status = "completed" if result.returncode == 0 else "failed"
-                    refreshed.completed_at = datetime.now(timezone.utc)
-                    self._set_role_status(inner_db, run.id, "orchestrator", "completed" if result.returncode == 0 else "failed")
-                    task = self._task_by_kind(inner_db, run.id, "orchestrate")
-                    task.status = "completed" if result.returncode == 0 else "failed"
-                    task.result_json = {"returncode": result.returncode}
-                    if result.returncode == 0:
-                        self._set_vantix_task_status(inner_db, run.id, "planning", "completed", {"source_phase": "orchestrate"})
-                    self._write_memory(
-                        inner_db,
-                        inner_db.get(WorkspaceRun, run.id),
-                        mode="phase" if result.returncode == 0 else "failure",
-                        phase="orchestrate",
-                        done=[f"orchestrator returncode={result.returncode}"],
-                        issues=[] if result.returncode == 0 else [f"orchestrator failed rc={result.returncode}"],
-                        files=[str(log_path)],
-                        next_action="learning ingest" if result.returncode == 0 else "review terminal log and retry or replan",
+                if result.returncode != 0:
+                    run.status = "failed"
+                session.status = "completed" if result.returncode == 0 else "failed"
+                session.completed_at = datetime.now(timezone.utc)
+                self._set_role_status(db, run.id, "orchestrator", "completed" if result.returncode == 0 else "failed")
+                task = self._task_by_kind(db, run.id, "orchestrate")
+                task.status = "completed" if result.returncode == 0 else "failed"
+                task.result_json = {"returncode": result.returncode}
+                if result.returncode == 0:
+                    self._set_vantix_task_status(db, run.id, "planning", "completed", {"source_phase": "orchestrate"})
+                self._write_memory(
+                    db,
+                    run,
+                    mode="phase" if result.returncode == 0 else "failure",
+                    phase="orchestrate",
+                    done=[f"orchestrator returncode={result.returncode}"],
+                    issues=[] if result.returncode == 0 else [f"orchestrator failed rc={result.returncode}"],
+                    files=[str(log_path)],
+                    next_action="learning ingest" if result.returncode == 0 else "review terminal log and retry or replan",
+                )
+                if result.returncode != 0:
+                    self._create_approval(
+                        db,
+                        run.id,
+                        title="Codex orchestration failed",
+                        detail=f"Return code {result.returncode}. Review terminal output and retry or replan.",
+                        reason="codex-failure",
                     )
-                    if result.returncode != 0:
-                        self._create_approval(
-                            inner_db,
-                            run.id,
-                            title="Codex orchestration failed",
-                            detail=f"Return code {result.returncode}. Review terminal output and retry or replan.",
-                            reason="codex-failure",
-                        )
-                    inner_db.add(Artifact(run_id=run.id, kind="terminal-log", path=str(log_path), metadata_json={"agent_session_id": session.id}))
-                    inner_db.commit()
+                db.add(Artifact(run_id=run.id, kind="terminal-log", path=str(log_path), metadata_json={"agent_session_id": session.id}))
+                db.commit()
 
     def _phase_learn_ingest(self, run_id: str) -> None:
         with SessionLocal() as db:

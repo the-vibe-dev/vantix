@@ -118,60 +118,73 @@ class WorkflowEngine:
 
     def claim_next_phase(self, db: Session, *, worker_id: str, lease_seconds: int = 90) -> WorkflowClaim | None:
         now = utcnow()
-        candidate_ids = (
-            db.execute(
-                select(WorkflowPhaseRun.id)
-                .join(WorkflowExecution, WorkflowExecution.id == WorkflowPhaseRun.workflow_id)
-                .where(
-                    WorkflowExecution.status.in_([WorkflowStatus.QUEUED.value, WorkflowStatus.RUNNING.value]),
-                    or_(
-                        WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
-                        and_(
-                            WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
-                            WorkflowPhaseRun.lease_expires_at.is_not(None),
-                            WorkflowPhaseRun.lease_expires_at < now,
-                        ),
-                    ),
-                    or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
-                )
-                .order_by(WorkflowPhaseRun.created_at.asc())
-                .limit(20)
-            )
-            .scalars()
-            .all()
-        )
-        if not candidate_ids:
-            return None
-
         lease_until = now + timedelta(seconds=lease_seconds)
-        candidate: WorkflowPhaseRun | None = None
-        for phase_run_id in candidate_ids:
-            result = db.execute(
-                update(WorkflowPhaseRun)
-                .where(
-                    WorkflowPhaseRun.id == phase_run_id,
-                    or_(
-                        WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
-                        and_(
-                            WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
-                            WorkflowPhaseRun.lease_expires_at.is_not(None),
-                            WorkflowPhaseRun.lease_expires_at < now,
-                        ),
+        dialect = db.bind.dialect.name if db.bind is not None else ""
+
+        claimable = (
+            select(WorkflowPhaseRun)
+            .join(WorkflowExecution, WorkflowExecution.id == WorkflowPhaseRun.workflow_id)
+            .where(
+                WorkflowExecution.status.in_([WorkflowStatus.QUEUED.value, WorkflowStatus.RUNNING.value]),
+                or_(
+                    WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
+                    and_(
+                        WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
+                        WorkflowPhaseRun.lease_expires_at.is_not(None),
+                        WorkflowPhaseRun.lease_expires_at < now,
                     ),
-                    or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
-                )
-                .values(
-                    status=PhaseStatus.CLAIMED.value,
-                    worker_id=worker_id,
-                    lease_expires_at=lease_until,
-                    started_at=func.coalesce(WorkflowPhaseRun.started_at, now),
-                )
+                ),
+                or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
             )
-            if (result.rowcount or 0) == 1:
-                candidate = db.get(WorkflowPhaseRun, phase_run_id)
-                break
-        if candidate is None:
-            return None
+            .order_by(WorkflowPhaseRun.created_at.asc())
+        )
+
+        candidate: WorkflowPhaseRun | None = None
+        if dialect == "postgresql":
+            # Single-round claim with row-level lock; workers that lose the
+            # race skip the locked row entirely rather than retrying optimistically.
+            row = db.execute(
+                claimable.with_for_update(skip_locked=True).limit(1)
+            ).scalars().first()
+            if row is None:
+                return None
+            row.status = PhaseStatus.CLAIMED.value
+            row.worker_id = worker_id
+            row.lease_expires_at = lease_until
+            if row.started_at is None:
+                row.started_at = now
+            candidate = row
+        else:
+            candidate_ids = db.execute(claimable.with_only_columns(WorkflowPhaseRun.id).limit(20)).scalars().all()
+            if not candidate_ids:
+                return None
+            for phase_run_id in candidate_ids:
+                result = db.execute(
+                    update(WorkflowPhaseRun)
+                    .where(
+                        WorkflowPhaseRun.id == phase_run_id,
+                        or_(
+                            WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
+                            and_(
+                                WorkflowPhaseRun.status == PhaseStatus.CLAIMED.value,
+                                WorkflowPhaseRun.lease_expires_at.is_not(None),
+                                WorkflowPhaseRun.lease_expires_at < now,
+                            ),
+                        ),
+                        or_(WorkflowPhaseRun.next_attempt_at.is_(None), WorkflowPhaseRun.next_attempt_at <= now),
+                    )
+                    .values(
+                        status=PhaseStatus.CLAIMED.value,
+                        worker_id=worker_id,
+                        lease_expires_at=lease_until,
+                        started_at=func.coalesce(WorkflowPhaseRun.started_at, now),
+                    )
+                )
+                if (result.rowcount or 0) == 1:
+                    candidate = db.get(WorkflowPhaseRun, phase_run_id)
+                    break
+            if candidate is None:
+                return None
 
         db.execute(
             update(WorkerLease)
