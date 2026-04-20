@@ -19,6 +19,8 @@ dependencies = [
   "playwright>=1.49.0,<2.0.0",
   "mcp[cli]>=1.0.0,<2.0.0",
   "pyyaml>=6.0.1,<7.0.0",
+  "alembic>=1.13.0,<2.0.0",
+  "passlib[argon2]>=1.7.4,<2.0.0",
 ]
 
 [project.optional-dependencies]

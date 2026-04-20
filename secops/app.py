@@ -34,10 +34,23 @@ def _check_startup_config() -> None:
         )
 
 
+def _run_migrations_if_needed() -> None:
+    """Postgres: run alembic upgrade head. SQLite: fall back to create_all (fast-path for dev/tests)."""
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        Base.metadata.create_all(bind=engine)
+        return
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+    cfg = AlembicConfig(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    command.upgrade(cfg, "head")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _check_startup_config()
-    Base.metadata.create_all(bind=engine)
+    _run_migrations_if_needed()
     try:
         yield
     finally:
