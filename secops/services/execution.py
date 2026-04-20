@@ -362,6 +362,7 @@ class ExecutionManager:
                         title="Target out of scope",
                         detail=f"{recon_target}: {scope_verdict.reason}",
                         reason="scope-policy",
+                        metadata={"target": recon_target},
                     )
                     self._write_memory(
                         db,
@@ -410,6 +411,7 @@ class ExecutionManager:
                     title="Recon policy blocked run",
                     detail=decision.reason,
                     reason=f"{action_kind}-policy",
+                    metadata={"target": recon_target, "action_kind": action_kind},
                 )
                 self.events.emit(db, run.id, "phase", f"Recon blocked by policy: {decision.reason}", level="warning", agent_session_id=session.id)
                 self._write_memory(
@@ -435,10 +437,37 @@ class ExecutionManager:
             paths.write_text(Path(session.log_path), output)
             self._emit_terminal_excerpt(db, run_id=run.id, output=output, agent_session_id=session.id, agent="recon")
             discovered = self._parse_nmap(output)
+            if self._should_escalate_recon(run, discovered):
+                escalate = ["nmap", "-Pn", "-sT", "--top-ports", "1000", "--open", recon_target]
+                self.events.emit(
+                    db,
+                    run.id,
+                    "terminal",
+                    f"[recon] escalating: {' '.join(escalate)}",
+                    payload={"agent": "recon", "pass": 2},
+                    agent_session_id=session.id,
+                )
+                output2 = self._run_command(escalate, session.log_path, run_id=run.id)
+                combined = output.rstrip() + "\n\n# pass-2 top1000\n" + output2
+                paths.write_text(Path(session.log_path), combined)
+                self._emit_terminal_excerpt(db, run_id=run.id, output=output2, agent_session_id=session.id, agent="recon")
+                merged = self._parse_nmap(combined)
+                discovered = merged
+                cfg = dict(run.config_json or {})
+                cfg["recon_escalated"] = True
+                run.config_json = cfg
             if discovered["ports"]:
                 run.config_json["ports"] = sorted(set(run.config_json.get("ports", []) + discovered["ports"]))
             if discovered["services"]:
                 run.config_json["services"] = sorted(set(run.config_json.get("services", []) + discovered["services"]))
+            web_summary = self._web_followup_checks(
+                db=db,
+                run=run,
+                recon_target=recon_target,
+                discovered=discovered,
+                session_id=session.id,
+                paths=paths,
+            )
             for port in discovered["ports"]:
                 db.add(Fact(run_id=run.id, source="recon", kind="port", value=port, confidence=0.95, tags=["recon"]))
             for service in discovered["services"]:
@@ -447,9 +476,28 @@ class ExecutionManager:
             session.completed_at = datetime.now(timezone.utc)
             self._set_role_status(db, run.id, "recon", "completed")
             task.status = "completed"
-            task.result_json = discovered
+            task.result_json = {**discovered, "web_followup": web_summary}
             self._set_vantix_task_status(db, run.id, "vantix-recon", "completed", {"source_phase": "recon-sidecar", **discovered})
             self.events.emit(db, run.id, "phase", "Recon completed", payload=discovered, agent_session_id=session.id)
+            db.add(
+                RunMessage(
+                    run_id=run.id,
+                    role="system",
+                    author="System",
+                    content=f"Recon completed: {len(discovered['ports'])} open ports, {len(discovered['services'])} detected services.",
+                    metadata_json={"phase": "recon", "ports": discovered["ports"], "services": discovered["services"]},
+                )
+            )
+            if web_summary.get("hits", 0) > 0:
+                db.add(
+                    RunMessage(
+                        run_id=run.id,
+                        role="system",
+                        author="System",
+                        content=f"Web validation flagged {web_summary['hits']} candidate issue(s) across {web_summary['checked_ports']} port(s).",
+                        metadata_json={"phase": "recon", "web_followup": web_summary},
+                    )
+                )
             facts = [[ "port", port ] for port in discovered["ports"]] + [[ "service", service ] for service in discovered["services"]]
             self._write_memory(db, run, mode="phase", phase="recon", done=["recon completed"], facts=facts, files=[str(session.log_path)], next_action="cve analysis")
             if str(run.config_json.get("scan_profile", "full")).lower() == "quick":
@@ -508,6 +556,7 @@ class ExecutionManager:
             results = []
             errors = []
             services = run.config_json.get("services", [])
+            cve_hits = 0
             for service in services:
                 try:
                     response = self.cve.search(vendor=service, product=service, always_search_external=True, live_limit=500)
@@ -523,6 +572,7 @@ class ExecutionManager:
                         agent_session_id=session.id,
                     )
                 results.append(response)
+                cve_hits += len(response.get("results", []) or [])
                 for top in response.get("results", [])[:5]:
                     db.add(
                         Fact(
@@ -542,10 +592,19 @@ class ExecutionManager:
             self._set_role_status(db, run.id, "researcher", "completed")
             self._set_role_status(db, run.id, "vector_store", "completed")
             task.status = "completed"
-            task.result_json = {"queries": len(results), "errors": errors}
+            task.result_json = {"queries": len(results), "errors": errors, "hits": cve_hits}
             self._set_vantix_task_status(db, run.id, "research", "completed", {"queries": len(results), "errors": len(errors), "source_phase": "cve-analysis"})
             self._set_vantix_task_status(db, run.id, "vector-store", "completed", {"queries": len(results), "source_phase": "cve-analysis"})
             self.events.emit(db, run.id, "phase", f"CVE analysis completed: {len(results)} queries", agent_session_id=session.id)
+            db.add(
+                RunMessage(
+                    run_id=run.id,
+                    role="system",
+                    author="System",
+                    content=f"CVE search completed: {len(results)} service queries, {cve_hits} matches, {len(errors)} errors.",
+                    metadata_json={"phase": "cve-analysis", "queries": len(results), "hits": cve_hits, "errors": len(errors)},
+                )
+            )
             self._write_memory(db, run, mode="phase", phase="cve-analysis", done=[f"cve queries={len(results)}"], files=[str(cve_path)], next_action="primary orchestration")
             db.add(Artifact(run_id=run.id, kind="cve-results", path=str(cve_path), metadata_json={"queries": len(results)}))
             db.commit()
@@ -575,8 +634,6 @@ class ExecutionManager:
             session.prompt_path = str(prompt_path)
             session.status = "running"
             self._set_role_status(db, run.id, "orchestrator", "running")
-            self._set_role_status(db, run.id, "developer", "running")
-            self._set_role_status(db, run.id, "executor", "running")
             db.flush()
             self.events.emit(db, run.id, "phase", "Primary orchestration started", agent_session_id=session.id)
             self._write_memory(db, run, mode="phase", phase="orchestrate-start", done=["primary orchestration started"], files=[str(prompt_path)], next_action="monitor orchestrator")
@@ -689,15 +746,11 @@ class ExecutionManager:
                     refreshed.status = "completed" if result.returncode == 0 else "failed"
                     refreshed.completed_at = datetime.now(timezone.utc)
                     self._set_role_status(inner_db, run.id, "orchestrator", "completed" if result.returncode == 0 else "failed")
-                    self._set_role_status(inner_db, run.id, "developer", "completed" if result.returncode == 0 else "failed")
-                    self._set_role_status(inner_db, run.id, "executor", "completed" if result.returncode == 0 else "failed")
                     task = self._task_by_kind(inner_db, run.id, "orchestrate")
                     task.status = "completed" if result.returncode == 0 else "failed"
                     task.result_json = {"returncode": result.returncode}
                     if result.returncode == 0:
                         self._set_vantix_task_status(inner_db, run.id, "planning", "completed", {"source_phase": "orchestrate"})
-                        self._set_vantix_task_status(inner_db, run.id, "development", "completed", {"source_phase": "orchestrate"})
-                        self._set_vantix_task_status(inner_db, run.id, "execution", "completed", {"source_phase": "orchestrate"})
                     self._write_memory(
                         inner_db,
                         inner_db.get(WorkspaceRun, run.id),
@@ -749,6 +802,7 @@ class ExecutionManager:
         """Resolve engagement scope metadata and validate target.
 
         Returns a ScopeVerdict; callers must block when not allowed.
+        A granted ``scope-policy`` approval is consumed as a one-time override.
         """
         from secops.models import Engagement
         from secops.services.scope import ScopeVerdict, is_scope_allowed
@@ -762,10 +816,138 @@ class ExecutionManager:
         allowed = scope.get("allowed") or []
         excludes = scope.get("excludes") or []
         allow_private = bool(scope.get("allow_private", False))
+        config = dict(run.config_json or {})
+        scope_overrides = dict(config.get("scope_overrides") or {})
+        if bool(scope_overrides.get(target)):
+            allow_private = True
+        grants_raw = config.get("approval_grants")
+        grants = dict(grants_raw) if isinstance(grants_raw, dict) else {}
+        scope_grants = int(grants.get("scope", 0) or 0)
+        if scope_grants > 0:
+            # Consume exactly one scope override grant approved by operator.
+            grants["scope"] = scope_grants - 1
+            config["approval_grants"] = grants
+            run.config_json = config
+            allow_private = True
         # Permit the engagement's own target as an implicit allow-entry.
         if engagement and engagement.target and engagement.target not in allowed:
             allowed = list(allowed) + [engagement.target]
         return is_scope_allowed(target, allowed=allowed, excludes=excludes, allow_private=allow_private)
+
+    def _should_escalate_recon(self, run: WorkspaceRun, discovered: dict[str, list[str]]) -> bool:
+        cfg = dict(run.config_json or {})
+        if str(cfg.get("scan_profile", "full")).lower() == "quick":
+            return False
+        if bool(cfg.get("recon_escalated")):
+            return False
+        if cfg.get("ports"):
+            return False
+        ports = [int(port) for port in discovered.get("ports", []) if str(port).isdigit()]
+        if not ports:
+            return True
+        high_port_present = any(port >= 10000 for port in ports)
+        if len(ports) < 8:
+            return True
+        return not high_port_present
+
+    def _web_followup_checks(
+        self,
+        *,
+        db,
+        run: WorkspaceRun,
+        recon_target: str,
+        discovered: dict[str, list[str]],
+        session_id: str,
+        paths: StorageLayout,
+    ) -> dict:
+        if not recon_target:
+            return {"checked_ports": 0, "hits": 0, "checks": 0}
+        cfg = dict(run.config_json or {})
+        if bool(cfg.get("web_followup_done")):
+            return {"checked_ports": 0, "hits": 0, "checks": 0, "skipped": "already-done"}
+        ports = [port for port in discovered.get("ports", []) if str(port).isdigit()]
+        if not ports:
+            return {"checked_ports": 0, "hits": 0, "checks": 0}
+
+        candidate_ports = []
+        for port in ports:
+            p = int(port)
+            if p in {80, 443, 3000, 5000, 8000, 8080, 8443} or p >= 1024:
+                candidate_ports.append(str(p))
+        candidate_ports = sorted(set(candidate_ports), key=lambda value: int(value))
+        if not candidate_ports:
+            return {"checked_ports": 0, "hits": 0, "checks": 0}
+
+        source_paths = ["/server.py", "/app.py", "/main.py", "/.env", "/.git/config"]
+        traversal_paths = ["/../../etc/passwd", "/..%2f..%2fetc%2fpasswd", "/%2e%2e/%2e%2e/etc/passwd"]
+        issues: list[dict[str, str]] = []
+        checks = 0
+        sample_lines: list[str] = []
+        for port in candidate_ports[:10]:
+            base_url = f"http://{recon_target}:{port}"
+            probe = self._run_command(["curl", "-sS", "-L", "--max-time", "4", base_url + "/"], str(paths.logs / "recon.log"), run_id=run.id)
+            checks += 1
+            if "HTTP/" not in probe and "<html" not in probe.lower() and "command failed" in probe.lower():
+                continue
+            for path in source_paths:
+                resp = self._run_command(["curl", "-sS", "-L", "--max-time", "4", base_url + path], str(paths.logs / "recon.log"), run_id=run.id)
+                checks += 1
+                body = resp.lower()
+                if "import " in body or "def " in body or "flask" in body or "django" in body:
+                    issues.append({"port": port, "kind": "source-disclosure", "path": path, "evidence": f"{base_url}{path}"})
+                    sample_lines.append(f"[web] potential source disclosure: {base_url}{path}")
+                    break
+            for path in traversal_paths:
+                resp = self._run_command(
+                    ["curl", "-sS", "-L", "--path-as-is", "--max-time", "4", base_url + path],
+                    str(paths.logs / "recon.log"),
+                    run_id=run.id,
+                )
+                checks += 1
+                text = resp.lower()
+                if "root:x:" in text or "/bin/bash" in text:
+                    issues.append({"port": port, "kind": "path-traversal-read", "path": path, "evidence": f"{base_url}{path}"})
+                    sample_lines.append(f"[web] potential traversal file-read: {base_url}{path}")
+                    break
+
+        for issue in issues:
+            db.add(
+                Fact(
+                    run_id=run.id,
+                    source="recon-web",
+                    kind="vector",
+                    value=f"{issue['kind']} on {issue['port']}",
+                    confidence=0.85,
+                    tags=["web", "candidate"],
+                    metadata_json={
+                        "title": issue["kind"],
+                        "summary": f"Potential {issue['kind']} identified during automated web validation.",
+                        "status": "candidate",
+                        "severity": "high",
+                        "evidence": issue["evidence"],
+                        "next_action": "validate safely and capture proof",
+                        "port": issue["port"],
+                        "path": issue["path"],
+                        "source": "recon-web",
+                    },
+                )
+            )
+        for line in sample_lines[:20]:
+            self.events.emit(
+                db,
+                run.id,
+                "terminal",
+                line,
+                payload={"agent": "recon", "stage": "web-followup"},
+                agent_session_id=session_id,
+            )
+        cfg["web_followup_done"] = True
+        run.config_json = cfg
+        if issues:
+            report_path = paths.logs / "web-followup.json"
+            paths.write_json(report_path, {"target": recon_target, "issues": issues, "checks": checks})
+            db.add(Artifact(run_id=run.id, kind="web-followup", path=str(report_path), metadata_json={"hits": len(issues), "checks": checks}))
+        return {"checked_ports": len(candidate_ports[:10]), "hits": len(issues), "checks": checks}
 
     def _learning_block(self, paths: StorageLayout) -> str:
         learning_path = paths.facts / "learning_hits.json"
@@ -814,6 +996,15 @@ class ExecutionManager:
             )
             db.add(Artifact(run_id=run.id, kind="report-json", path=str(generated["json_path"]), metadata_json={}))
             self.events.emit(db, run.id, "phase", "Report generated")
+            db.add(
+                RunMessage(
+                    run_id=run.id,
+                    role="system",
+                    author="System",
+                    content=f"Report generated: {generated['markdown_path']}",
+                    metadata_json={"phase": "report", "report_path": generated["markdown_path"]},
+                )
+            )
             self._write_memory(db, run, mode="phase", phase="report", done=["report generated"], files=[str(generated["markdown_path"]), str(generated["json_path"])], next_action="close run")
             db.commit()
 
@@ -908,7 +1099,16 @@ class ExecutionManager:
                 agent_session_id=agent_session_id,
             )
 
-    def _create_approval(self, db, run_id: str, title: str, detail: str, reason: str) -> ApprovalRequest:
+    def _create_approval(
+        self,
+        db,
+        run_id: str,
+        title: str,
+        detail: str,
+        reason: str,
+        metadata: dict | None = None,
+    ) -> ApprovalRequest:
+        metadata = metadata or {}
         existing = (
             db.query(ApprovalRequest)
             .filter(
@@ -919,18 +1119,18 @@ class ExecutionManager:
             .order_by(ApprovalRequest.created_at.desc())
             .first()
         )
-        if existing is not None:
+        if existing is not None and (not metadata or all(existing.metadata_json.get(key) == value for key, value in metadata.items())):
             return existing
-        approval = ApprovalRequest(run_id=run_id, title=title, detail=detail, reason=reason, status="pending")
+        approval = ApprovalRequest(run_id=run_id, title=title, detail=detail, reason=reason, status="pending", metadata_json=metadata)
         db.add(approval)
-        self.events.emit(db, run_id, "approval", title, level="warning", payload={"reason": reason})
+        self.events.emit(db, run_id, "approval", title, level="warning", payload={"reason": reason, **metadata})
         db.add(
             RunMessage(
                 run_id=run_id,
                 role="system",
                 author="System",
                 content=f"Approval required: {title}. {detail}",
-                metadata_json={"approval_reason": reason},
+                metadata_json={"approval_reason": reason, **metadata},
             )
         )
         return approval

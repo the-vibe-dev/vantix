@@ -57,6 +57,37 @@ listening_pids_for_port() {
   fi
 }
 
+is_managed_listener_pid() {
+  local name="$1" pid="$2" cmdline=""
+  [[ -n "$pid" ]] || return 1
+  cmdline="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  case "$name" in
+    api)
+      [[ "$cmdline" == *"secops-api.sh"* ]] || [[ "$cmdline" == *"uvicorn secops.app:app"* ]]
+      ;;
+    ui)
+      [[ "$cmdline" == *"secops-ui.sh"* ]] || [[ "$cmdline" == *"vite"* ]] || [[ "$cmdline" == *"pnpm dev"* ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+adopt_listener_pid() {
+  local name="$1" port pid
+  port="$(service_port "$name")"
+  [[ -n "$port" ]] || return 1
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if is_managed_listener_pid "$name" "$pid"; then
+      echo "$pid" >"$(pid_file "$name")"
+      return 0
+    fi
+  done < <(listening_pids_for_port "$port")
+  return 1
+}
+
 cleanup_conflicting_listener() {
   local name="$1" port pid cmdline
   port="$(service_port "$name")"
@@ -95,7 +126,8 @@ verify_started() {
   if command -v lsof >/dev/null 2>&1 || command -v fuser >/dev/null 2>&1; then
     can_check_port=true
   fi
-  for _ in $(seq 1 30); do
+  # Allow slower cold starts (pnpm/vite, initial imports, cache warmup).
+  for _ in $(seq 1 240); do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       break
     fi
@@ -106,11 +138,18 @@ verify_started() {
       echo "[OK] $name running pid=$pid log=$log"
       return 0
     fi
-    if [[ -n "$port" ]] && listening_pids_for_port "$port" | grep -qx "$pid"; then
-      echo "[OK] $name running pid=$pid port=$port log=$log"
-      return 0
+    if [[ -n "$port" ]]; then
+      if listening_pids_for_port "$port" | grep -qx "$pid"; then
+        echo "[OK] $name running pid=$pid port=$port log=$log"
+        return 0
+      fi
+      if adopt_listener_pid "$name"; then
+        pid="$(service_pid "$name")"
+        echo "[OK] $name running pid=$pid port=$port log=$log"
+        return 0
+      fi
     fi
-    sleep 0.1
+    sleep 0.25
   done
   echo "[ERR] failed to start $name pid=$pid log=$log" >&2
   if [[ -f "$log" ]]; then
@@ -120,12 +159,15 @@ verify_started() {
 }
 
 is_running() {
-  local file pid
+  local file pid name
+  name="$1"
   file="$(pid_file "$1")"
   [[ -f "$file" ]] || return 1
   pid="$(cat "$file" 2>/dev/null || true)"
-  [[ -n "$pid" ]] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  adopt_listener_pid "$name"
 }
 
 service_pid() {

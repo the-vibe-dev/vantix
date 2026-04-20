@@ -306,6 +306,7 @@ class WorkflowEngine:
                 )
                 if next_row and next_row.status == PhaseStatus.WAITING.value:
                     next_row.status = PhaseStatus.PENDING.value
+            workflow.blocked_reason = ""
             workflow.updated_at = now
 
         run = db.get(WorkspaceRun, claim.run_id)
@@ -522,6 +523,7 @@ class WorkflowEngine:
         if workflow is not None:
             workflow.status = WorkflowStatus.RUNNING.value
             workflow.current_phase = phase_run.phase_name
+            workflow.blocked_reason = ""
             workflow.attempt_count = max(workflow.attempt_count, next_attempt.attempt)
             workflow.updated_at = now
 

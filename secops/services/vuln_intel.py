@@ -316,6 +316,11 @@ class VulnIntelService:
             # store one canonical URL reference per intel row.
             expected.add(("", "url", record.url))
         existing = {(ref.cve_id, ref.reference_type, ref.reference_value): ref for ref in intel.references}
+        # Include unflushed references already staged in this session so repeated
+        # rows for the same external_id in one batch do not attempt duplicate inserts.
+        for pending in self.db.new:
+            if isinstance(pending, VulnerabilityIntelReference) and pending.intel_id == intel.id:
+                existing[(pending.cve_id, pending.reference_type, pending.reference_value)] = pending
         for key, ref in list(existing.items()):
             if key not in expected:
                 self.db.delete(ref)

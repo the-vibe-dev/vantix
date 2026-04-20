@@ -89,6 +89,41 @@ def test_cve_intel_api_returns_seeded_records() -> None:
     assert payload["intel"][0]["exploit_available"] is True
 
 
+def test_upsert_duplicate_external_id_in_batch_does_not_duplicate_references() -> None:
+    reset_db()
+    with SessionLocal() as db:
+        service = VulnIntelService(db)
+        counts = service.upsert_records(
+            [
+                IntelRecord(
+                    source="exploitdb",
+                    external_id="46615",
+                    title="PoC A",
+                    url="https://www.exploit-db.com/exploits/46615",
+                    cve_ids=["CVE-2019-8385"],
+                    aliases=["CVE-2019-8385"],
+                    exploit_available=True,
+                ),
+                IntelRecord(
+                    source="exploitdb",
+                    external_id="46615",
+                    title="PoC A duplicate row",
+                    url="https://www.exploit-db.com/exploits/46615",
+                    cve_ids=["CVE-2019-8385"],
+                    aliases=["CVE-2019-8385"],
+                    exploit_available=True,
+                ),
+            ]
+        )
+        assert counts["upserted"] == 2
+        refs = db.query(VulnerabilityIntelReference).all()
+        assert len(refs) == 2
+        assert sorted((ref.reference_type, ref.reference_value) for ref in refs) == [
+            ("cve", "CVE-2019-8385"),
+            ("url", "https://www.exploit-db.com/exploits/46615"),
+        ]
+
+
 def test_cve_intel_search_endpoint_searches_cached_sources() -> None:
     reset_db()
     with SessionLocal() as db:

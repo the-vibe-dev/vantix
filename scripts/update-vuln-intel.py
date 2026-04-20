@@ -40,14 +40,23 @@ def update_source(name: str, *, limit: int, dry_run: bool, since_year: int) -> d
     source_url = getattr(adapter, "url", "")
     cutoff = datetime(since_year, 1, 1, tzinfo=timezone.utc) if since_year >= 1970 else None
     records = list(result.records)
+    cutoff_relaxed = False
     if cutoff is not None:
-        records = [record for record in records if (record.modified_at or record.published_at or datetime(1970, 1, 1, tzinfo=timezone.utc)) >= cutoff]
+        filtered = [record for record in records if (record.modified_at or record.published_at or datetime(1970, 1, 1, tzinfo=timezone.utc)) >= cutoff]
+        # ExploitDB CSV can be stale on publish dates while still carrying useful CVE-linked PoC metadata.
+        # Avoid silently dropping the entire source when a strict year cutoff yields zero rows.
+        if name == "exploitdb" and records and not filtered:
+            cutoff_relaxed = True
+            records = records
+        else:
+            records = filtered
     report = {
         "source": name,
         "url": source_url,
         "fetched": len(result.records),
         "filtered": len(records),
         "since_year": since_year,
+        "cutoff_relaxed": cutoff_relaxed,
         "cursor": result.cursor,
         "error": result.error,
         "dry_run": dry_run,

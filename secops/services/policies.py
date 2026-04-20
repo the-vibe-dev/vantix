@@ -50,6 +50,14 @@ SECRET_PATTERNS = [
 
 
 class ExecutionPolicyService:
+    def _persistent_grants(self, run: WorkspaceRun) -> set[str]:
+        raw = (run.config_json or {}).get("approval_grants_persistent")
+        if isinstance(raw, dict):
+            return {str(key).strip().lower() for key, value in raw.items() if bool(value)}
+        if isinstance(raw, list):
+            return {str(item).strip().lower() for item in raw}
+        return set()
+
     def _approval_grants(self, run: WorkspaceRun) -> dict[str, int]:
         raw = (run.config_json or {}).get("approval_grants")
         if not isinstance(raw, dict):
@@ -73,6 +81,8 @@ class ExecutionPolicyService:
 
     def evaluate(self, run: WorkspaceRun, *, action_kind: str) -> PolicyDecision:
         kind = (action_kind or "").strip().lower()
+        if kind and kind in self._persistent_grants(run):
+            return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
         if run.status in {"cancelled", "failed"}:
             return PolicyDecision(verdict="block", reason=f"run is {run.status}")
         if kind == "script":

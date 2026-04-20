@@ -89,7 +89,7 @@ WORKFLOW_SPECIALIST_MAP = {
     "learning-recall": {"tasks": ["knowledge-load"], "agents": ["knowledge_base"]},
     "recon-sidecar": {"tasks": ["vantix-recon"], "agents": ["recon"]},
     "cve-analysis": {"tasks": ["research", "vector-store"], "agents": ["researcher", "vector_store"]},
-    "orchestrate": {"tasks": ["planning", "development", "execution"], "agents": ["orchestrator", "developer", "executor"]},
+    "orchestrate": {"tasks": ["planning"], "agents": ["orchestrator"]},
     "report": {"tasks": ["reporting"], "agents": ["reporter"]},
 }
 
@@ -362,6 +362,7 @@ def get_run_terminal(
     run_id: str,
     since_sequence: int = 0,
     limit: int = 500,
+    tail: bool = False,
     db: Session = Depends(get_db),
 ) -> TerminalRead:
     run = db.get(WorkspaceRun, run_id)
@@ -371,9 +372,13 @@ def get_run_terminal(
     q = db.query(RunEvent).filter(RunEvent.run_id == run_id, RunEvent.event_type == "terminal")
     if since_sequence > 0:
         q = q.filter(RunEvent.sequence > int(since_sequence))
-    events = q.order_by(RunEvent.sequence.asc()).limit(limit).all()
+    if tail:
+        events = list(reversed(q.order_by(RunEvent.sequence.desc()).limit(limit).all()))
+    else:
+        events = q.order_by(RunEvent.sequence.asc()).limit(limit).all()
     content = "\n".join(event.message for event in events)
-    return TerminalRead(run_id=run_id, content=content)
+    last_sequence = int(events[-1].sequence) if events else int(since_sequence or 0)
+    return TerminalRead(run_id=run_id, content=content, last_sequence=last_sequence)
 
 
 @router.get("/{run_id}/approvals", response_model=list[ApprovalRead])
@@ -630,6 +635,13 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
     vectors = list_run_vectors(run_id, db)
     report = next((artifact.path for artifact in artifacts if artifact.kind == "report"), None)
     report_json = next((artifact.path for artifact in artifacts if artifact.kind == "report-json"), None)
+    executive_summary = ""
+    if report_json:
+        try:
+            summary_payload = json.loads(Path(report_json).read_text(encoding="utf-8"))
+            executive_summary = str(summary_payload.get("executive_summary") or "")
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            executive_summary = ""
     return {
         "run_id": run.id,
         "status": run.status,
@@ -639,6 +651,7 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
         "terminal_summary": summarize_terminal(events),
         "report_path": report,
         "report_json_path": report_json,
+        "executive_summary": executive_summary,
     }
 
 

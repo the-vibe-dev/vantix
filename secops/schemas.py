@@ -400,6 +400,7 @@ class RunGraphRead(BaseModel):
 class TerminalRead(BaseModel):
     run_id: str
     content: str
+    last_sequence: int = 0
 
 
 class RunLearningRead(BaseModel):
@@ -470,6 +471,7 @@ class RunResultsRead(BaseModel):
     terminal_summary: str
     report_path: str | None = None
     report_json_path: str | None = None
+    executive_summary: str = ""
 
 
 class RunPhaseRead(BaseModel):

@@ -372,6 +372,36 @@ function normalizeCompletedPhases(values: string[] | undefined): DisplayPhase[] 
   return DISPLAY_PHASES.filter((name) => out.has(name));
 }
 
+function eventToChatMessage(event: EventRecord): RunMessage | null {
+  if (!["phase", "approval", "run_status", "policy_decision"].includes(event.event_type)) return null;
+  return {
+    id: `e-${event.id}`,
+    run_id: "",
+    role: "system",
+    author: "System",
+    content: event.message,
+    metadata: { event_type: event.event_type, level: event.level, ...(event.payload || {}) },
+    created_at: event.created_at,
+  };
+}
+
+function mergeTimeline(messages: RunMessage[], events: EventRecord[]): RunMessage[] {
+  const merged = [...messages];
+  const seen = new Set(messages.map((item) => item.id));
+  for (const event of events) {
+    const mapped = eventToChatMessage(event);
+    if (!mapped) continue;
+    if (seen.has(mapped.id)) continue;
+    seen.add(mapped.id);
+    merged.push(mapped);
+  }
+  return merged.sort((a, b) => {
+    const left = new Date(a.created_at || 0).getTime();
+    const right = new Date(b.created_at || 0).getTime();
+    return left - right;
+  });
+}
+
 // ─── Risk calculation ───────────────────────────────────────────────────────
 function calcRisk(findings: Finding[]): { score: string; level: string; variant: Variant } | null {
   if (!findings.length) return null;
@@ -1286,7 +1316,23 @@ function ResultsPanel({
   return (
     <Panel title="Findings & Report" meta="Confirmed vulnerabilities" style={{ gridColumn: "span 2" }}>
       {results ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {results.executive_summary && (
+            <div
+              style={{
+                padding: "9px 11px",
+                borderRadius: 10,
+                background: "rgba(25,195,125,.07)",
+                border: "1px solid rgba(25,195,125,.2)",
+                fontSize: ".74rem",
+                color: "#e8f4ee",
+                lineHeight: 1.5,
+              }}
+            >
+              {results.executive_summary}
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
             <Label>Confirmed Findings ({findings.length})</Label>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -1397,6 +1443,7 @@ function ResultsPanel({
               </div>
             )}
           </div>
+        </div>
         </div>
       ) : (
         <EmptyState icon="◇" text="No results yet." />
@@ -2133,6 +2180,8 @@ export default function App() {
   const [pendingSend, setPendingSend] = useState<{ message: string } | null>(null);
 
   const streamRef = useRef<EventSource | null>(null);
+  const selectedRunRef = useRef<string>("");
+  const terminalSequenceRef = useRef<Record<string, number>>({});
 
   const flash = useCallback((msg: string) => {
     setStatusMsg(msg);
@@ -2173,8 +2222,10 @@ export default function App() {
   }, [flash]);
 
   const refreshRun = useCallback(
-    async (runId: string) => {
+    async (runId: string, opts?: { incrementalTerminal?: boolean }) => {
       try {
+        const incrementalTerminal = Boolean(opts?.incrementalTerminal);
+        const sinceSequence = terminalSequenceRef.current[runId] || 0;
         const failures: string[] = [];
         const track = <T,>(label: string, fallback: T) =>
           (err: unknown) => {
@@ -2183,19 +2234,23 @@ export default function App() {
             console.warn(`[refreshRun] ${label} failed:`, err);
             return fallback;
           };
-        const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runChains, runTerminal] =
+        const [run, graph, runFacts, learningHits, runMessages, runEvents, runVectors, runResults, runSkills, runChains, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
             api.getFacts(runId).catch(track<Fact[]>("facts", [])),
             api.getLearning(runId).catch(track("learning", { run_id: runId, mode: "", results: [] as Array<Record<string, unknown>> })),
             api.getMessages(runId).catch(track<RunMessage[]>("messages", [])),
+            api.getEvents(runId, 0, 300).catch(track<EventRecord[]>("events", [])),
             api.getVectors(runId).catch(track<Vector[]>("vectors", [])),
             api.getResults(runId).catch(track<RunResults | null>("results", null)),
             api.getSkills(runId).catch(track<RunSkillApplication[]>("skills", [])),
             api.getAttackChains(runId).catch(track<AttackChain[]>("chains", [])),
-            api.getTerminal(runId).catch(track("terminal", { run_id: runId, content: "" })),
+            api.getTerminal(runId, incrementalTerminal ? sinceSequence : 0, 250, !incrementalTerminal).catch(
+              track("terminal", { run_id: runId, content: "", last_sequence: sinceSequence }),
+            ),
           ]);
+        if (selectedRunRef.current !== runId) return;
         if (failures.length > 0) {
           flash(`Partial load: ${failures.join(", ")} unavailable`);
         }
@@ -2206,13 +2261,19 @@ export default function App() {
         setApprovals(graph.approvals);
         setFacts(runFacts);
         setLearning(learningHits.results);
-        setMessages(runMessages);
+        setMessages(mergeTimeline(runMessages, runEvents));
         setVectors(runVectors);
         setResults(runResults);
         setFindings(runResults?.findings || []);
         setSkillApps(runSkills);
         setChains(runChains);
-        setTermLines(runTerminal?.content ? runTerminal.content.split("\n") : []);
+        const delta = runTerminal?.content ? runTerminal.content.split("\n").filter(Boolean) : [];
+        terminalSequenceRef.current[runId] = runTerminal?.last_sequence || terminalSequenceRef.current[runId] || 0;
+        if (!incrementalTerminal) {
+          setTermLines(delta.slice(-250));
+        } else if (delta.length) {
+          setTermLines((lines) => [...lines, ...delta].slice(-250));
+        }
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setSelectedRun(null);
@@ -2240,9 +2301,11 @@ export default function App() {
     streamRef.current = null;
     setTermLines([]);
     if (!connected || !selectedRun) return;
-    refreshRun(selectedRun.id);
+    selectedRunRef.current = selectedRun.id;
+    terminalSequenceRef.current[selectedRun.id] = 0;
+    refreshRun(selectedRun.id, { incrementalTerminal: false });
     if (apiToken) {
-      const interval = window.setInterval(() => refreshRun(selectedRun.id), 3000);
+      const interval = window.setInterval(() => refreshRun(selectedRun.id, { incrementalTerminal: true }), 3000);
       return () => window.clearInterval(interval);
     }
     try {
@@ -2251,9 +2314,10 @@ export default function App() {
         try {
           const data = JSON.parse(event.data) as EventRecord;
           if (data.event_type === "terminal") {
+            terminalSequenceRef.current[selectedRun.id] = data.sequence;
             setTermLines((lines) => [...lines.slice(-199), data.message]);
           } else {
-            refreshRun(selectedRun.id);
+            refreshRun(selectedRun.id, { incrementalTerminal: true });
           }
         } catch {
           /* ignore */
@@ -2261,7 +2325,7 @@ export default function App() {
       };
       source.onerror = () => {
         source.close();
-        refreshRun(selectedRun.id);
+        refreshRun(selectedRun.id, { incrementalTerminal: true });
       };
       streamRef.current = source;
       return () => source.close();
@@ -2269,15 +2333,6 @@ export default function App() {
       // EventSource unavailable — silent
     }
   }, [connected, selectedRun?.id, apiToken, refreshRun]);
-
-  // Live terminal text from results summary (fallback) when in live mode with no stream
-  useEffect(() => {
-    if (!connected) return;
-    const summary = results?.terminal_summary;
-    if (summary && streamRef.current === null) {
-      setTermLines(summary.split("\n"));
-    }
-  }, [connected, results?.terminal_summary]);
 
   function buildSourceInput(): SourceInput {
     if (sourceType === "github") return { type: "github", github: { url: githubUrl.trim(), ref: githubRef.trim() || undefined } };
@@ -2471,11 +2526,21 @@ export default function App() {
 
   function handleSelectRun(run: Run) {
     setSelectedRun(run);
+    selectedRunRef.current = run.id;
+    terminalSequenceRef.current[run.id] = 0;
     setTermLines([]);
-    refreshRun(run.id);
+    refreshRun(run.id, { incrementalTerminal: false });
   }
-
-  const cveFacts = useMemo(() => facts.filter((f) => ["cve", "port", "service"].includes(f.kind)), [facts]);
+  const cveFacts = useMemo(
+    () =>
+      facts.filter((f) => {
+        const kind = String(f.kind || "").toLowerCase();
+        if (["port", "service", "host", "banner", "version"].includes(kind)) return false;
+        if (String(f.source || "").toLowerCase() === "scheduler") return false;
+        return ["cve", "intel", "exploit", "attack_chain", "vuln", "vulnerability"].includes(kind);
+      }),
+    [facts],
+  );
 
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: "overview", label: "Overview" },

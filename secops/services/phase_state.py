@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from secops.models import Fact, Finding, WorkspaceRun
+from secops.models import Fact, Finding, WorkflowExecution, WorkspaceRun
 
 PHASE_ORDER = [
     "flow-initialization",
@@ -70,6 +70,28 @@ class RunPhaseService:
     def derive(self, db: Session, run: WorkspaceRun) -> str:
         if run.status in {"completed", "cancelled", "failed"}:
             return "completed"
+        workflow = (
+            db.query(WorkflowExecution)
+            .filter(WorkflowExecution.run_id == run.id)
+            .order_by(WorkflowExecution.created_at.desc())
+            .first()
+        )
+        if workflow is not None and workflow.current_phase:
+            current = str(workflow.current_phase).strip().lower()
+            if current in PHASE_ORDER:
+                return current
+            if current in {"context-bootstrap", "source-intake", "source-analysis"}:
+                return "flow-initialization"
+            if current == "learning-recall":
+                return "knowledge-load"
+            if current == "recon-sidecar":
+                return "recon"
+            if current == "cve-analysis":
+                return "research"
+            if current == "learn-ingest":
+                return "execution"
+            if current == "report":
+                return "reporting"
 
         findings = db.query(Finding).filter(Finding.run_id == run.id).all()
         if any(item.status in {"validated", "confirmed", "draft"} for item in findings):

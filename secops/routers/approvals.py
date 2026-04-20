@@ -45,6 +45,17 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
             grants = dict(config.get("approval_grants") or {})
             grants[action_kind] = int(grants.get(action_kind, 0) or 0) + 1
             config["approval_grants"] = grants
+            persistent = dict(config.get("approval_grants_persistent") or {})
+            if action_kind in {"scope", "recon_high_noise"}:
+                persistent[action_kind] = True
+            if persistent:
+                config["approval_grants_persistent"] = persistent
+            if action_kind == "scope":
+                scope_overrides = dict(config.get("scope_overrides") or {})
+                target = str((approval.metadata_json or {}).get("target") or run.target or "").strip()
+                if target:
+                    scope_overrides[target] = True
+                    config["scope_overrides"] = scope_overrides
             run.config_json = config
         if approval.reason == "quick-scan-gate":
             config = dict(run.config_json or {})

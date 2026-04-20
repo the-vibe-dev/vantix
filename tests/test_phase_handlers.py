@@ -12,6 +12,7 @@ os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 
 from secops.db import Base, SessionLocal, engine
 from secops.models import Engagement, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
+from secops.services.execution import ExecutionManager
 from secops.services.policies import ExecutionPolicyService
 from secops.services.workflows.engine import WorkflowEngine
 from secops.services.workflows.retries import classify_retry
@@ -97,3 +98,37 @@ def test_policy_redaction_and_verdicts() -> None:
     text = "token=abc123 sk-ABCDEF1234567890"
     redacted = policy._redact(text, redactions=["abc123"])
     assert "[REDACTED]" in redacted
+
+
+def test_scope_policy_approval_grant_is_consumed_once() -> None:
+    reset_db()
+    manager = ExecutionManager()
+    with SessionLocal() as db:
+        engagement = Engagement(
+            name="Scope Grant",
+            mode="pentest",
+            target="192.168.1.95",
+            tags=["pentest"],
+            metadata_json={"scope": {"allowed": ["192.168.1.95"], "excludes": [], "allow_private": False}},
+        )
+        db.add(engagement)
+        db.flush()
+        run = WorkspaceRun(
+            engagement_id=engagement.id,
+            mode="pentest",
+            workspace_id="pentest-scope-grant",
+            status="queued",
+            objective="scope grant test",
+            target="192.168.1.95",
+            config_json={"approval_grants": {"scope": 1}},
+        )
+        db.add(run)
+        db.flush()
+
+        first = manager._enforce_scope(db, run, "192.168.1.95")
+        second = manager._enforce_scope(db, run, "192.168.1.95")
+
+        assert first.allowed is True
+        assert second.allowed is False
+        assert "denied range" in second.reason
+        assert int((run.config_json.get("approval_grants") or {}).get("scope", -1)) == 0

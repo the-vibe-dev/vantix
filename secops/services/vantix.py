@@ -164,41 +164,8 @@ class VantixScheduler:
             agent.status = "running" if agent.role == current_role else "pending"
 
     def _seed_initial_vector(self, db: Session, run: WorkspaceRun) -> None:
-        exists = db.execute(select(Fact).where(Fact.run_id == run.id, Fact.kind == "vector")).first()
-        if exists:
-            return
-        title = "Initial evidence-driven validation path"
-        summary = "Start with low-noise recon, memory/CVE correlation, then select an execution vector only when evidence supports it."
-        db.add(
-            Fact(
-                run_id=run.id,
-                source="scheduler",
-                kind="vector",
-                value=title,
-                confidence=0.35,
-                tags=["vantix", "candidate"],
-                metadata_json={
-                    "title": title,
-                    "summary": summary,
-                    "source": "scheduler",
-                    "severity": "info",
-                    "status": "candidate",
-                    "evidence": f"Target: {run.target or 'unknown'}; objective: {run.objective}",
-                    "next_action": "run Vantix Recon and correlate memory/CVE intel",
-                    "noise_level": "quiet",
-                    "requires_approval": False,
-                    "evidence_quality": 0.4,
-                    "source_credibility": 0.5,
-                    "novelty": 0.5,
-                    "noise_level_score": 0.2,
-                    "prerequisites_satisfied": 0.3,
-                    "provenance": {"facts": [], "cves": [], "learning_hits": [], "operator_notes": []},
-                    "skill_id": "recon_advisor",
-                    "scope_check": "pending",
-                    "safety_notes": "No exploit execution until scope and evidence are confirmed.",
-                },
-            )
-        )
+        # Demo bootstrap vectors are intentionally disabled. Vectors should come from real run evidence.
+        return
 
     def _orchestrator_summary(self, run: WorkspaceRun, reason: str, *, quick_scan: bool = False) -> str:
         if quick_scan:

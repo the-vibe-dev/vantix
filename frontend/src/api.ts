@@ -166,6 +166,7 @@ export type RunResults = {
   terminal_summary: string;
   report_path: string | null;
   report_json_path?: string | null;
+  executive_summary?: string;
 };
 
 export type PlanningBundle = {
@@ -381,6 +382,8 @@ export const api = {
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
   getWorkflowState: (runId: string) => request<WorkflowState>(`/api/v1/runs/${runId}/workflow-state`),
   getMessages: (runId: string) => request<RunMessage[]>(`/api/v1/runs/${runId}/messages`),
+  getEvents: (runId: string, sinceSequence = 0, limit = 300) =>
+    request<EventRecord[]>(`/api/v1/runs/${runId}/events?since_sequence=${sinceSequence}&limit=${limit}`),
   getLearning: (runId: string) => request<{ run_id: string; mode: string; results: Array<Record<string, unknown>> }>(`/api/v1/runs/${runId}/learning`),
   getFacts: (runId: string) => request<Fact[]>(`/api/v1/runs/${runId}/facts`),
   getVectors: (runId: string) => request<Vector[]>(`/api/v1/runs/${runId}/vectors`),
@@ -404,7 +407,10 @@ export const api = {
   getAttackChains: (runId: string) => request<AttackChain[]>(`/api/v1/runs/${runId}/attack-chains`),
   createAttackChain: (runId: string, payload: Partial<AttackChain>) =>
     request<AttackChain>(`/api/v1/runs/${runId}/attack-chains`, { method: "POST", body: JSON.stringify(payload) }),
-  getTerminal: (runId: string) => request<{ run_id: string; content: string }>(`/api/v1/runs/${runId}/terminal`),
+  getTerminal: (runId: string, sinceSequence = 0, limit = 300, tail = false) =>
+    request<{ run_id: string; content: string; last_sequence: number }>(
+      `/api/v1/runs/${runId}/terminal?since_sequence=${sinceSequence}&limit=${limit}&tail=${tail ? "true" : "false"}`,
+    ),
   fetchRunFileBlob: async (runId: string, path: string): Promise<Blob> => {
     const response = await fetch(`/api/v1/runs/${runId}/file?path=${encodeURIComponent(path)}`, {
       method: "GET",
