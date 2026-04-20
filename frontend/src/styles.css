@@ -1,12 +1,14 @@
 :root {
   color-scheme: dark;
-  --bg: #070c0e;
-  --panel: rgba(11, 19, 21, 0.92);
-  --line: rgba(140, 185, 165, 0.13);
-  --accent: #19c37d;
+  --bg: #0b0506;
+  --panel: rgba(15, 8, 10, 0.94);
+  --line: rgba(156, 43, 56, 0.35);
+  --line-soft: rgba(143, 37, 49, 0.2);
+  --accent: #d93a49;
   --accent-2: #f4b860;
+  --ok: #22c55e;
   --ink: #e8f4ee;
-  --muted: #7a9e92;
+  --muted: #9a8d91;
   --mono: "IBM Plex Mono", "Cascadia Mono", monospace;
   --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
@@ -28,9 +30,9 @@ body {
   font-family: var(--sans);
   color: var(--ink);
   background:
-    radial-gradient(circle at 12% 8%, rgba(25, 195, 125, 0.14) 0%, transparent 28%),
-    radial-gradient(circle at 88% 18%, rgba(244, 184, 96, 0.09) 0%, transparent 24%),
-    linear-gradient(160deg, #060a0c 0%, #091412 50%, #0e110a 100%);
+    radial-gradient(circle at 14% 12%, rgba(217, 58, 73, 0.16) 0%, transparent 24%),
+    radial-gradient(circle at 82% 24%, rgba(142, 30, 45, 0.15) 0%, transparent 26%),
+    linear-gradient(170deg, #090304 0%, #130609 52%, #100507 100%);
   background-attachment: fixed;
   min-height: 100vh;
 }
@@ -114,8 +116,9 @@ button {
 
 .vx-shell {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 240px 1fr;
   min-height: 100vh;
+  gap: 0;
 }
 
 .vx-sidebar {
@@ -123,27 +126,35 @@ button {
   top: 0;
   height: 100vh;
   overflow-y: auto;
-  border-right: 1px solid var(--line);
-  background: rgba(5, 9, 10, 0.93);
+  border-right: 1px solid var(--line-soft);
+  background: rgba(9, 4, 5, 0.95);
   backdrop-filter: blur(20px);
   display: flex;
   flex-direction: column;
 }
 
 .vx-sidebar-inner {
-  padding: 20px;
+  padding: 14px 12px;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.vx-main {
+  padding: 14px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .vx-panel {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 12px;
   backdrop-filter: blur(12px);
   animation: vx-fadein 0.22s ease both;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.01);
 }
 
 .vx-topbar {
@@ -151,11 +162,11 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 20px;
-  margin-bottom: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px;
   backdrop-filter: blur(16px);
 }
 
@@ -163,51 +174,51 @@ button {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 18px;
-  margin-bottom: 12px;
-  background: rgba(8, 15, 16, 0.85);
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: rgba(17, 8, 10, 0.9);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
   flex-wrap: wrap;
 }
 
 .vx-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 8px;
 }
 
 .vx-tabs {
   display: flex;
   gap: 4px;
-  padding: 4px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  margin-bottom: 16px;
+  padding: 3px;
+  background: rgba(22, 8, 10, 0.95);
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  margin-bottom: 8px;
 }
 
 .vx-tab {
   flex: 1;
   padding: 7px 10px;
-  border-radius: 9px;
+  border-radius: 6px;
   border: none;
   font-size: 0.74rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   background: transparent;
-  color: var(--muted);
+  color: #b69ea4;
   transition: all 0.15s;
   cursor: pointer;
 }
 
 .vx-tab.active {
-  background: rgba(25, 195, 125, 0.12);
-  color: var(--accent);
+  background: rgba(217, 58, 73, 0.22);
+  color: #ff6d7a;
 }
 
 .vx-tab:hover:not(.active) {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--ink);
 }
 
@@ -218,22 +229,22 @@ button {
   flex-direction: column;
   gap: 5px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.025);
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--ink);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 
 .vx-run-card:hover {
-  border-color: rgba(140, 185, 165, 0.28);
+  border-color: rgba(217, 58, 73, 0.45);
   background: rgba(255, 255, 255, 0.04);
 }
 
 .vx-run-card.active {
-  border-color: rgba(25, 195, 125, 0.45);
-  background: rgba(25, 195, 125, 0.06);
+  border-color: rgba(217, 58, 73, 0.6);
+  background: rgba(217, 58, 73, 0.12);
 }
 
 @media (max-width: 1300px) {

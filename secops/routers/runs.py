@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import time
+import mimetypes
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from secops.config import settings
@@ -80,6 +82,63 @@ from secops.services.vantix import build_planning_bundle, create_vector_fact, su
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"], dependencies=[Depends(require_api_token)])
 
 
+WORKFLOW_SPECIALIST_MAP = {
+    "context-bootstrap": {"tasks": ["flow-initialization"], "agents": ["orchestrator"]},
+    "source-intake": {"tasks": ["source-intake"], "agents": ["developer"]},
+    "source-analysis": {"tasks": ["source-analysis"], "agents": ["developer"]},
+    "learning-recall": {"tasks": ["knowledge-load"], "agents": ["knowledge_base"]},
+    "recon-sidecar": {"tasks": ["vantix-recon"], "agents": ["recon"]},
+    "cve-analysis": {"tasks": ["research", "vector-store"], "agents": ["researcher", "vector_store"]},
+    "orchestrate": {"tasks": ["planning", "development", "execution"], "agents": ["orchestrator", "developer", "executor"]},
+    "report": {"tasks": ["reporting"], "agents": ["reporter"]},
+}
+
+
+def _backfill_specialist_status(db: Session, run_id: str) -> None:
+    latest: dict[str, WorkflowPhaseRun] = {}
+    rows = (
+        db.query(WorkflowPhaseRun)
+        .filter(WorkflowPhaseRun.run_id == run_id)
+        .order_by(WorkflowPhaseRun.phase_name.asc(), WorkflowPhaseRun.attempt.desc())
+        .all()
+    )
+    for row in rows:
+        latest.setdefault(row.phase_name, row)
+
+    for phase_name, phase in latest.items():
+        mapping = WORKFLOW_SPECIALIST_MAP.get(phase_name)
+        if not mapping:
+            continue
+        status_map = {
+            "completed": "completed",
+            "failed": "failed",
+            "blocked": "blocked",
+            "claimed": "running",
+            "retrying": "running",
+            "pending": "pending",
+            "waiting": "pending",
+        }
+        mapped_status = status_map.get(phase.status, "pending")
+        for task_kind in mapping["tasks"]:
+            task = (
+                db.query(Task)
+                .filter(Task.run_id == run_id, Task.kind == task_kind)
+                .order_by(Task.created_at.desc())
+                .first()
+            )
+            if task is not None:
+                task.status = mapped_status
+        for role in mapping["agents"]:
+            agent = (
+                db.query(AgentSession)
+                .filter(AgentSession.run_id == run_id, AgentSession.role == role)
+                .order_by(AgentSession.started_at.desc())
+                .first()
+            )
+            if agent is not None:
+                agent.status = mapped_status
+
+
 @router.post("", response_model=RunRead)
 def create_run(payload: RunCreate, db: Session = Depends(get_db)) -> WorkspaceRun:
     service = RunService(db)
@@ -109,6 +168,19 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> WorkspaceRun:
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+@router.get("/{run_id}/source-status")
+def get_run_source_status(run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    cfg = dict(run.config_json or {})
+    return {
+        "run_id": run_id,
+        "source_input": cfg.get("source_input", {}),
+        "source_context": cfg.get("source_context", {}),
+    }
 
 
 @router.post("/{run_id}/resume", response_model=RunRead)
@@ -150,6 +222,42 @@ def list_run_artifacts(run_id: str, db: Session = Depends(get_db)) -> list[Artif
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return db.query(Artifact).filter(Artifact.run_id == run_id).all()
+
+
+def _is_allowed_runtime_path(path: Path, run: WorkspaceRun) -> bool:
+    allowed_roots = {
+        settings.runtime_root.resolve(),
+        settings.reports_root.resolve(),
+        (settings.runtime_root / "runs" / run.workspace_id).resolve(),
+    }
+    resolved = path.resolve()
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+@router.get("/{run_id}/file")
+def open_run_file(run_id: str, path: str = Query(min_length=1), db: Session = Depends(get_db)):
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = settings.runtime_root / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    if not _is_allowed_runtime_path(resolved, run):
+        raise HTTPException(status_code=403, detail="File path not allowed")
+    media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+    return FileResponse(path=str(resolved), media_type=media_type, filename=resolved.name)
 
 
 @router.post("/{run_id}/start", response_model=RunControlResponse)
@@ -206,6 +314,7 @@ def get_run_graph(run_id: str, db: Session = Depends(get_db)) -> RunGraphRead:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    _backfill_specialist_status(db, run_id)
     tasks = db.query(Task).filter(Task.run_id == run_id).order_by(Task.sequence.asc()).all()
     agents = db.query(AgentSession).filter(AgentSession.run_id == run_id).order_by(AgentSession.started_at.asc()).all()
     approvals = db.query(ApprovalRequest).filter(ApprovalRequest.run_id == run_id).order_by(ApprovalRequest.created_at.asc()).all()

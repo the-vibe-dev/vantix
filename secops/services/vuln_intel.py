@@ -312,8 +312,9 @@ class VulnIntelService:
             cve_id = alias if alias_type == "cve" else ""
             expected.add((cve_id, alias_type, alias))
         if record.url:
-            for cve_id in record.cve_ids or [""]:
-                expected.add((cve_id, "url", record.url))
+            # URL references are unique on (intel_id, reference_type, reference_value);
+            # store one canonical URL reference per intel row.
+            expected.add(("", "url", record.url))
         existing = {(ref.cve_id, ref.reference_type, ref.reference_value): ref for ref in intel.references}
         for key, ref in list(existing.items()):
             if key not in expected:

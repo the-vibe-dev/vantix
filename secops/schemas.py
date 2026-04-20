@@ -185,6 +185,8 @@ class CVESearchResponse(BaseModel):
     source: str
     query: str
     results: list[dict[str, Any]]
+    error: str = ""
+    live: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunEventRead(BaseModel):

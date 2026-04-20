@@ -278,6 +278,13 @@ export type ProviderConfig = {
   metadata: Record<string, unknown>;
 };
 
+export type SourceInput = {
+  type: "none" | "github" | "local" | "upload";
+  github?: { url: string; ref?: string };
+  local?: { path: string };
+  upload?: { staged_upload_id: string };
+};
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -287,6 +294,14 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getApiToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(extra || {}),
+  };
 }
 
 export function getApiToken(): string {
@@ -299,12 +314,10 @@ export function setApiToken(token: string): void {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getApiToken();
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers || {}),
+      ...authHeaders(init?.headers),
     },
     ...init,
   });
@@ -319,6 +332,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, response.statusText, detail);
   }
   if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+async function uploadRequest<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: authHeaders(),
+    body,
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = String(payload?.detail ?? "");
+    } catch {
+      detail = "";
+    }
+    throw new ApiError(response.status, response.statusText, detail);
+  }
   return (await response.json()) as T;
 }
 
@@ -339,6 +371,11 @@ export const api = {
     request<Run>("/api/v1/runs", { method: "POST", body: JSON.stringify(payload) }),
   submitChat: (payload: { message: string; run_id?: string; mode?: string; target?: string; metadata?: Record<string, unknown> }) =>
     request<{ run: Run; message: RunMessage; started: boolean; scheduler_status: string }>("/api/v1/chat", { method: "POST", body: JSON.stringify(payload) }),
+  stageSourceUpload: async (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return uploadRequest<{ staged_upload_id: string; filename: string; size_bytes: number; sha256: string }>("/api/v1/sources/uploads", body);
+  },
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
   getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
@@ -368,6 +405,23 @@ export const api = {
   createAttackChain: (runId: string, payload: Partial<AttackChain>) =>
     request<AttackChain>(`/api/v1/runs/${runId}/attack-chains`, { method: "POST", body: JSON.stringify(payload) }),
   getTerminal: (runId: string) => request<{ run_id: string; content: string }>(`/api/v1/runs/${runId}/terminal`),
+  fetchRunFileBlob: async (runId: string, path: string): Promise<Blob> => {
+    const response = await fetch(`/api/v1/runs/${runId}/file?path=${encodeURIComponent(path)}`, {
+      method: "GET",
+      headers: authHeaders(),
+    });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.json();
+        detail = String(payload?.detail ?? "");
+      } catch {
+        detail = "";
+      }
+      throw new ApiError(response.status, response.statusText, detail);
+    }
+    return response.blob();
+  },
   startRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/start`, { method: "POST" }),
   pauseRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/pause`, { method: "POST" }),
   retryRun: (runId: string) => request<{ message: string }>(`/api/v1/runs/${runId}/retry`, { method: "POST" }),

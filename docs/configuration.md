@@ -20,6 +20,11 @@ Vantix keeps the existing `SECOPS_*` environment variables for compatibility. Pu
 | `SECOPS_ENABLE_CVE_MCP` | `false` | Mount CVE MCP endpoint in the FastAPI app. |
 | `SECOPS_CVE_MCP_PATH` | `/mcp/cve` | Embedded CVE MCP path. |
 | `SECOPS_CVE_MCP_REQUIRE_TOKEN` | `true` | Require bearer token for hosted MCP. |
+| `SECOPS_ENABLE_VANTIX_MCP` | `false` | Mount Vantix white-box MCP endpoint. |
+| `SECOPS_VANTIX_MCP_PATH` | `/mcp/vantix` | Embedded Vantix MCP path. |
+| `SECOPS_SOURCE_ALLOWED_ROOTS` | repo root | Comma-separated allowlisted roots for local white-box source paths. |
+| `SECOPS_SOURCE_UPLOAD_MAX_MB` | `500` | Maximum zip upload size for white-box source uploads. |
+| `SECOPS_SOURCE_UPLOAD_TTL_HOURS` | `24` | Retention window for staged source uploads. |
 | `SECOPS_UI_HOST` | `127.0.0.1` | Dev UI bind host used by `scripts/secops-ui.sh`. |
 | `SECOPS_UI_PORT` | `4173` | Dev UI bind port used by `scripts/secops-ui.sh`. |
 | `SECOPS_ENABLE_CODEX_EXECUTION` | `true` | Allow Codex execution manager actions. |
@@ -44,3 +49,13 @@ Provider records are optional. To store provider keys, configure `VANTIX_SECRET_
 ## Hygiene
 
 Keep real hostnames, private paths, client names, SSH key names, API tokens, and topology in ignored local files. Do not commit `.env`, provider config with secrets, target-specific evidence, or client data.
+
+## CVE Backfill
+
+To seed a large CVE baseline (2019+ by default), run:
+
+```bash
+bash scripts/backfill-cve-intel.sh 2019 250000
+```
+
+The second argument controls per-source adapter limits for sidecar vuln-intel backfill.

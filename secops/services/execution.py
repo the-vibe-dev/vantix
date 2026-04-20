@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 import subprocess
 import time
 from urllib.parse import urlparse
@@ -32,6 +33,7 @@ from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 from secops.services.policies import ExecutionPolicyService
 from secops.services.reporting import ReportingService
+from secops.services.source_intake import SourceIntakeService
 from secops.services.storage import StorageLayout
 from secops.services.worker_runtime import worker_runtime
 from secops.services.workflows.engine import WorkflowEngine
@@ -61,6 +63,7 @@ class ExecutionManager:
         self.memory = MemoryWriteService()
         self.policies = ExecutionPolicyService()
         self.reporting = ReportingService()
+        self.source_intake = SourceIntakeService()
         self.workflow_engine = WorkflowEngine()
         self.worker_runtime = worker_runtime
 
@@ -108,6 +111,8 @@ class ExecutionManager:
     def execute_phase(self, run_id: str, phase_name: str) -> dict:
         handlers = {
             "context-bootstrap": self._phase_context,
+            "source-intake": self._phase_source_intake,
+            "source-analysis": self._phase_source_analysis,
             "learning-recall": self._phase_learning,
             "recon-sidecar": self._phase_recon,
             "cve-analysis": self._phase_cve,
@@ -165,6 +170,7 @@ class ExecutionManager:
             self._write_memory(db, run, mode="phase", phase="context-bootstrap", done=["context assembled"], files=[str(paths.prompts / "orchestrator_context.txt")], next_action="learning recall")
             task.status = "completed"
             task.result_json = {"prompt_path": str(paths.prompts / "orchestrator_context.txt")}
+            self._set_vantix_task_status(db, run.id, "flow-initialization", "completed", {"source_phase": "context-bootstrap"})
             db.add(
                 Artifact(
                     run_id=run.id,
@@ -196,9 +202,127 @@ class ExecutionManager:
             paths.write_json(paths.facts / "learning_hits.json", results)
             task.status = "completed"
             task.result_json = {"hits": len(results)}
+            self._set_vantix_task_status(db, run.id, "knowledge-load", "completed", {"hits": len(results), "source_phase": "learning-recall"})
             self.events.emit(db, run.id, "phase", f"Learning recall completed: {len(results)} hits")
             self._set_role_status(db, run.id, "knowledge_base", "completed")
             self._write_memory(db, run, mode="phase", phase="learning-recall", done=[f"learning hits={len(results)}"], files=[str(paths.facts / "learning_hits.json")], next_action="recon sidecar")
+            db.commit()
+
+    def _phase_source_intake(self, run_id: str) -> None:
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None or not self._check_controls(db, run):
+                return
+            task = self._task_by_kind(db, run.id, "source-intake")
+            if task.status == "completed":
+                return
+            paths = self.nas.for_workspace(run.workspace_id)
+            source_input = dict((run.config_json or {}).get("source_input") or {})
+            try:
+                context = self.source_intake.resolve_for_run(
+                    workspace_root=paths.root,
+                    source_input=source_input,
+                )
+            except Exception as exc:  # noqa: BLE001
+                task.status = "failed"
+                task.result_json = {"error": str(exc), "source_input": source_input}
+                run.status = "failed"
+                self.events.emit(db, run.id, "phase", f"Source intake failed: {exc}", level="error")
+                db.commit()
+                return
+            cfg = dict(run.config_json or {})
+            cfg["source_input"] = source_input
+            cfg["source_context"] = context
+            run.config_json = cfg
+            task.status = "completed"
+            task.result_json = context
+            self.events.emit(db, run.id, "phase", f"Source intake {context.get('status', 'completed')}", payload=context)
+            self._write_memory(
+                db,
+                run,
+                mode="phase",
+                phase="source-intake",
+                done=[f"source intake {context.get('status', 'completed')}"],
+                next_action="source analysis" if context.get("status") != "skipped" else "learning recall",
+            )
+            db.commit()
+
+    def _phase_source_analysis(self, run_id: str) -> None:
+        with SessionLocal() as db:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None or not self._check_controls(db, run):
+                return
+            task = self._task_by_kind(db, run.id, "source-analysis")
+            if task.status == "completed":
+                return
+            paths = self.nas.for_workspace(run.workspace_id)
+            source_ctx = dict((run.config_json or {}).get("source_context") or {})
+            resolved = str(source_ctx.get("resolved_path", "")).strip()
+            if not resolved or source_ctx.get("status") == "skipped":
+                task.status = "completed"
+                task.result_json = {"status": "skipped", "reason": "no-source"}
+                self.events.emit(db, run.id, "phase", "Source analysis skipped")
+                db.commit()
+                return
+
+            script_path = settings.repo_root / "scripts" / "source-audit.sh"
+            if not script_path.exists():
+                task.status = "failed"
+                task.result_json = {"error": f"missing script: {script_path}"}
+                run.status = "failed"
+                db.commit()
+                return
+
+            session = self._create_agent_session(db, run.id, "developer", "Source Analyzer", paths)
+            self._set_role_status(db, run.id, "developer", "running")
+            env = dict(os.environ)
+            env["CTF_ROOT"] = str(settings.repo_root)
+            env["ARTIFACTS_ROOT"] = str(paths.artifacts)
+            command = ["bash", str(script_path), "-d", resolved, "--session", run.id]
+            if run.target:
+                command += ["-t", run.target]
+            self.events.emit(db, run.id, "terminal", f"[source-analysis] starting: {' '.join(command)}", payload={"agent": "developer"}, agent_session_id=session.id)
+            started = datetime.now(timezone.utc)
+            result = subprocess.run(command, capture_output=True, text=True, env=env)
+            output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+            self._emit_terminal_excerpt(db, run_id=run.id, output=output, agent_session_id=session.id, agent="developer")
+
+            report_path = ""
+            for line in reversed((result.stdout or "").splitlines()):
+                if line.strip().lower().startswith("report:"):
+                    report_path = line.split(":", 1)[1].strip()
+                    break
+            if not report_path:
+                candidates = sorted(paths.artifacts.rglob("*_findings.md"))
+                if candidates:
+                    report_path = str(candidates[-1])
+
+            task.result_json = {
+                "returncode": result.returncode,
+                "report_path": report_path,
+                "started_at": started.isoformat(),
+            }
+            if report_path:
+                db.add(Artifact(run_id=run.id, kind="source-audit-report", path=report_path, metadata_json={"source_context": source_ctx}))
+            if result.returncode != 0:
+                task.status = "failed"
+                run.status = "failed"
+                self._set_role_status(db, run.id, "developer", "failed")
+                self.events.emit(db, run.id, "phase", f"Source analysis failed rc={result.returncode}", level="error")
+                db.commit()
+                return
+            task.status = "completed"
+            self._set_role_status(db, run.id, "developer", "completed")
+            self.events.emit(db, run.id, "phase", "Source analysis completed", payload={"report_path": report_path})
+            self._write_memory(
+                db,
+                run,
+                mode="phase",
+                phase="source-analysis",
+                done=["source analysis completed"],
+                files=[report_path] if report_path else [],
+                next_action="learning recall",
+            )
             db.commit()
 
     def _phase_recon(self, run_id: str) -> None:
@@ -290,6 +414,7 @@ class ExecutionManager:
             self._set_role_status(db, run.id, "recon", "completed")
             task.status = "completed"
             task.result_json = discovered
+            self._set_vantix_task_status(db, run.id, "vantix-recon", "completed", {"source_phase": "recon-sidecar", **discovered})
             self.events.emit(db, run.id, "phase", "Recon completed", payload=discovered, agent_session_id=session.id)
             facts = [[ "port", port ] for port in discovered["ports"]] + [[ "service", service ] for service in discovered["services"]]
             self._write_memory(db, run, mode="phase", phase="recon", done=["recon completed"], facts=facts, files=[str(session.log_path)], next_action="cve analysis")
@@ -347,9 +472,22 @@ class ExecutionManager:
             session = self._create_agent_session(db, run.id, "researcher", "Researcher Sidecar", paths)
             self._set_role_status(db, run.id, "researcher", "running")
             results = []
+            errors = []
             services = run.config_json.get("services", [])
             for service in services:
-                response = self.cve.search(vendor=service, product=service)
+                try:
+                    response = self.cve.search(vendor=service, product=service, always_search_external=True, live_limit=500)
+                except Exception as exc:  # noqa: BLE001
+                    response = {"source": "cve-search", "query": service, "results": [], "error": str(exc)}
+                    errors.append({"service": service, "error": str(exc)})
+                    self.events.emit(
+                        db,
+                        run.id,
+                        "phase",
+                        f"CVE lookup failed for {service}: {exc}",
+                        level="warning",
+                        agent_session_id=session.id,
+                    )
                 results.append(response)
                 for top in response.get("results", [])[:5]:
                     db.add(
@@ -368,8 +506,11 @@ class ExecutionManager:
             session.status = "completed"
             session.completed_at = datetime.now(timezone.utc)
             self._set_role_status(db, run.id, "researcher", "completed")
+            self._set_role_status(db, run.id, "vector_store", "completed")
             task.status = "completed"
-            task.result_json = {"queries": len(results)}
+            task.result_json = {"queries": len(results), "errors": errors}
+            self._set_vantix_task_status(db, run.id, "research", "completed", {"queries": len(results), "errors": len(errors), "source_phase": "cve-analysis"})
+            self._set_vantix_task_status(db, run.id, "vector-store", "completed", {"queries": len(results), "source_phase": "cve-analysis"})
             self.events.emit(db, run.id, "phase", f"CVE analysis completed: {len(results)} queries", agent_session_id=session.id)
             self._write_memory(db, run, mode="phase", phase="cve-analysis", done=[f"cve queries={len(results)}"], files=[str(cve_path)], next_action="primary orchestration")
             db.add(Artifact(run_id=run.id, kind="cve-results", path=str(cve_path), metadata_json={"queries": len(results)}))
@@ -400,6 +541,8 @@ class ExecutionManager:
             session.prompt_path = str(prompt_path)
             session.status = "running"
             self._set_role_status(db, run.id, "orchestrator", "running")
+            self._set_role_status(db, run.id, "developer", "running")
+            self._set_role_status(db, run.id, "executor", "running")
             db.flush()
             self.events.emit(db, run.id, "phase", "Primary orchestration started", agent_session_id=session.id)
             self._write_memory(db, run, mode="phase", phase="orchestrate-start", done=["primary orchestration started"], files=[str(prompt_path)], next_action="monitor orchestrator")
@@ -512,9 +655,15 @@ class ExecutionManager:
                     refreshed.status = "completed" if result.returncode == 0 else "failed"
                     refreshed.completed_at = datetime.now(timezone.utc)
                     self._set_role_status(inner_db, run.id, "orchestrator", "completed" if result.returncode == 0 else "failed")
+                    self._set_role_status(inner_db, run.id, "developer", "completed" if result.returncode == 0 else "failed")
+                    self._set_role_status(inner_db, run.id, "executor", "completed" if result.returncode == 0 else "failed")
                     task = self._task_by_kind(inner_db, run.id, "orchestrate")
                     task.status = "completed" if result.returncode == 0 else "failed"
                     task.result_json = {"returncode": result.returncode}
+                    if result.returncode == 0:
+                        self._set_vantix_task_status(inner_db, run.id, "planning", "completed", {"source_phase": "orchestrate"})
+                        self._set_vantix_task_status(inner_db, run.id, "development", "completed", {"source_phase": "orchestrate"})
+                        self._set_vantix_task_status(inner_db, run.id, "execution", "completed", {"source_phase": "orchestrate"})
                     self._write_memory(
                         inner_db,
                         inner_db.get(WorkspaceRun, run.id),
@@ -597,6 +746,7 @@ class ExecutionManager:
             generated = self.reporting.generate(db, run)
             task.status = "completed"
             self._set_role_status(db, run.id, "reporter", "completed")
+            self._set_vantix_task_status(db, run.id, "reporting", "completed", {"source_phase": "report"})
             task.result_json = {"report_path": generated["markdown_path"], "report_json_path": generated["json_path"]}
             db.add(
                 Artifact(
@@ -613,6 +763,19 @@ class ExecutionManager:
 
     def _task_by_kind(self, db, run_id: str, kind: str) -> Task:
         return db.execute(select(Task).where(Task.run_id == run_id, Task.kind == kind)).scalar_one()
+
+    def _set_vantix_task_status(self, db, run_id: str, kind: str, status: str, result: dict | None = None) -> None:
+        row = (
+            db.query(Task)
+            .filter(Task.run_id == run_id, Task.kind == kind)
+            .order_by(Task.created_at.desc())
+            .first()
+        )
+        if row is None:
+            return
+        row.status = status
+        if result:
+            row.result_json = {**(row.result_json or {}), **result}
 
     def _create_agent_session(self, db, run_id: str, role: str, name: str, paths) -> AgentSession:
         existing = (

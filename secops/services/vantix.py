@@ -19,9 +19,13 @@ from secops.services.storage import StorageLayout
 
 TARGET_RE = re.compile(r"(?i)\b((?:https?://)?(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?|https?://[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+|[a-z0-9][a-z0-9.-]+\.[a-z]{2,})(?=\s|$|[,.;])")
 QUICK_SCAN_RE = re.compile(r"(?i)\bquick(?:\s|-)?scan\b")
+NEW_ENGAGEMENT_RE = re.compile(r"(?i)\b(start|create|open|launch)\b.{0,24}\b(new)\b.{0,24}\b(engagement|run)\b")
+ACTION_INTENT_RE = re.compile(r"(?i)\b(run|scan|recon|enumerate|exploit|validate|attack|test|assess|pentest)\b")
 
 SPECIALIST_TASKS = [
     ("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."),
+    ("source-intake", "Source Intake", "Resolve source input for white-box analysis."),
+    ("source-analysis", "Source Analysis", "Run source-level analysis and extract findings."),
     ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts."),
     ("knowledge-load", "Knowledge Base", "Load dense memory, learning hits, tool guidance, and prior cases."),
     ("vector-store", "Vector Store", "Rank similar cases and candidate attack patterns."),
@@ -107,7 +111,12 @@ class VantixScheduler:
         max_sequence = max((task.sequence for task in existing.values()), default=0)
         next_sequence = max_sequence + 1
         task_list = (
-            [("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."), ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts.")]
+            [
+                ("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."),
+                ("source-intake", "Source Intake", "Resolve source input for white-box analysis."),
+                ("source-analysis", "Source Analysis", "Run source-level analysis and extract findings."),
+                ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts."),
+            ]
             if quick_scan
             else SPECIALIST_TASKS
         )
@@ -235,23 +244,36 @@ class VantixChatService:
         content = message.strip()
         if not content:
             raise ValueError("Message is required")
+        metadata = metadata or {}
+        source_input = _normalize_source_input(metadata.get("source_input"))
+        force_new = bool(metadata.get("start_new_run"))
         if run_id:
             run = self.db.get(WorkspaceRun, run_id)
             if run is None:
                 raise ValueError(f"Run not found: {run_id}")
-            run.objective = content
-            user_message = self._user_message(run.id, content, metadata or {})
-            self.db.add(OperatorNote(run_id=run.id, content=content, author="operator", applies_to="chat"))
-            status = self.scheduler.replan(self.db, run, reason="chat-guidance")
-            self.db.commit()
-            self.db.refresh(run)
-            self.db.refresh(user_message)
-            return run, user_message, False, status
+            explicit_target = target or extract_target(content)
+            if not force_new and not _should_start_new_engagement(content, run, explicit_target=explicit_target):
+                run.objective = content
+                cfg = dict(run.config_json or {})
+                if source_input:
+                    cfg["source_input"] = source_input
+                run.config_json = cfg
+                user_message = self._user_message(run.id, content, metadata or {})
+                self.db.add(OperatorNote(run_id=run.id, content=content, author="operator", applies_to="chat"))
+                status = self.scheduler.replan(self.db, run, reason="chat-guidance")
+                self.db.commit()
+                self.db.refresh(run)
+                self.db.refresh(user_message)
+                return run, user_message, False, status
 
         resolved_target = target or extract_target(content)
         if not resolved_target:
             raise ValueError("A target is required when starting a Vantix run from chat")
-        resolved_mode = mode or "pentest"
+        if run_id:
+            current = self.db.get(WorkspaceRun, run_id)
+            resolved_mode = mode or (current.mode if current is not None else "pentest")
+        else:
+            resolved_mode = mode or "pentest"
         engagement = Engagement(
             name=f"Vantix: {resolved_target}",
             mode=resolved_mode,
@@ -274,6 +296,7 @@ class VantixChatService:
                 "created_from": "chat",
                 "scheduler": "vantix",
                 "scan_profile": "quick" if is_quick_scan_request(content) else "full",
+                "source_input": source_input,
             },
         )
         user_message = self._user_message(run.id, content, metadata or {})
@@ -299,6 +322,23 @@ def is_quick_scan_request(message: str) -> bool:
     return bool(QUICK_SCAN_RE.search(message or ""))
 
 
+def _should_start_new_engagement(message: str, current_run: WorkspaceRun, *, explicit_target: str = "") -> bool:
+    text = message or ""
+    if NEW_ENGAGEMENT_RE.search(text):
+        return True
+    new_target = (explicit_target or "").strip()
+    old_target = (current_run.target or "").strip()
+    terminal = current_run.status in {"completed", "cancelled", "failed"}
+    if terminal and new_target:
+        if not old_target or new_target != old_target:
+            return True
+        if ACTION_INTENT_RE.search(text):
+            return True
+    if terminal and ACTION_INTENT_RE.search(text) and not current_run.objective:
+        return True
+    return False
+
+
 def _vector_score(meta: dict[str, Any], confidence: float) -> float:
     evidence_quality = float(meta.get("evidence_quality", 0.5))
     source_credibility = float(meta.get("source_credibility", 0.5))
@@ -314,6 +354,25 @@ def _vector_score(meta: dict[str, Any], confidence: float) -> float:
         - noise_penalty * 0.10
     )
     return max(0.0, round(score, 4))
+
+
+def _normalize_source_input(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"type": "none"}
+    source_type = str(value.get("type", "none")).strip().lower()
+    if source_type not in {"none", "github", "local", "upload"}:
+        source_type = "none"
+    payload = {"type": source_type}
+    if source_type == "github":
+        github = value.get("github") if isinstance(value.get("github"), dict) else {}
+        payload["github"] = {"url": str(github.get("url", "")).strip(), "ref": str(github.get("ref", "")).strip()}
+    elif source_type == "local":
+        local = value.get("local") if isinstance(value.get("local"), dict) else {}
+        payload["local"] = {"path": str(local.get("path", "")).strip()}
+    elif source_type == "upload":
+        upload = value.get("upload") if isinstance(value.get("upload"), dict) else {}
+        payload["upload"] = {"staged_upload_id": str(upload.get("staged_upload_id", "")).strip()}
+    return payload
 
 
 def vector_from_fact(fact: Fact) -> dict[str, Any]:

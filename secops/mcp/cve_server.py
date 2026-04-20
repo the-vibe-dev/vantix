@@ -23,15 +23,31 @@ def create_cve_mcp():
     )
 
     @mcp.tool()
-    def search_cves(vendor: str, product: str, limit: int = 20) -> dict[str, Any]:
-        """Search the local cve-search API and enrich results with local intel."""
-        response = CVESearchService().search(vendor=vendor, product=product)
+    def search_cves(
+        vendor: str,
+        product: str,
+        limit: int = 20,
+        live_on_miss: bool = True,
+        sources: list[str] | None = None,
+        live_limit: int = 200,
+        always_search_external: bool = False,
+    ) -> dict[str, Any]:
+        """Search cve-search and local intel, optionally triggering live source refresh."""
+        response = CVESearchService().search(
+            vendor=vendor,
+            product=product,
+            limit=max(1, min(limit, 100)),
+            live_on_miss=live_on_miss,
+            live_sources=sources,
+            live_limit=max(1, min(live_limit, 1000)),
+            always_search_external=always_search_external,
+        )
         response["results"] = response.get("results", [])[: max(1, min(limit, 100))]
         return response
 
     @mcp.tool()
-    def search_intel(query: str, limit: int = 25, sources: list[str] | None = None, live_on_miss: bool = False) -> dict[str, Any]:
-        """Search normalized local vulnerability intel. Live external fetch is opt-in."""
+    def search_intel(query: str, limit: int = 25, sources: list[str] | None = None, live_on_miss: bool = True) -> dict[str, Any]:
+        """Search local vulnerability intel; when no cache hit, live fetch is enabled by default."""
         with SessionLocal() as db:
             service = VulnIntelService(db)
             intel = service.search(query, limit=max(1, min(limit, 100)), sources=sources)

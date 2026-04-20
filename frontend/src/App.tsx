@@ -21,6 +21,7 @@ import {
   RunPhase,
   RunResults,
   RunSkillApplication,
+  SourceInput,
   Task,
   Vector,
   api,
@@ -51,7 +52,7 @@ const SEV: Record<Variant, { bg: string; color: string; border: string }> = {
   danger: { bg: "rgba(239,68,68,.12)", color: "#ef4444", border: "rgba(239,68,68,.3)" },
   amber: { bg: "rgba(244,184,96,.12)", color: "#f4b860", border: "rgba(244,184,96,.3)" },
   blue: { bg: "rgba(99,179,237,.12)", color: "#63b3ed", border: "rgba(99,179,237,.3)" },
-  default: { bg: "rgba(255,255,255,.05)", color: "#7a9e92", border: "rgba(140,185,165,.15)" },
+  default: { bg: "rgba(255,255,255,.05)", color: "#a69599", border: "rgba(217,58,73,.25)" },
 };
 
 function Badge({
@@ -224,17 +225,17 @@ function Btn({
   style?: CSSProperties;
 }) {
   const vs: Record<BtnVariant, CSSProperties> = {
-    primary: { background: "linear-gradient(135deg,#19c37d,#b2f2d1)", color: "#021a0f", border: "none" },
-    ghost: { background: "rgba(255,255,255,.04)", color: "#e8f4ee", border: "1px solid rgba(140,185,165,.18)" },
+    primary: { background: "linear-gradient(135deg,#d93a49,#ef5c67)", color: "#140507", border: "none" },
+    ghost: { background: "rgba(255,255,255,.04)", color: "#e8f4ee", border: "1px solid rgba(217,58,73,.25)" },
     danger: { background: "rgba(239,68,68,.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,.3)" },
     amber: { background: "rgba(244,184,96,.1)", color: "#f4b860", border: "1px solid rgba(244,184,96,.3)" },
     green: { background: "rgba(25,195,125,.1)", color: "#19c37d", border: "1px solid rgba(25,195,125,.3)" },
   };
   const ss: Record<BtnSize, CSSProperties> = {
     xs: { padding: "3px 8px", fontSize: ".68rem", borderRadius: 6 },
-    sm: { padding: "5px 10px", fontSize: ".72rem", borderRadius: 8 },
-    md: { padding: "8px 14px", fontSize: ".78rem", borderRadius: 10 },
-    lg: { padding: "11px 20px", fontSize: ".84rem", borderRadius: 12 },
+    sm: { padding: "5px 10px", fontSize: ".72rem", borderRadius: 7 },
+    md: { padding: "8px 14px", fontSize: ".78rem", borderRadius: 8 },
+    lg: { padding: "11px 20px", fontSize: ".84rem", borderRadius: 8 },
   };
   const [hov, setHov] = useState(false);
   return (
@@ -331,6 +332,44 @@ function Panel({
 // ─── Static lists ───────────────────────────────────────────────────────────
 const ROLES = ["orchestrator", "recon", "knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"];
 const MODES = ["pentest", "ctf", "koth", "bugbounty", "windows-ctf", "windows-koth"];
+const DISPLAY_PHASES = ["init", "recon", "exploit", "validate", "post-exploit", "report"] as const;
+type DisplayPhase = (typeof DISPLAY_PHASES)[number];
+
+const PHASE_ALIAS: Record<string, DisplayPhase | "completed"> = {
+  "flow-initialization": "init",
+  "context-bootstrap": "init",
+  "source-intake": "init",
+  "source-analysis": "init",
+  "learning-recall": "recon",
+  recon: "recon",
+  "recon-sidecar": "recon",
+  "knowledge-load": "recon",
+  "vector-store": "exploit",
+  research: "exploit",
+  "cve-analysis": "exploit",
+  planning: "validate",
+  development: "validate",
+  orchestrate: "validate",
+  execution: "post-exploit",
+  "learn-ingest": "post-exploit",
+  "post-exploit": "post-exploit",
+  report: "report",
+  reporting: "report",
+  completed: "completed",
+};
+
+function toDisplayPhase(value: string | undefined): DisplayPhase | "completed" {
+  return PHASE_ALIAS[String(value || "").toLowerCase()] || "init";
+}
+
+function normalizeCompletedPhases(values: string[] | undefined): DisplayPhase[] {
+  const out = new Set<DisplayPhase>();
+  for (const raw of values || []) {
+    const mapped = toDisplayPhase(raw);
+    if (mapped !== "completed") out.add(mapped);
+  }
+  return DISPLAY_PHASES.filter((name) => out.has(name));
+}
 
 // ─── Risk calculation ───────────────────────────────────────────────────────
 function calcRisk(findings: Finding[]): { score: string; level: string; variant: Variant } | null {
@@ -363,9 +402,10 @@ function RiskBar({
     if (counts[k] !== undefined) counts[k]++;
   });
   const risk = calcRisk(findings);
-  const ALL = ["init", "recon", "exploit", "validate", "post-exploit", "report"];
-  const done = phase?.completed?.length || 0;
-  const phasePct = Math.round((done / ALL.length) * 100);
+  const completed = normalizeCompletedPhases(phase?.completed);
+  const currentDisplay = toDisplayPhase(phase?.current);
+  const done = completed.length + (currentDisplay === "completed" ? 1 : 0);
+  const phasePct = Math.round((done / DISPLAY_PHASES.length) * 100);
   return (
     <div className="vx-riskbar">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 8 }}>
@@ -461,7 +501,7 @@ function RiskBar({
         <span
           style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92", whiteSpace: "nowrap" }}
         >
-          {phase?.current || "init"}
+          {currentDisplay}
         </span>
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -495,7 +535,9 @@ function ExecSummary({
     validate: "Validation",
     "post-exploit": "Post-exploitation",
     report: "Generating Report",
+    completed: "Completed",
   };
+  const currentDisplay = toDisplayPhase(phase?.current);
   return (
     <div
       className="vx-panel"
@@ -563,7 +605,7 @@ function ExecSummary({
                 {risk?.level || "Pending"} Risk
               </div>
               <div style={{ fontSize: ".74rem", color: "#7a9e92" }}>
-                {phaseLabels[phase?.current || ""] || "Initializing"}
+                {phaseLabels[currentDisplay] || "Initializing"}
               </div>
               <div style={{ fontSize: ".72rem", color: "#7a9e92", marginTop: 2 }}>{run.target}</div>
             </div>
@@ -924,13 +966,14 @@ function PhasePanel({ phase }: { phase: RunPhase | null }) {
         <EmptyState icon="◎" text="No phase state loaded." />
       </Panel>
     );
-  const ALL = ["init", "recon", "exploit", "validate", "post-exploit", "report"];
+  const completed = normalizeCompletedPhases(phase.completed);
+  const currentDisplay = toDisplayPhase(phase.current);
   return (
-    <Panel title="Engagement Phase" meta={phase.current}>
+    <Panel title="Engagement Phase" meta={currentDisplay}>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {ALL.map((p, i) => {
-          const done = phase.completed?.includes(p);
-          const active = p === phase.current;
+        {DISPLAY_PHASES.map((p, i) => {
+          const done = completed.includes(p);
+          const active = p === currentDisplay && currentDisplay !== "completed";
           return (
             <div key={p} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div
@@ -1228,7 +1271,15 @@ function ChainsPanel({
 }
 
 // ─── Results ────────────────────────────────────────────────────────────────
-function ResultsPanel({ results }: { results: RunResults | null }) {
+function ResultsPanel({
+  results,
+  selectedRunId,
+  onOpenPath,
+}: {
+  results: RunResults | null;
+  selectedRunId: string | undefined;
+  onOpenPath: (path: string) => void;
+}) {
   const findings = results?.findings || [];
   const artifacts = results?.artifacts || [];
   return (
@@ -1286,10 +1337,16 @@ function ResultsPanel({ results }: { results: RunResults | null }) {
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      flex: 1,
                     }}
                   >
                     {a.path}
                   </span>
+                  {selectedRunId && (
+                    <Btn size="xs" variant="ghost" onClick={() => onOpenPath(a.path)}>
+                      Open
+                    </Btn>
+                  )}
                 </div>
               ))}
             </div>
@@ -1321,8 +1378,20 @@ function ResultsPanel({ results }: { results: RunResults | null }) {
                 <div style={{ fontSize: ".68rem", color: "#19c37d", fontWeight: 600, marginBottom: 2 }}>
                   Report Ready
                 </div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92" }}>
-                  {results.report_path}
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92", flex: 1 }}>
+                    {results.report_path}
+                  </div>
+                  {selectedRunId && (
+                    <Btn size="xs" variant="green" onClick={() => onOpenPath(results.report_path || "")}>
+                      Open
+                    </Btn>
+                  )}
+                  {selectedRunId && results.report_json_path && (
+                    <Btn size="xs" variant="ghost" onClick={() => onOpenPath(results.report_json_path || "")}>
+                      JSON
+                    </Btn>
+                  )}
                 </div>
               </div>
             )}
@@ -1657,6 +1726,16 @@ function Sidebar({
   setMode,
   target,
   setTarget,
+  sourceType,
+  setSourceType,
+  githubUrl,
+  setGithubUrl,
+  githubRef,
+  setGithubRef,
+  localPath,
+  setLocalPath,
+  onUpload,
+  uploadLabel,
 }: {
   runs: Run[];
   selected: Run | null;
@@ -1665,26 +1744,62 @@ function Sidebar({
   setMode: (v: string) => void;
   target: string;
   setTarget: (v: string) => void;
+  sourceType: "none" | "github" | "local" | "upload";
+  setSourceType: (v: "none" | "github" | "local" | "upload") => void;
+  githubUrl: string;
+  setGithubUrl: (v: string) => void;
+  githubRef: string;
+  setGithubRef: (v: string) => void;
+  localPath: string;
+  setLocalPath: (v: string) => void;
+  onUpload: (file: File) => void;
+  uploadLabel: string;
 }) {
   return (
     <aside className="vx-sidebar">
       <div className="vx-sidebar-inner">
-        <div style={{ marginBottom: 22 }}>
-          <div
-            style={{
-              fontSize: ".62rem",
-              fontWeight: 700,
-              letterSpacing: ".18em",
-              textTransform: "uppercase",
-              color: "#f4b860",
-              marginBottom: 6,
-            }}
-          >
-            Autonomous Offensive Security Suite
+        <div
+          style={{
+            marginBottom: 14,
+            border: "1px solid rgba(217,58,73,.24)",
+            borderRadius: 8,
+            padding: 10,
+            background: "rgba(255,255,255,.02)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <div
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 6,
+                background: "linear-gradient(145deg,#25080d,#511019)",
+                border: "1px solid rgba(217,58,73,.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: ".7rem",
+                color: "#ff6d7a",
+                fontWeight: 700,
+              }}
+            >
+              VX
+            </div>
+            <div
+              style={{
+                fontSize: ".62rem",
+                fontWeight: 700,
+                letterSpacing: ".1em",
+                textTransform: "uppercase",
+                color: "#a69599",
+              }}
+            >
+              Autonomous Offensive Security Suite
+            </div>
           </div>
           <div
             style={{
-              fontSize: "2.5rem",
+              fontSize: "2.1rem",
               fontWeight: 700,
               letterSpacing: ".14em",
               lineHeight: 0.9,
@@ -1694,7 +1809,7 @@ function Sidebar({
           >
             VANTIX
           </div>
-          <div style={{ fontSize: ".7rem", color: "#7a9e92", marginTop: 6 }}>Recon · Exploit · Forge · Report</div>
+          <div style={{ fontSize: ".68rem", color: "#a69599", marginTop: 6 }}>Recon · Exploit · Forge · Report</div>
         </div>
         <div style={{ display: "flex", gap: 5, marginBottom: 18, flexWrap: "wrap" }}>
           <Badge variant="ok">● Codex</Badge>
@@ -1720,12 +1835,12 @@ function Sidebar({
                 onClick={() => setMode(m)}
                 style={{
                   padding: "3px 9px",
-                  borderRadius: 7,
+                  borderRadius: 6,
                   fontSize: ".68rem",
                   fontWeight: 600,
-                  background: mode === m ? "rgba(25,195,125,.15)" : "rgba(255,255,255,.04)",
-                  border: `1px solid ${mode === m ? "rgba(25,195,125,.4)" : "rgba(140,185,165,.12)"}`,
-                  color: mode === m ? "#19c37d" : "#7a9e92",
+                  background: mode === m ? "rgba(217,58,73,.2)" : "rgba(255,255,255,.04)",
+                  border: `1px solid ${mode === m ? "rgba(217,58,73,.45)" : "rgba(217,58,73,.18)"}`,
+                  color: mode === m ? "#ff6d7a" : "#a69599",
                   transition: "all .15s",
                 }}
               >
@@ -1755,8 +1870,8 @@ function Sidebar({
               width: "100%",
               padding: "8px 11px",
               background: "rgba(5,10,10,.9)",
-              border: "1px solid rgba(140,185,165,.18)",
-              borderRadius: 10,
+              border: "1px solid rgba(217,58,73,.25)",
+              borderRadius: 8,
               color: "#e8f4ee",
               fontSize: ".76rem",
             }}
@@ -1764,6 +1879,59 @@ function Sidebar({
           <div style={{ fontSize: ".66rem", color: "#7a9e92", marginTop: 5 }}>
             Use the chat to launch or continue an engagement.
           </div>
+        </div>
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: ".66rem", fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "#7a9e92", marginBottom: 6 }}>
+            Source (White-box)
+          </div>
+          <select
+            value={sourceType}
+            onChange={(e) => setSourceType(e.target.value as "none" | "github" | "local" | "upload")}
+            style={{ width: "100%", padding: "8px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.25)", borderRadius: 8, color: "#e8f4ee", fontSize: ".74rem", marginBottom: 6 }}
+          >
+            <option value="none">None (black-box)</option>
+            <option value="github">GitHub Repo</option>
+            <option value="local">Local Path</option>
+            <option value="upload">Upload Zip</option>
+          </select>
+          {sourceType === "github" && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <input
+                value={githubUrl}
+                onChange={(e) => setGithubUrl(e.target.value)}
+                placeholder="https://github.com/org/repo"
+                style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+              />
+              <input
+                value={githubRef}
+                onChange={(e) => setGithubRef(e.target.value)}
+                placeholder="branch/tag/commit (optional)"
+                style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+              />
+            </div>
+          )}
+          {sourceType === "local" && (
+            <input
+              value={localPath}
+              onChange={(e) => setLocalPath(e.target.value)}
+              placeholder="/path/to/source"
+              style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+            />
+          )}
+          {sourceType === "upload" && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onUpload(file);
+                }}
+                style={{ width: "100%", padding: "4px", fontSize: ".7rem", color: "#e8f4ee" }}
+              />
+              <div style={{ fontSize: ".65rem", color: "#7a9e92" }}>{uploadLabel || "No upload staged yet."}</div>
+            </div>
+          )}
         </div>
         <div>
           <div
@@ -1956,6 +2124,12 @@ export default function App() {
   const [statusMsg, setStatusMsg] = useState("");
   const [mode, setMode] = useState("pentest");
   const [target, setTarget] = useState("");
+  const [sourceType, setSourceType] = useState<"none" | "github" | "local" | "upload">("none");
+  const [githubUrl, setGithubUrl] = useState("");
+  const [githubRef, setGithubRef] = useState("");
+  const [localPath, setLocalPath] = useState("");
+  const [stagedUploadId, setStagedUploadId] = useState("");
+  const [pendingSend, setPendingSend] = useState<{ message: string } | null>(null);
 
   const streamRef = useRef<EventSource | null>(null);
 
@@ -2026,9 +2200,7 @@ export default function App() {
         setFindings(runResults?.findings || []);
         setSkillApps(runSkills);
         setChains(runChains);
-        if (runTerminal?.content) {
-          setTermLines(runTerminal.content.split("\n"));
-        }
+        setTermLines(runTerminal?.content ? runTerminal.content.split("\n") : []);
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setSelectedRun(null);
@@ -2054,6 +2226,7 @@ export default function App() {
   useEffect(() => {
     streamRef.current?.close();
     streamRef.current = null;
+    setTermLines([]);
     if (!connected || !selectedRun) return;
     refreshRun(selectedRun.id);
     if (apiToken) {
@@ -2094,10 +2267,48 @@ export default function App() {
     }
   }, [connected, results?.terminal_summary]);
 
+  function buildSourceInput(): SourceInput {
+    if (sourceType === "github") return { type: "github", github: { url: githubUrl.trim(), ref: githubRef.trim() || undefined } };
+    if (sourceType === "local") return { type: "local", local: { path: localPath.trim() } };
+    if (sourceType === "upload") return { type: "upload", upload: { staged_upload_id: stagedUploadId.trim() } };
+    return { type: "none" };
+  }
+
+  function sourceSummary(input: SourceInput): string {
+    if (input.type === "github") return input.github?.url || "GitHub";
+    if (input.type === "local") return input.local?.path || "Local path";
+    if (input.type === "upload") return input.upload?.staged_upload_id || "Upload";
+    return "None";
+  }
+
+  async function submitChatMessage(message: string, forceNew: boolean) {
+    const sourceInput = buildSourceInput();
+    const sourceMetadata = { source_input: sourceInput, ...(forceNew ? { start_new_run: true } : {}) };
+    const res = await api.submitChat({
+      message,
+      run_id: selectedRun && !forceNew ? selectedRun.id : undefined,
+      mode,
+      target: forceNew || !selectedRun ? target || undefined : undefined,
+      metadata: sourceMetadata,
+    });
+    setSelectedRun(res.run);
+    flash(res.scheduler_status);
+    await refreshRuns();
+    await refreshRun(res.run.id);
+  }
+
   async function handleSend(event: FormEvent) {
     event.preventDefault();
     if (!chatText.trim()) return;
     const txt = chatText;
+    const sourceInput = buildSourceInput();
+    const newTarget = target.trim();
+    const targetChanged = Boolean(selectedRun && newTarget && newTarget !== (selectedRun.target || ""));
+    const sourceAttached = sourceInput.type !== "none";
+    if (selectedRun && (targetChanged || sourceAttached)) {
+      setPendingSend({ message: txt });
+      return;
+    }
     setChatText("");
     const userMsg: RunMessage = {
       id: `m${Date.now()}`,
@@ -2111,16 +2322,7 @@ export default function App() {
     setMessages((m) => [...m, userMsg]);
     setChatLoading(true);
     try {
-      const res = await api.submitChat({
-        message: txt,
-        run_id: selectedRun?.id,
-        mode,
-        target: selectedRun ? undefined : target || undefined,
-      });
-      setSelectedRun(res.run);
-      flash(res.scheduler_status);
-      await refreshRuns();
-      await refreshRun(res.run.id);
+      await submitChatMessage(txt, false);
     } catch (err) {
       setMessages((m) => [
         ...m,
@@ -2134,6 +2336,31 @@ export default function App() {
           created_at: "",
         },
       ]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function handleUploadSource(file: File) {
+    try {
+      const staged = await api.stageSourceUpload(file);
+      setStagedUploadId(staged.staged_upload_id);
+      flash(`Upload staged: ${staged.filename}`);
+    } catch (error) {
+      flash(`Upload failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function confirmPendingSend(createNew: boolean) {
+    if (!pendingSend) return;
+    const message = pendingSend.message;
+    setPendingSend(null);
+    setChatText("");
+    setChatLoading(true);
+    try {
+      await submitChatMessage(message, createNew);
+    } catch (error) {
+      flash(`Send failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setChatLoading(false);
     }
@@ -2232,6 +2459,7 @@ export default function App() {
 
   function handleSelectRun(run: Run) {
     setSelectedRun(run);
+    setTermLines([]);
     refreshRun(run.id);
   }
 
@@ -2263,6 +2491,18 @@ export default function App() {
     }
   }
 
+  async function handleOpenPath(path: string) {
+    if (!selectedRun || !path) return;
+    try {
+      const blob = await api.fetchRunFileBlob(selectedRun.id, path);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      flash(`Open failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return (
     <div className="vx-shell">
       <Sidebar
@@ -2273,8 +2513,18 @@ export default function App() {
         setMode={setMode}
         target={target}
         setTarget={setTarget}
+        sourceType={sourceType}
+        setSourceType={setSourceType}
+        githubUrl={githubUrl}
+        setGithubUrl={setGithubUrl}
+        githubRef={githubRef}
+        setGithubRef={setGithubRef}
+        localPath={localPath}
+        setLocalPath={setLocalPath}
+        onUpload={handleUploadSource}
+        uploadLabel={stagedUploadId ? `Staged: ${stagedUploadId}` : ""}
       />
-      <main style={{ padding: 20, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <main className="vx-main">
         <TopBar
           run={selectedRun}
           phase={phase}
@@ -2332,7 +2582,7 @@ export default function App() {
 
         {tab === "results" && (
           <div className="vx-grid">
-            <ResultsPanel results={results} />
+            <ResultsPanel results={results} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
           </div>
         )}
 
@@ -2356,6 +2606,24 @@ export default function App() {
           </div>
         )}
       </main>
+      {pendingSend && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+          <div style={{ width: "min(620px,92vw)", background: "#13090b", border: "1px solid rgba(217,58,73,.35)", borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: ".88rem", fontWeight: 700, color: "#e8f4ee", marginBottom: 6 }}>Run Confirmation</div>
+            <div style={{ fontSize: ".74rem", color: "#a69599", marginBottom: 10 }}>
+              Active run is selected. Choose whether to apply guidance to current run or start a new engagement.
+            </div>
+            <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 12 }}>
+              Current target: {selectedRun?.target || "(none)"} | New target: {target || "(none)"} | Source: {sourceSummary(buildSourceInput())}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Btn size="sm" variant="ghost" onClick={() => setPendingSend(null)}>Cancel</Btn>
+              <Btn size="sm" variant="blue" onClick={() => confirmPendingSend(false)}>Apply to Current Run</Btn>
+              <Btn size="sm" variant="green" onClick={() => confirmPendingSend(true)}>Start New Run</Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

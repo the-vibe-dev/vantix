@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from secops.config import settings
 from secops.db import Base, engine
-from secops.routers import approvals, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, system, tasks, tools
+from secops.routers import approvals, benchmarks, chat, cve, engagements, health, memory, modes, providers, runs, skills, sources, system, tasks, tools
 
 
 @asynccontextmanager
@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     app.include_router(benchmarks.router)
     app.include_router(providers.router)
     app.include_router(tools.router)
+    app.include_router(sources.router)
 
     if settings.enable_cve_mcp:
         from secops.mcp.cve_server import create_cve_mcp
@@ -46,6 +47,13 @@ def create_app() -> FastAPI:
 
         mcp_app = create_cve_mcp().streamable_http_app()
         app.mount(settings.cve_mcp_path, MCPAuthAndOriginMiddleware(mcp_app), name="cve-mcp")
+
+    if settings.enable_vantix_mcp:
+        from secops.mcp.security import MCPAuthAndOriginMiddleware
+        from secops.mcp.vantix_server import create_vantix_mcp
+
+        mcp_app = create_vantix_mcp().streamable_http_app()
+        app.mount(settings.vantix_mcp_path, MCPAuthAndOriginMiddleware(mcp_app), name="vantix-mcp")
 
     dist_dir = Path(settings.frontend_root) / "dist"
     if dist_dir.exists():

@@ -8,6 +8,8 @@ os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 
 from secops.routers.cve import get_cve_intel, list_intel_sources, search_cve_intel
 from secops.db import Base, SessionLocal, engine
+from secops.models import VulnerabilityIntelReference
+from secops.services.cve_search import CVESearchService
 from secops.services.vuln_intel import IntelRecord, VulnIntelService, extract_cve_ids
 from secops.services.intel_sources.base import SourceUpdateResult
 
@@ -158,3 +160,88 @@ def test_cve_intel_search_live_on_miss_persists_cache() -> None:
     finally:
         cve_router.adapter_for = original_adapter_for  # type: ignore[assignment]
         cve_router.available_sources = original_available_sources  # type: ignore[assignment]
+
+
+def test_cve_search_service_live_fallback_uses_external_intel() -> None:
+    reset_db()
+
+    class FakeResponse:
+        def raise_for_status(self):  # noqa: ANN201
+            return self
+
+        def json(self):  # noqa: ANN201
+            return {"data": []}
+
+    class FakeClient:
+        def __enter__(self):  # noqa: ANN201
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN201
+            return False
+
+        def get(self, url):  # noqa: ANN001, ANN201
+            return FakeResponse()
+
+    class FakeAdapter:
+        def fetch_since(self, cursor=None):  # noqa: ANN001
+            return SourceUpdateResult(
+                source="fake_feed",
+                records=[
+                    IntelRecord(
+                        source="fake_feed",
+                        external_id="FAKE-2",
+                        title="Apache Struts RCE",
+                        summary="CVE-2025-99999 exploit available",
+                        cve_ids=["CVE-2025-99999"],
+                        exploit_available=True,
+                        cvss=9.8,
+                        confidence=0.9,
+                    )
+                ],
+                cursor={"count": 1},
+            )
+
+    import secops.services.cve_search as cve_service
+
+    original_http_client = cve_service.httpx.Client
+    original_adapter_for = cve_service.adapter_for
+    original_available_sources = cve_service.available_sources
+    cve_service.httpx.Client = lambda timeout=10.0: FakeClient()  # type: ignore[assignment]
+    cve_service.adapter_for = lambda name: FakeAdapter()  # type: ignore[assignment]
+    cve_service.available_sources = lambda include_optional=False: ["fake_feed"]  # type: ignore[assignment]
+    try:
+        payload = CVESearchService().search(vendor="apache", product="struts", live_on_miss=True, live_limit=10)
+    finally:
+        cve_service.httpx.Client = original_http_client  # type: ignore[assignment]
+        cve_service.adapter_for = original_adapter_for  # type: ignore[assignment]
+        cve_service.available_sources = original_available_sources  # type: ignore[assignment]
+
+    assert payload["live"]["attempted"] is True
+    assert payload["live"]["upserted"] == 1
+    assert payload["results"]
+    assert payload["results"][0]["id"] == "CVE-2025-99999"
+
+
+def test_upsert_references_dedupes_url_for_multi_cve_record() -> None:
+    reset_db()
+    with SessionLocal() as db:
+        service = VulnIntelService(db)
+        service.upsert_records(
+            [
+                IntelRecord(
+                    source="cisa_kev",
+                    external_id="KEV-MULTI",
+                    title="multi-cve advisory",
+                    cve_ids=["CVE-2025-11111", "CVE-2025-22222"],
+                    aliases=["CVE-2025-11111", "CVE-2025-22222"],
+                    url="https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                    confidence=0.9,
+                )
+            ]
+        )
+        refs = (
+            db.query(VulnerabilityIntelReference)
+            .filter(VulnerabilityIntelReference.reference_type == "url")
+            .all()
+        )
+    assert len(refs) == 1

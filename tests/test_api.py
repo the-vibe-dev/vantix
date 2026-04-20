@@ -342,6 +342,65 @@ def test_vantix_chat_requires_target_for_new_run_and_appends_existing_run() -> N
         object.__setattr__(settings, "enable_codex_execution", old_codex)
 
 
+def test_vantix_chat_with_run_id_can_start_new_engagement_when_requested() -> None:
+    reset_db()
+    old_codex = settings.enable_codex_execution
+    object.__setattr__(settings, "enable_codex_execution", False)
+    client = TestClient(create_app())
+
+    try:
+        first = client.post("/api/v1/chat", json={"message": "Run a quick scan on 192.168.1.95", "mode": "pentest"})
+        assert first.status_code == 200
+        old_run_id = first.json()["run"]["id"]
+
+        cancel = client.post(f"/api/v1/runs/{old_run_id}/cancel")
+        assert cancel.status_code == 200
+
+        new_req = client.post(
+            "/api/v1/chat",
+            json={
+                "run_id": old_run_id,
+                "message": "Start a new engagement on 192.168.1.99 go through all phases",
+            },
+        )
+        assert new_req.status_code == 200
+        payload = new_req.json()
+        assert payload["started"] is True
+        assert payload["run"]["id"] != old_run_id
+        assert payload["run"]["target"] == "192.168.1.99"
+
+        old_run = client.get(f"/api/v1/runs/{old_run_id}")
+        assert old_run.status_code == 200
+        assert old_run.json()["target"] == "192.168.1.95"
+    finally:
+        object.__setattr__(settings, "enable_codex_execution", old_codex)
+
+
+def test_vantix_chat_with_terminal_run_and_new_target_starts_new_without_strict_phrase() -> None:
+    reset_db()
+    old_codex = settings.enable_codex_execution
+    object.__setattr__(settings, "enable_codex_execution", False)
+    client = TestClient(create_app())
+
+    try:
+        first = client.post("/api/v1/chat", json={"message": "Run recon on 192.168.1.95", "mode": "pentest"})
+        assert first.status_code == 200
+        old_run_id = first.json()["run"]["id"]
+        assert client.post(f"/api/v1/runs/{old_run_id}/cancel").status_code == 200
+
+        follow = client.post(
+            "/api/v1/chat",
+            json={"run_id": old_run_id, "message": "scan 192.168.1.99 and continue through phases"},
+        )
+        assert follow.status_code == 200
+        payload = follow.json()
+        assert payload["started"] is True
+        assert payload["run"]["id"] != old_run_id
+        assert payload["run"]["target"] == "192.168.1.99"
+    finally:
+        object.__setattr__(settings, "enable_codex_execution", old_codex)
+
+
 def test_vantix_system_status_and_provider_secret_handling() -> None:
     reset_db()
     old_secret = settings.secret_key

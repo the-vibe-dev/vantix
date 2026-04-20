@@ -2,6 +2,8 @@ from __future__ import annotations
 
 PHASE_SEQUENCE = [
     "context-bootstrap",
+    "source-intake",
+    "source-analysis",
     "learning-recall",
     "recon-sidecar",
     "cve-analysis",

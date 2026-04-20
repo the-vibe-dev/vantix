@@ -48,6 +48,15 @@ Use streamable HTTP for a separately managed service:
 bash scripts/secops-cve-mcp.sh --http --host 127.0.0.1 --port 8788
 ```
 
+## CVE API Search (HTTP)
+
+The API endpoint supports local cve-search plus live source-assisted lookup:
+
+```bash
+curl -sS "http://127.0.0.1:8787/api/v1/cve/search?vendor=apache&product=struts&live_on_miss=true&always_search_external=true" \
+  -H "Authorization: Bearer ${SECOPS_API_TOKEN}" | jq .
+```
+
 ## Client Configuration
 
 Generic stdio client entry:
@@ -86,8 +95,8 @@ Generic HTTP client entry:
 
 | Tool | Purpose |
 | --- | --- |
-| `search_cves(vendor, product, limit=20)` | Query the configured cve-search API and enrich with local intel. |
-| `search_intel(query, limit=25, sources=null, live_on_miss=false)` | Search cached normalized vulnerability intel. Optional live fetch only runs when requested. |
+| `search_cves(vendor, product, limit=20, live_on_miss=true, sources=null, live_limit=200, always_search_external=false)` | Query cve-search, enrich with local intel, and optionally force live source refresh when needed. |
+| `search_intel(query, limit=25, sources=null, live_on_miss=true)` | Search cached normalized vulnerability intel. When cache misses, live source fetch is enabled by default. |
 | `get_cve_intel(cve_id)` | Return cached intel records for one CVE. |
 | `recent_intel(days=7, limit=25)` | Return recent prioritized intel from the local cache. |
 | `list_intel_sources(include_optional=true)` | List source adapters compiled into the system. |
@@ -121,3 +130,21 @@ Keep `SECOPS_CVE_MCP_REQUIRE_TOKEN=true` for hosted HTTP unless the service is b
 `403` means the HTTP origin is not in `SECOPS_CVE_MCP_ALLOWED_ORIGINS`.
 
 Empty search results usually mean the local cache has not been seeded. Run `update_intel_source` in dry-run first, then repeat with `dry_run=false` for trusted sources.
+
+## Backfill (2019+)
+
+For a large baseline refresh, run:
+
+```bash
+bash scripts/backfill-cve-intel.sh 2019 250000
+```
+
+This runs a full local `cve-search` refresh and then backfills sidecar vuln-intel sources with a high limit and `since-year` filter.
+
+Before a full backfill, run the smoke ingest:
+
+```bash
+bash scripts/smoke-cve-intel.sh
+```
+
+This performs a small CPE/CVE update and targeted sidecar source ingests to validate the pipeline quickly.

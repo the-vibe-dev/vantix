@@ -44,6 +44,11 @@ class Settings:
     cve_mcp_stateless: bool
     cve_mcp_require_token: bool
     cve_mcp_allowed_origins: list[str]
+    enable_vantix_mcp: bool
+    vantix_mcp_path: str
+    source_allowed_roots: list[Path]
+    source_upload_max_mb: int
+    source_upload_ttl_hours: int
     enable_write_execution: bool
     enable_codex_execution: bool
     enable_script_execution: bool
@@ -102,6 +107,11 @@ settings = Settings(
         "SECOPS_CVE_MCP_ALLOWED_ORIGINS",
         ["http://localhost", "http://127.0.0.1"],
     ),
+    enable_vantix_mcp=_env_bool("SECOPS_ENABLE_VANTIX_MCP", default=False),
+    vantix_mcp_path=os.getenv("SECOPS_VANTIX_MCP_PATH", "/mcp/vantix"),
+    source_allowed_roots=[Path(value).expanduser().resolve() for value in _env_list("SECOPS_SOURCE_ALLOWED_ROOTS", [str(repo_root)])],
+    source_upload_max_mb=int(os.getenv("SECOPS_SOURCE_UPLOAD_MAX_MB", "500")),
+    source_upload_ttl_hours=int(os.getenv("SECOPS_SOURCE_UPLOAD_TTL_HOURS", "24")),
     enable_write_execution=_env_bool("SECOPS_ENABLE_WRITE_EXECUTION", default=True),
     enable_codex_execution=_env_bool("SECOPS_ENABLE_CODEX_EXECUTION", default=True),
     enable_script_execution=_env_bool("SECOPS_ENABLE_SCRIPT_EXECUTION", default=True),

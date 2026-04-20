@@ -109,6 +109,8 @@ class RunService:
     def _seed_default_tasks(self, run: WorkspaceRun) -> None:
         tasks = [
             ("context-bootstrap", "Assemble mode-specific Codex startup context and learning digest."),
+            ("source-intake", "Resolve source input (GitHub/local/upload) for white-box analysis."),
+            ("source-analysis", "Run source-level analysis and emit white-box findings."),
             ("learning-recall", "Recall relevant lessons across the whole system with mode-aware ranking."),
             ("recon-sidecar", "Dispatch the recon sidecar and persist its outcome."),
             ("cve-analysis", "Re-check CVEs based on configured or discovered services."),

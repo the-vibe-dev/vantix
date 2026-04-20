@@ -15,8 +15,22 @@ router = APIRouter(prefix="/api/v1/cve", tags=["cve"], dependencies=[Depends(req
 
 
 @router.get("/search", response_model=CVESearchResponse)
-def search_cves(vendor: str = Query(...), product: str = Query(...)) -> dict:
-    return CVESearchService().search(vendor=vendor, product=product)
+def search_cves(
+    vendor: str = Query(...),
+    product: str = Query(...),
+    live_on_miss: bool = Query(default=True),
+    source: list[str] | None = Query(default=None),
+    live_limit: int = Query(default=200, ge=1, le=1000),
+    always_search_external: bool = Query(default=False),
+) -> dict:
+    return CVESearchService().search(
+        vendor=vendor,
+        product=product,
+        live_on_miss=live_on_miss,
+        live_sources=source,
+        live_limit=live_limit,
+        always_search_external=always_search_external,
+    )
 
 
 @router.get("/intel")

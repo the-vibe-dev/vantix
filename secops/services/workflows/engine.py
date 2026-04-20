@@ -276,6 +276,7 @@ class WorkflowEngine:
         phase_run.completed_at = now
         phase_run.lease_expires_at = now
         phase_run.output_json = output or phase_run.output_json
+        phase_run.error_json = {}
 
         lease = db.get(WorkerLease, claim.lease_id)
         if lease is not None:
