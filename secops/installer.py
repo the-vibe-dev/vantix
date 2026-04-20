@@ -388,6 +388,25 @@ class Wizard:
         configured = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
         return bool(shutil.which(configured) or Path(configured).exists())
 
+    def _codex_main_help(self) -> str:
+        if not self.codex_available():
+            return ""
+        codex_bin = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
+        proc = self.run([codex_bin, "--help"])
+        return ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
+
+    def _codex_subcommand_supported(self, parts: list[str]) -> bool:
+        if not self.codex_available():
+            return False
+        codex_bin = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
+        proc = self.run([codex_bin, *parts, "--help"])
+        text = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
+        if proc.returncode == 0:
+            return True
+        if "unrecognized subcommand" in text or "unexpected argument" in text:
+            return False
+        return "usage:" in text
+
     def ensure_codex_cli(self) -> bool:
         if self.codex_available():
             print("    Codex CLI: available")
@@ -412,13 +431,26 @@ class Wizard:
         if not self.codex_available():
             return False
         codex_bin = self.env_updates.get("SECOPS_CODEX_BIN", "codex")
-        print("    Codex login: starting device auth flow")
-        proc = self.run_interactive([codex_bin, "--device-auth"], label="Sign in Codex CLI (device auth)")
-        if proc.returncode == 0:
-            return True
-        print("    [WARN] codex --device-auth failed, trying codex --login")
-        proc = self.run_interactive([codex_bin, "--login"], label="Sign in Codex CLI (fallback login)")
-        return proc.returncode == 0
+        help_text = self._codex_main_help()
+        candidates: list[tuple[list[str], str]] = []
+        if "--device-auth" in help_text:
+            candidates.append(([codex_bin, "--device-auth"], "Sign in Codex CLI (device auth)"))
+        if "--login" in help_text:
+            candidates.append(([codex_bin, "--login"], "Sign in Codex CLI (login flag)"))
+        if self._codex_subcommand_supported(["login"]):
+            candidates.append(([codex_bin, "login"], "Sign in Codex CLI (login command)"))
+        if self._codex_subcommand_supported(["auth", "login"]):
+            candidates.append(([codex_bin, "auth", "login"], "Sign in Codex CLI (auth login command)"))
+        if not candidates:
+            print("    [WARN] This Codex CLI build does not expose a known interactive login command.")
+            print("    [HINT] Either upgrade Codex CLI (`npm install -g @openai/codex`) or export OPENAI_API_KEY in .env.")
+            return False
+        for command, label in candidates:
+            proc = self.run_interactive(command, label=label)
+            if proc.returncode == 0:
+                return True
+        print("    [WARN] Codex login command attempts failed.")
+        return False
 
     def bootstrap_provider_runtime(self, provider_type: str) -> dict[str, Any]:
         provider = (provider_type or "").strip().lower()
@@ -453,11 +485,22 @@ class Wizard:
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         self.state = InstallerStateService(self.runtime_root)
         self.tool_service = ToolService(self.repo_root, self.runtime_root)
+        lan_mode = self.confirm("Expose API/UI on LAN (bind 0.0.0.0)", default=False)
+        default_api_host = "0.0.0.0" if lan_mode else self.env_updates.get("SECOPS_HOST", "127.0.0.1")
+        default_ui_host = "0.0.0.0" if lan_mode else self.env_updates.get("SECOPS_UI_HOST", "127.0.0.1")
+        api_host = self.prompt("API bind host", default_api_host)
+        api_port = self.prompt("API port", self.env_updates.get("SECOPS_PORT", "8787"))
+        ui_host = self.prompt("UI bind host", default_ui_host)
+        ui_port = self.prompt("UI port", self.env_updates.get("SECOPS_UI_PORT", "4173"))
         self.env_updates.update(
             {
                 "SECOPS_REPO_ROOT": str(self.repo_root),
                 "SECOPS_RUNTIME_ROOT": str(self.runtime_root),
                 "SECOPS_REPORTS_ROOT": str(self.runtime_root / "reports"),
+                "SECOPS_HOST": api_host,
+                "SECOPS_PORT": api_port,
+                "SECOPS_UI_HOST": ui_host,
+                "SECOPS_UI_PORT": ui_port,
                 "SECOPS_API_TOKEN": self.env_updates.get("SECOPS_API_TOKEN") or secrets.token_urlsafe(24),
                 "SECOPS_CODEX_BIN": self.env_updates.get("SECOPS_CODEX_BIN") or "codex",
                 "SECOPS_ENABLE_SCRIPT_EXECUTION": "true",
