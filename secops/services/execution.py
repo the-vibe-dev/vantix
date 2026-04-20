@@ -33,6 +33,8 @@ from secops.services.context_builder import ContextBuilder
 from secops.services.browser_runtime import BrowserRuntimeService
 from secops.services.cve_search import CVESearchService
 from secops.services.events import RunEventService
+from secops.services.exploit_validation import ExploitValidationService
+from secops.services.fingerprint import fingerprint_from_meta
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 from secops.services.policies import ExecutionPolicyService
@@ -1889,7 +1891,53 @@ class ExecutionManager:
                         reason="codex-failure",
                     )
                 db.add(Artifact(run_id=run.id, kind="terminal-log", path=str(log_path), metadata_json={"agent_session_id": session.id}))
+                if result.returncode == 0:
+                    self._sweep_orchestrator_vectors(db, run, session_started_at=session.started_at)
                 db.commit()
+
+    def _sweep_orchestrator_vectors(self, db, run: WorkspaceRun, *, session_started_at) -> None:
+        """Post-orchestrate: fingerprint vectors and replay any with a validation spec.
+
+        Vectors without a `replay` spec in their metadata stay kind=vector but
+        validated=False, so they will not promote when SECOPS_REQUIRE_VALIDATED_PROMOTION
+        is enabled. Vectors with a spec are replayed via ExploitValidationService,
+        which marks validated=True on success or writes a negative_evidence Fact
+        with a matching fingerprint on failure.
+        """
+        cutoff = session_started_at
+        q = (
+            db.query(Fact)
+            .filter(
+                Fact.run_id == run.id,
+                Fact.kind.in_(["vector", "vector_hypothesis"]),
+            )
+        )
+        if cutoff is not None:
+            q = q.filter(Fact.created_at >= cutoff)
+        vectors = q.all()
+        if not vectors:
+            return
+        validator = ExploitValidationService()
+        for fact in vectors:
+            meta = dict(fact.metadata_json or {})
+            if not fact.fingerprint:
+                fact.fingerprint = fingerprint_from_meta(meta, fact_kind=fact.kind)
+            replay = meta.get("replay")
+            if not (isinstance(replay, dict) and replay.get("type") == "http"):
+                continue
+            if fact.validated:
+                continue
+            try:
+                validator.validate_vector(db, run, fact)
+            except Exception as exc:  # noqa: BLE001
+                self.events.emit(
+                    db,
+                    run.id,
+                    "terminal",
+                    f"Exploit validation raised for fact {fact.id[:8]}: {exc}",
+                    level="warning",
+                )
+        db.flush()
 
     def _phase_learn_ingest(self, run_id: str) -> None:
         with SessionLocal() as db:
