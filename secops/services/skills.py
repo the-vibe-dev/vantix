@@ -300,8 +300,10 @@ class SkillSelector:
     def select(self, run: WorkspaceRun, role: str, facts: list[Fact] | None = None) -> list[dict[str, Any]]:
         facts = facts or []
         selected: dict[str, str] = {}
+        role_forced: set[str] = set()
         for skill_id in ROLE_DEFAULTS.get(role, []):
             selected[skill_id] = f"default for {role}"
+            role_forced.add(skill_id)
         for skill_id in MODE_DEFAULTS.get(run.mode, []):
             selected.setdefault(skill_id, f"mode {run.mode}")
         haystack = " ".join([run.mode, run.objective or "", run.target or "", *[fact.kind + " " + fact.value for fact in facts]]).lower()
@@ -313,7 +315,7 @@ class SkillSelector:
             pack = self.registry.get(skill_id)
             if pack is None:
                 continue
-            if run.mode not in pack.modes and role not in pack.roles:
+            if skill_id not in role_forced and run.mode not in pack.modes and role not in pack.roles:
                 continue
             out.append(pack.public(reason=reason))
         return sorted(out, key=lambda item: item["id"])

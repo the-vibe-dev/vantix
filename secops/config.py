@@ -71,7 +71,7 @@ default_database_url = f"sqlite+pysqlite:///{runtime_root / 'secops.db'}"
 settings = Settings(
     repo_root=repo_root,
     runtime_root=runtime_root,
-    database_url=os.getenv("SECOPS_DATABASE_URL", default_database_url),
+    database_url=os.getenv("SECOPS_DATABASE_URL") or default_database_url,
     api_token=os.getenv("SECOPS_API_TOKEN", ""),
     secret_key=os.getenv("VANTIX_SECRET_KEY", os.getenv("SECOPS_SECRET_KEY", "")),
     codex_bin=os.getenv("SECOPS_CODEX_BIN", "codex"),
@@ -87,7 +87,9 @@ settings = Settings(
     reports_root=Path(os.getenv("SECOPS_REPORTS_ROOT", os.getenv("SECOPS_ARTIFACTS_ROOT", str(runtime_root / "reports")))),
     shared_root=Path(os.getenv("SECOPS_SHARED_ROOT", str(runtime_root))),
     frontend_root=Path(os.getenv("SECOPS_FRONTEND_ROOT", str(repo_root / "frontend"))),
-    skills_root=Path(os.getenv("VANTIX_SKILLS_ROOT", os.getenv("SECOPS_SKILLS_ROOT", str(repo_root / "agent_skills")))),
+    skills_root=Path(
+        os.getenv("VANTIX_SKILLS_ROOT") or os.getenv("SECOPS_SKILLS_ROOT") or str(repo_root / "agent_skills")
+    ),
     validation_benchmarks_root=Path(
         os.getenv("SECOPS_VALIDATION_BENCHMARKS_ROOT", str(repo_root / "tools" / "validation-benchmarks"))
     ),

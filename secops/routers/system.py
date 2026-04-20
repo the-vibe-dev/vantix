@@ -61,32 +61,65 @@ def _git_status(repo_root: Path) -> dict:
 
 @router.get("/status", response_model=SystemStatusRead)
 def system_status(db: Session = Depends(get_db)) -> dict:
-    runner = CodexRunner(workspace_dir=settings.runtime_root / "status" / "codex")
-    codex_path = runner.resolve_binary()
+    codex_path = ""
+    codex_available = False
+    codex_probe_error = ""
+    try:
+        runner = CodexRunner(workspace_dir=settings.runtime_root / "status" / "codex")
+        codex_path = runner.resolve_binary() or ""
+        codex_available = bool(codex_path)
+    except OSError as exc:
+        codex_probe_error = f"{exc.strerror or 'filesystem error'} ({exc.errno})"
+
     runtime_ok = _writable(settings.runtime_root)
     artifacts_root = Path(settings.reports_root)
     artifacts_ok = _writable(artifacts_root)
     memory = MemoryWriteService().health(stale_minutes=120)
-    provider_count = db.query(ProviderConfig).count()
+    provider_count = 0
+    db_probe_error = ""
+    try:
+        provider_count = db.query(ProviderConfig).count()
+    except Exception as exc:
+        db_probe_error = str(exc)
     installer_service = InstallerStateService()
     installer_state = installer_service.read()
     git = _git_status(settings.repo_root)
     tool_service = ToolService()
-    tool_statuses = tool_service.list_tools()
+    tool_statuses: list[dict] = []
+    tool_probe_error = ""
+    try:
+        tool_statuses = tool_service.list_tools(include_version=False)
+    except Exception as exc:
+        tool_probe_error = str(exc)
+
     installed_tools = sum(1 for row in tool_statuses if row.get("installed"))
-    workers = db.query(WorkerRuntimeStatus).order_by(WorkerRuntimeStatus.heartbeat_at.desc()).limit(10).all()
+    workers: list[WorkerRuntimeStatus] = []
+    workers_probe_error = ""
+    try:
+        workers = db.query(WorkerRuntimeStatus).order_by(WorkerRuntimeStatus.heartbeat_at.desc()).limit(10).all()
+    except Exception as exc:
+        workers_probe_error = str(exc)
+
     warnings: list[str] = []
-    if not codex_path:
+    if not codex_available:
         warnings.append("Codex binary is not available on PATH or SECOPS_CODEX_BIN")
+    if codex_probe_error:
+        warnings.append(f"Codex workspace probe failed: {codex_probe_error}")
     if not settings.enable_codex_execution:
         warnings.append("Codex execution is disabled")
     if not runtime_ok:
         warnings.append("Runtime root is not writable")
+    if tool_probe_error:
+        warnings.append(f"Tool probe failed: {tool_probe_error}")
+    if db_probe_error:
+        warnings.append(f"Database probe failed: {db_probe_error}")
+    if workers_probe_error:
+        warnings.append(f"Worker status probe failed: {workers_probe_error}")
     return {
         "product": "Vantix",
         "version": "0.1.0",
         "default_runtime": "codex",
-        "codex": {"configured_bin": settings.codex_bin, "available": bool(codex_path), "path": codex_path or ""},
+        "codex": {"configured_bin": settings.codex_bin, "available": codex_available, "path": codex_path},
         "execution": {
             "codex_enabled": settings.enable_codex_execution,
             "script_enabled": settings.enable_script_execution,

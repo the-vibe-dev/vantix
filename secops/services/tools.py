@@ -128,7 +128,14 @@ class ToolService:
                 out[tool_id] = row
         return out
 
-    def tool_status(self, tool: ToolDefinition) -> dict[str, Any]:
+    def tool_status(
+        self,
+        tool: ToolDefinition,
+        *,
+        include_version: bool = True,
+        os_info: dict[str, Any] | None = None,
+        last_history: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         found_path = None
         found_binary = ""
         for binary in tool.binaries:
@@ -136,11 +143,12 @@ class ToolService:
             if found_path:
                 found_binary = binary
                 break
-        os_info = self.os_info()
+        os_info = os_info or self.os_info()
         install = tool.install or {}
         method = str(install.get("method", ""))
         installable = os_info["debian_family"] and tool.allow_auto_install and method in {"apt", "go", "pipx"}
-        last = self._last_history().get(tool.id, {})
+        history = last_history if last_history is not None else self._last_history()
+        last = history.get(tool.id, {})
         return {
             "id": tool.id,
             "name": tool.name,
@@ -150,15 +158,20 @@ class ToolService:
             "installed": bool(found_path),
             "binary": found_binary,
             "path": found_path or "",
-            "version": self._binary_version(found_path) if found_path else "",
+            "version": self._binary_version(found_path) if include_version and found_path else "",
             "installable": installable,
             "allow_auto_install": tool.allow_auto_install,
             "last_result": last,
         }
 
-    def list_tools(self, suite: str | None = None) -> list[dict[str, Any]]:
+    def list_tools(self, suite: str | None = None, *, include_version: bool = True) -> list[dict[str, Any]]:
         tools = self.registry.resolve_suite(suite) if suite else self.registry.all()
-        return [self.tool_status(tool) for tool in tools]
+        os_info = self.os_info()
+        history = self._last_history()
+        return [
+            self.tool_status(tool, include_version=include_version, os_info=os_info, last_history=history)
+            for tool in tools
+        ]
 
     def suites(self) -> dict[str, Any]:
         return self.registry.suites()

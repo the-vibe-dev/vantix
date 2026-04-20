@@ -18,6 +18,7 @@ from secops.services.skills import SkillApplicationService
 from secops.services.storage import StorageLayout
 
 TARGET_RE = re.compile(r"(?i)\b((?:https?://)?(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?|https?://[a-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+|[a-z0-9][a-z0-9.-]+\.[a-z]{2,})(?=\s|$|[,.;])")
+QUICK_SCAN_RE = re.compile(r"(?i)\bquick(?:\s|-)?scan\b")
 
 SPECIALIST_TASKS = [
     ("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."),
@@ -52,14 +53,23 @@ class VantixScheduler:
         self.phases = RunPhaseService()
 
     def bootstrap(self, db: Session, run: WorkspaceRun, *, reason: str = "chat") -> str:
-        self._seed_tasks(db, run)
-        self._seed_agents(db, run)
+        scan_profile = str((run.config_json or {}).get("scan_profile", "full")).lower()
+        quick_scan = scan_profile == "quick"
+        self._seed_tasks(db, run, quick_scan=quick_scan)
+        self._seed_agents(db, run, quick_scan=quick_scan)
         self._seed_initial_vector(db, run)
         self._set_agent_states(db, run, current_role="recon")
         self.phases.initialize(run, reason=reason)
         db.flush()
         self.skills.apply_to_run(db, run)
-        self._message(db, run.id, "orchestrator", "Vantix", self._orchestrator_summary(run, reason), {"reason": reason})
+        self._message(
+            db,
+            run.id,
+            "orchestrator",
+            "Vantix",
+            self._orchestrator_summary(run, reason, quick_scan=quick_scan),
+            {"reason": reason, "scan_profile": scan_profile},
+        )
         self.events.emit(db, run.id, "scheduler", "Vantix scheduler initialized", payload={"reason": reason, "roles": list(ROLE_NAMES)})
         self._write_memory(db, run, reason)
         return "scheduler-initialized"
@@ -79,11 +89,29 @@ class VantixScheduler:
         self._write_memory(db, run, reason)
         return "replan-queued"
 
-    def _seed_tasks(self, db: Session, run: WorkspaceRun) -> None:
+    def expand_after_quick_scan_approval(self, db: Session, run: WorkspaceRun) -> str:
+        self._seed_tasks(db, run, quick_scan=False)
+        self._seed_agents(db, run, quick_scan=False)
+        self.skills.apply_to_run(db, run)
+        self.events.emit(
+            db,
+            run.id,
+            "scheduler",
+            "Quick scan approved for full continuation",
+            payload={"scan_profile": (run.config_json or {}).get("scan_profile", "full")},
+        )
+        return "quick-scan-expanded"
+
+    def _seed_tasks(self, db: Session, run: WorkspaceRun, *, quick_scan: bool = False) -> None:
         existing = {task.kind: task for task in db.execute(select(Task).where(Task.run_id == run.id)).scalars().all()}
         max_sequence = max((task.sequence for task in existing.values()), default=0)
         next_sequence = max_sequence + 1
-        for kind, name, description in SPECIALIST_TASKS:
+        task_list = (
+            [("flow-initialization", "Orchestrator", "Normalize target, objective, scope, and run state."), ("vantix-recon", "Vantix Recon", "Collect low-noise service, port, and target facts.")]
+            if quick_scan
+            else SPECIALIST_TASKS
+        )
+        for kind, name, description in task_list:
             if kind in existing:
                 continue
             task = Task(
@@ -100,10 +128,12 @@ class VantixScheduler:
             db.add(Action(task_id=task.id, name=f"{name} work item", tool="vantix-scheduler", command="scheduler", status="planned"))
             next_sequence += 1
 
-    def _seed_agents(self, db: Session, run: WorkspaceRun) -> None:
+    def _seed_agents(self, db: Session, run: WorkspaceRun, *, quick_scan: bool = False) -> None:
         paths = self.storage.for_workspace(run.workspace_id)
         existing = {agent.role for agent in db.execute(select(AgentSession).where(AgentSession.run_id == run.id)).scalars().all()}
-        for role, name in ROLE_NAMES.items():
+        roles = ["orchestrator", "recon"] if quick_scan else list(ROLE_NAMES.keys())
+        for role in roles:
+            name = ROLE_NAMES[role]
             if role in existing:
                 continue
             db.add(
@@ -161,7 +191,12 @@ class VantixScheduler:
             )
         )
 
-    def _orchestrator_summary(self, run: WorkspaceRun, reason: str) -> str:
+    def _orchestrator_summary(self, run: WorkspaceRun, reason: str, *, quick_scan: bool = False) -> str:
+        if quick_scan:
+            return (
+                f"Vantix initialized from {reason}. Target `{run.target}` is queued for Recon-only quick scan. "
+                "You can continue with researcher/developer/executor/report flow after recon completes."
+            )
         return (
             f"Vantix initialized from {reason}. Target `{run.target}` is queued for Recon, Knowledge Base, "
             "Vector Store, Researcher, Developer, Executor, and Report specialist flow."
@@ -204,6 +239,7 @@ class VantixChatService:
             run = self.db.get(WorkspaceRun, run_id)
             if run is None:
                 raise ValueError(f"Run not found: {run_id}")
+            run.objective = content
             user_message = self._user_message(run.id, content, metadata or {})
             self.db.add(OperatorNote(run_id=run.id, content=content, author="operator", applies_to="chat"))
             status = self.scheduler.replan(self.db, run, reason="chat-guidance")
@@ -234,7 +270,11 @@ class VantixChatService:
             ports=[],
             services=[],
             tags=[resolved_mode, "vantix"],
-            config={"created_from": "chat", "scheduler": "vantix"},
+            config={
+                "created_from": "chat",
+                "scheduler": "vantix",
+                "scan_profile": "quick" if is_quick_scan_request(content) else "full",
+            },
         )
         user_message = self._user_message(run.id, content, metadata or {})
         status = self.scheduler.bootstrap(self.db, run, reason="chat")
@@ -253,6 +293,10 @@ class VantixChatService:
 def extract_target(message: str) -> str:
     match = TARGET_RE.search(message)
     return match.group(1).rstrip(".,;") if match else ""
+
+
+def is_quick_scan_request(message: str) -> bool:
+    return bool(QUICK_SCAN_RE.search(message or ""))
 
 
 def _vector_score(meta: dict[str, Any], confidence: float) -> float:

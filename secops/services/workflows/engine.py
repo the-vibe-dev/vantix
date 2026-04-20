@@ -68,7 +68,12 @@ class WorkflowEngine:
                 )
             db.flush()
         else:
-            if workflow.status in {WorkflowStatus.COMPLETED.value, WorkflowStatus.FAILED.value, WorkflowStatus.CANCELLED.value}:
+            if workflow.status in {
+                WorkflowStatus.BLOCKED.value,
+                WorkflowStatus.COMPLETED.value,
+                WorkflowStatus.FAILED.value,
+                WorkflowStatus.CANCELLED.value,
+            }:
                 workflow.status = WorkflowStatus.QUEUED.value
                 workflow.completed_at = None
             waiting = (
@@ -83,6 +88,18 @@ class WorkflowEngine:
             if waiting:
                 waiting.status = PhaseStatus.PENDING.value
                 workflow.current_phase = waiting.phase_name
+            else:
+                pending = (
+                    db.query(WorkflowPhaseRun)
+                    .filter(
+                        WorkflowPhaseRun.workflow_id == workflow.id,
+                        WorkflowPhaseRun.status.in_([PhaseStatus.PENDING.value, PhaseStatus.RETRYING.value]),
+                    )
+                    .order_by(WorkflowPhaseRun.created_at.asc())
+                    .first()
+                )
+                if pending:
+                    workflow.current_phase = pending.phase_name
 
         run.status = "queued"
         workflow.updated_at = utcnow()

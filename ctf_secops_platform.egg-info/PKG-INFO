@@ -15,6 +15,9 @@ Requires-Dist: mcp[cli]<2.0.0,>=1.0.0
 Requires-Dist: pyyaml<7.0.0,>=6.0.1
 Provides-Extra: dev
 Requires-Dist: pytest<9.0.0,>=8.2.0; extra == "dev"
+Requires-Dist: ruff<1.0.0,>=0.6.0; extra == "dev"
+Requires-Dist: mypy<2.0.0,>=1.10.0; extra == "dev"
+Requires-Dist: bandit<2.0.0,>=1.7.9; extra == "dev"
 
 # Vantix
 
@@ -41,7 +44,14 @@ Interactive installer:
 bash scripts/install-vantix.sh
 ```
 
-The installer bootstraps the Python environment, frontend dependencies, `.env`, runtime paths, optional provider records, local CVE/MCP deployment, and a selected host tool suite.
+The installer bootstraps the Python environment, frontend dependencies, `.env`, runtime paths, optional provider records, local CVE/MCP deployment, and a selected host tool suite. It prints embedded Vantix ASCII art, safety warnings, visible progress, and live command output for long-running steps. If the configured CVE API is already reachable, the installer reuses it instead of starting another local cve-search process.
+
+At the end of installation you can install and start user-level systemd services for the API and UI:
+
+```bash
+systemctl --user status vantix-api.service vantix-ui.service
+journalctl --user -u vantix-api.service -u vantix-ui.service -f
+```
 
 Updates are handled separately from installation. Install once, then update from GitHub with:
 
@@ -80,7 +90,7 @@ Open the UI and enter an authorized objective such as `Full test of 10.10.10.10`
 
 ## User Workflow
 
-1. Start managed services with `bash scripts/vantixctl.sh start`.
+1. Start the user systemd services selected during install, or start repo-local managed services with `bash scripts/vantixctl.sh start`.
 2. Or start the API/UI manually with `bash scripts/secops-api.sh` and `bash scripts/secops-ui.sh`.
 3. Open the UI and submit a scoped objective in Orchestrator Chat.
 4. Review Specialists, Skill Packs, Agent Handoff, Vectors, Memory, CVE Intel, and Results.
@@ -337,6 +347,8 @@ bash scripts/doctor.sh
 Service control:
 
 ```bash
+systemctl --user status vantix-api.service vantix-ui.service
+journalctl --user -u vantix-api.service -u vantix-ui.service -f
 bash scripts/vantixctl.sh status
 bash scripts/vantixctl.sh restart
 ```

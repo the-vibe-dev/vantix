@@ -1,0 +1,94 @@
+<svg width="1600" height="720" viewBox="0 0 1600 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="720" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#07090d"/>
+    <stop offset="1" stop-color="#0e1117"/>
+  </linearGradient>
+  <radialGradient id="redglow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1250 90) rotate(128.659) scale(520 720)">
+    <stop stop-color="#ff2a2a" stop-opacity="0.35"/>
+    <stop offset="1" stop-color="#ff2a2a" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="redglow2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(220 620) rotate(-41) scale(480 420)">
+    <stop stop-color="#ae0000" stop-opacity="0.4"/>
+    <stop offset="1" stop-color="#ae0000" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+    <stop stop-color="#ff4848"/>
+    <stop offset="1" stop-color="#a70000"/>
+  </linearGradient>
+  <filter id="blur"><feGaussianBlur stdDeviation="50"/></filter>
+</defs>
+<rect width="1600" height="720" rx="24" fill="url(#bg)"/>
+<rect width="1600" height="720" rx="24" fill="url(#redglow)"/>
+<rect width="1600" height="720" rx="24" fill="url(#redglow2)"/>
+<g opacity="0.12">
+  <path d="M0 120H1600" stroke="#ffffff"/>
+  <path d="M0 240H1600" stroke="#ffffff"/>
+  <path d="M0 360H1600" stroke="#ffffff"/>
+  <path d="M0 480H1600" stroke="#ffffff"/>
+  <path d="M0 600H1600" stroke="#ffffff"/>
+  <path d="M200 0V720" stroke="#ffffff"/>
+  <path d="M400 0V720" stroke="#ffffff"/>
+  <path d="M600 0V720" stroke="#ffffff"/>
+  <path d="M800 0V720" stroke="#ffffff"/>
+  <path d="M1000 0V720" stroke="#ffffff"/>
+  <path d="M1200 0V720" stroke="#ffffff"/>
+  <path d="M1400 0V720" stroke="#ffffff"/>
+</g>
+<rect x="64" y="70" width="640" height="580" rx="28" fill="#0b0d12" fill-opacity="0.82" stroke="rgba(255,255,255,0.14)"/>
+<text x="104" y="156" fill="#ffa5a5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="4">AUTONOMOUS OFFENSIVE SECURITY FRAMEWORK</text>
+<text x="100" y="292" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="112" font-weight="800" letter-spacing="2">VANTIX</text>
+<text x="104" y="350" fill="#d0d6de" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="500">Chat-first control plane for pentest, bug bounty,</text>
+<text x="104" y="394" fill="#d0d6de" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="500">CTF, KOTH, and long-horizon agent campaigns.</text>
+
+<g transform="translate(104 460)">
+  <rect x="0" y="0" width="176" height="48" rx="12" fill="url(#accent)"/>
+  <text x="88" y="31" fill="white" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">FASTAPI</text>
+  <rect x="190" y="0" width="182" height="48" rx="12" fill="#161b22" stroke="rgba(255,255,255,0.15)"/>
+  <text x="281" y="31" fill="#f0f6fc" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">REACT + VITE</text>
+  <rect x="386" y="0" width="180" height="48" rx="12" fill="#161b22" stroke="rgba(255,255,255,0.15)"/>
+  <text x="476" y="31" fill="#f0f6fc" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">MULTI-AGENT</text>
+</g>
+
+<g transform="translate(890 82)">
+  <rect x="0" y="0" width="620" height="556" rx="28" fill="#0b0d12" fill-opacity="0.72" stroke="rgba(255,255,255,0.14)"/>
+  <rect x="28" y="28" width="564" height="66" rx="16" fill="#11151c" stroke="rgba(255,255,255,0.08)"/>
+  <circle cx="58" cy="61" r="7" fill="#ff5f57"/>
+  <circle cx="82" cy="61" r="7" fill="#febc2e"/>
+  <circle cx="106" cy="61" r="7" fill="#28c840"/>
+  <text x="136" y="69" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">Operator Run Console</text>
+
+  <rect x="28" y="116" width="176" height="410" rx="18" fill="#10141a" stroke="rgba(255,255,255,0.08)"/>
+  <text x="52" y="151" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Recent Runs</text>
+  <rect x="48" y="172" width="136" height="64" rx="14" fill="#151b23"/>
+  <text x="62" y="198" fill="#ff7b72" font-family="monospace" font-size="14">pentest / running</text>
+  <text x="62" y="219" fill="#f0f6fc" font-family="monospace" font-size="14">ws-lab-01</text>
+  <rect x="48" y="250" width="136" height="64" rx="14" fill="#151b23"/>
+  <text x="62" y="276" fill="#d29922" font-family="monospace" font-size="14">ctf / active</text>
+  <text x="62" y="297" fill="#f0f6fc" font-family="monospace" font-size="14">flag-hunt</text>
+  <rect x="48" y="328" width="136" height="64" rx="14" fill="#151b23"/>
+  <text x="62" y="354" fill="#3fb950" font-family="monospace" font-size="14">bugbounty / done</text>
+  <text x="62" y="375" fill="#f0f6fc" font-family="monospace" font-size="14">webapp-prod</text>
+
+  <rect x="224" y="116" width="368" height="188" rx="18" fill="#10141a" stroke="rgba(255,255,255,0.08)"/>
+  <text x="248" y="151" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Orchestrator Chat</text>
+  <rect x="248" y="172" width="318" height="44" rx="14" fill="#1d1117" stroke="rgba(255,72,72,0.18)"/>
+  <text x="264" y="199" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="15">Assess https://target.local with low-noise validation.</text>
+  <rect x="272" y="228" width="294" height="50" rx="14" fill="#0d1117" stroke="rgba(255,255,255,0.08)"/>
+  <text x="288" y="257" fill="#c9d1d9" font-family="Arial, Helvetica, sans-serif" font-size="15">Recon started. Seeding vectors and research tasks.</text>
+
+  <rect x="224" y="322" width="176" height="204" rx="18" fill="#10141a" stroke="rgba(255,255,255,0.08)"/>
+  <text x="248" y="356" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Vectors</text>
+  <rect x="248" y="376" width="128" height="44" rx="12" fill="#151b23"/>
+  <text x="261" y="402" fill="#ff7b72" font-family="Arial, Helvetica, sans-serif" font-size="14">Login SQLi</text>
+  <rect x="248" y="430" width="128" height="44" rx="12" fill="#151b23"/>
+  <text x="261" y="456" fill="#f0883e" font-family="Arial, Helvetica, sans-serif" font-size="14">Auth bypass</text>
+
+  <rect x="416" y="322" width="176" height="204" rx="18" fill="#10141a" stroke="rgba(255,255,255,0.08)"/>
+  <text x="440" y="356" fill="#f0f6fc" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Results</text>
+  <text x="440" y="392" fill="#ff7b72" font-family="Arial, Helvetica, sans-serif" font-size="14">Critical: 1</text>
+  <text x="440" y="418" fill="#f0883e" font-family="Arial, Helvetica, sans-serif" font-size="14">High: 2</text>
+  <text x="440" y="444" fill="#3fb950" font-family="Arial, Helvetica, sans-serif" font-size="14">Artifacts: 9</text>
+  <text x="440" y="470" fill="#79c0ff" font-family="Arial, Helvetica, sans-serif" font-size="14">Report ready</text>
+</g>
+</svg>

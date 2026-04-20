@@ -34,6 +34,91 @@ log_file() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
 
+service_port() {
+  case "$1" in
+    api) printf '%s\n' "${SECOPS_PORT:-8787}" ;;
+    ui) printf '%s\n' "${SECOPS_UI_PORT:-4173}" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
+listening_pids_for_port() {
+  local port="$1"
+  if [[ -z "$port" ]]; then
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+    return 0
+  fi
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -n tcp "$port" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' || true
+    return 0
+  fi
+}
+
+cleanup_conflicting_listener() {
+  local name="$1" port pid cmdline
+  port="$(service_port "$name")"
+  [[ -n "$port" ]] || return 0
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if [[ -f "$(pid_file "$name")" ]] && [[ "$(cat "$(pid_file "$name")" 2>/dev/null || true)" == "$pid" ]]; then
+      continue
+    fi
+    cmdline="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    if [[ "$cmdline" == *"secops-api.sh"* ]] || [[ "$cmdline" == *"uvicorn secops.app:app"* ]] || [[ "$cmdline" == *"secops-ui.sh"* ]] || [[ "$cmdline" == *"vite"* ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+      for _ in $(seq 1 20); do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.1
+      done
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      fi
+      echo "[WARN] killed stale listener pid=$pid on port $port for $name"
+    else
+      echo "[ERR] port $port is in use by unmanaged pid=$pid ($cmdline)" >&2
+      return 1
+    fi
+  done < <(listening_pids_for_port "$port")
+}
+
+verify_started() {
+  local name="$1" pid log port
+  pid="$(service_pid "$name")"
+  log="$(log_file "$name")"
+  port="$(service_port "$name")"
+  local can_check_port=false
+  if command -v lsof >/dev/null 2>&1 || command -v fuser >/dev/null 2>&1; then
+    can_check_port=true
+  fi
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      break
+    fi
+    if grep -q "address already in use" "$log" 2>/dev/null; then
+      break
+    fi
+    if [[ "$can_check_port" == "false" ]]; then
+      echo "[OK] $name running pid=$pid log=$log"
+      return 0
+    fi
+    if [[ -n "$port" ]] && listening_pids_for_port "$port" | grep -qx "$pid"; then
+      echo "[OK] $name running pid=$pid port=$port log=$log"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "[ERR] failed to start $name pid=$pid log=$log" >&2
+  if [[ -f "$log" ]]; then
+    tail -n 40 "$log" >&2 || true
+  fi
+  return 1
+}
+
 is_running() {
   local file pid
   file="$(pid_file "$1")"
@@ -55,6 +140,7 @@ start_one() {
     echo "[OK] $name already running pid=$(service_pid "$name")"
     return 0
   fi
+  cleanup_conflicting_listener "$name"
   case "$name" in
     api)
       nohup bash "$ROOT_DIR/scripts/secops-api.sh" >"$(log_file api)" 2>&1 &
@@ -68,7 +154,7 @@ start_one() {
       ;;
   esac
   echo "$!" >"$(pid_file "$name")"
-  echo "[OK] started $name pid=$! log=$(log_file "$name")"
+  verify_started "$name"
 }
 
 stop_one() {

@@ -4,12 +4,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from secops.db import get_db
-from secops.models import ApprovalRequest
+from secops.models import ApprovalRequest, RunMessage, WorkspaceRun
 from secops.schemas import ApprovalDecision, ApprovalRead
 from secops.security import require_api_token
+from secops.services.events import RunEventService
+from secops.services.execution import execution_manager
+from secops.services.vantix import VantixScheduler
 
 
 router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"], dependencies=[Depends(require_api_token)])
+events = RunEventService()
+
+def _action_kind_from_reason(reason: str) -> str:
+    normalized = (reason or "").strip().lower()
+    if normalized.endswith("-policy"):
+        return normalized[:-7]
+    return ""
 
 
 @router.get("/{approval_id}", response_model=ApprovalRead)
@@ -27,8 +37,43 @@ def approve(approval_id: str, payload: ApprovalDecision, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Approval not found")
     approval.status = "approved"
     approval.response_note = payload.note
+    run = db.get(WorkspaceRun, approval.run_id)
+    if run is not None:
+        action_kind = _action_kind_from_reason(approval.reason)
+        if action_kind:
+            config = dict(run.config_json or {})
+            grants = dict(config.get("approval_grants") or {})
+            grants[action_kind] = int(grants.get(action_kind, 0) or 0) + 1
+            config["approval_grants"] = grants
+            run.config_json = config
+        if approval.reason == "quick-scan-gate":
+            config = dict(run.config_json or {})
+            config["scan_profile"] = "full"
+            config["quick_scan_gate_pending"] = False
+            run.config_json = config
+            VantixScheduler().expand_after_quick_scan_approval(db, run)
+        if run.status in {"blocked", "queued"}:
+            run.status = "queued"
+        db.add(
+            RunMessage(
+                run_id=approval.run_id,
+                role="system",
+                author="System",
+                content=f"Approval granted: {approval.title}. Resuming execution.",
+                metadata_json={"approval_id": approval.id, "approval_reason": approval.reason},
+            )
+        )
+        events.emit(
+            db,
+            approval.run_id,
+            "approval",
+            f"Approval granted: {approval.title}",
+            payload={"approval_id": approval.id, "reason": approval.reason},
+        )
     db.commit()
     db.refresh(approval)
+    if run is not None:
+        execution_manager.start(approval.run_id)
     return approval
 
 
@@ -39,6 +84,26 @@ def reject(approval_id: str, payload: ApprovalDecision, db: Session = Depends(ge
         raise HTTPException(status_code=404, detail="Approval not found")
     approval.status = "rejected"
     approval.response_note = payload.note
+    run = db.get(WorkspaceRun, approval.run_id)
+    if run is not None:
+        run.status = "blocked"
+        db.add(
+            RunMessage(
+                run_id=approval.run_id,
+                role="system",
+                author="System",
+                content=f"Approval rejected: {approval.title}. Run remains blocked.",
+                metadata_json={"approval_id": approval.id, "approval_reason": approval.reason},
+            )
+        )
+        events.emit(
+            db,
+            approval.run_id,
+            "approval",
+            f"Approval rejected: {approval.title}",
+            level="warning",
+            payload={"approval_id": approval.id, "reason": approval.reason},
+        )
     db.commit()
     db.refresh(approval)
     return approval

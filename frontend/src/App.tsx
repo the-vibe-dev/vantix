@@ -328,73 +328,9 @@ function Panel({
   );
 }
 
-// ─── Static lists / mocks ───────────────────────────────────────────────────
+// ─── Static lists ───────────────────────────────────────────────────────────
 const ROLES = ["orchestrator", "recon", "knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"];
 const MODES = ["pentest", "ctf", "koth", "bugbounty", "windows-ctf", "windows-koth"];
-
-const MOCK_RUNS: Run[] = [
-  {
-    id: "run_demo_1",
-    engagement_id: "eng_demo",
-    mode: "pentest",
-    workspace_id: "ws-demo-1",
-    status: "running",
-    target: "10.10.14.5",
-    objective: "Demo — full pentest engagement against a lab host.",
-    config: {},
-  },
-];
-const MOCK_MESSAGES: RunMessage[] = [
-  {
-    id: "m1",
-    run_id: "run_demo_1",
-    role: "user",
-    author: "Operator",
-    content: "Full test of 10.10.14.5 — webapp and infrastructure review.",
-    metadata: {},
-    created_at: "",
-  },
-  {
-    id: "m2",
-    run_id: "run_demo_1",
-    role: "orchestrator",
-    author: "Vantix",
-    content: "Acknowledged. Initialising recon phase and spawning specialist agents.",
-    metadata: {},
-    created_at: "",
-  },
-];
-const MOCK_PHASE: RunPhase = {
-  current: "recon",
-  completed: ["init"],
-  pending: ["exploit", "validate", "post-exploit", "report"],
-  updated_at: "",
-  reason: "Running in demo mode — connect the API to see live data.",
-  history: [],
-};
-const MOCK_VECTORS: Vector[] = [
-  {
-    id: "v1",
-    title: "Apache 2.4.49 Remote Code Execution (CVE-2021-41773)",
-    summary: "Unauthenticated RCE surfaced by the recon agent — mod_cgi enabled.",
-    source: "recon",
-    confidence: 0.96,
-    severity: "critical",
-    status: "queued",
-    evidence: "nmap + curl PoC confirmed",
-    next_action: "Execute mod_cgi RCE payload",
-    metadata: { business_impact: "Full server compromise." },
-    created_at: "",
-  },
-];
-const MOCK_APPROVALS: Approval[] = [];
-const MOCK_FINDINGS: Finding[] = [];
-const TERMINAL_LINES = [
-  "[*] Starting Nmap scan on demo target…",
-  "22/tcp    open  ssh      OpenSSH 8.2p1",
-  "80/tcp    open  http     Apache httpd 2.4.49",
-  "[+] Recon phase staged (demo mode).",
-];
 
 // ─── Risk calculation ───────────────────────────────────────────────────────
 function calcRisk(findings: Finding[]): { score: string; level: string; variant: Variant } | null {
@@ -413,12 +349,12 @@ function RiskBar({
   run,
   findings,
   phase,
-  demoMode,
+  connected,
 }: {
   run: Run | null;
   findings: Finding[];
   phase: RunPhase | null;
-  demoMode: boolean;
+  connected: boolean;
 }) {
   if (!run) return null;
   const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -529,7 +465,7 @@ function RiskBar({
         </span>
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-        {demoMode ? <Badge variant="amber">Demo Mode</Badge> : <Badge variant="ok">● Live API</Badge>}
+        {connected ? <Badge variant="ok">● Live API</Badge> : <Badge variant="danger">API Offline</Badge>}
       </div>
     </div>
   );
@@ -1148,7 +1084,7 @@ function VectorsPanel({
 // ─── CVE, Memory, Chains ────────────────────────────────────────────────────
 function CvePanel({ facts }: { facts: Fact[] }) {
   return (
-    <Panel title="Known Vulnerabilities" meta={`${facts.length} matched`}>
+    <Panel title="Intel Findings" meta={`${facts.length} items`}>
       {facts.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {facts.map((f, i) => (
@@ -1167,6 +1103,7 @@ function CvePanel({ facts }: { facts: Fact[] }) {
                 >
                   {f.value}
                 </span>
+                <Badge variant="default">{f.kind}</Badge>
                 <span style={{ fontSize: ".68rem", color: "#7a9e92" }}>
                   {Math.round(f.confidence * 100)}% match
                 </span>
@@ -1184,7 +1121,7 @@ function CvePanel({ facts }: { facts: Fact[] }) {
           ))}
         </div>
       ) : (
-        <EmptyState icon="⊙" text="No CVE matches yet." />
+        <EmptyState icon="⊙" text="No intel items yet." />
       )}
     </Panel>
   );
@@ -1563,13 +1500,13 @@ function NotesPanel({
 function ApiConfigPanel({
   apiToken,
   setApiTokenValue,
-  demoMode,
+  connected,
   onTest,
   testing,
 }: {
   apiToken: string;
   setApiTokenValue: (v: string) => void;
-  demoMode: boolean;
+  connected: boolean;
   onTest: () => void;
   testing: boolean;
 }) {
@@ -1599,7 +1536,7 @@ function ApiConfigPanel({
             <Btn size="sm" variant="primary" onClick={onTest} disabled={testing}>
               {testing ? "Testing…" : "Test Connection"}
             </Btn>
-            <Badge variant={demoMode ? "amber" : "ok"}>{demoMode ? "Demo Mode" : "Connected"}</Badge>
+            <Badge variant={connected ? "ok" : "danger"}>{connected ? "Connected" : "Disconnected"}</Badge>
           </div>
         </div>
         <div
@@ -1611,10 +1548,10 @@ function ApiConfigPanel({
           }}
         >
           <div style={{ fontSize: ".74rem", fontWeight: 600, color: "#e8f4ee", marginBottom: 8 }}>
-            About Demo Mode
+            API Access
           </div>
           <p style={{ margin: "0 0 8px", fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
-            When the backend cannot be reached, Vantix runs in Demo Mode using sample data so you can explore the UI.
+            Vantix now uses only live backend data. If the API is unavailable, actions and run data stay disabled.
           </p>
           <p style={{ margin: 0, fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
             Supply a token above (stored in browser local storage) and click Test Connection to talk to the live API.
@@ -1993,17 +1930,17 @@ type Tab = "overview" | "intel" | "results" | "config";
 
 export default function App() {
   const [apiToken, setApiTokenState] = useState(getApiToken());
-  const [demoMode, setDemoMode] = useState(true);
+  const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
 
-  const [runs, setRuns] = useState<Run[]>(MOCK_RUNS);
-  const [selectedRun, setSelectedRun] = useState<Run | null>(MOCK_RUNS[0]);
-  const [phase, setPhase] = useState<RunPhase | null>(MOCK_PHASE);
-  const [messages, setMessages] = useState<RunMessage[]>(MOCK_MESSAGES);
-  const [vectors, setVectors] = useState<Vector[]>(MOCK_VECTORS);
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [selectedRun, setSelectedRun] = useState<Run | null>(null);
+  const [phase, setPhase] = useState<RunPhase | null>(null);
+  const [messages, setMessages] = useState<RunMessage[]>([]);
+  const [vectors, setVectors] = useState<Vector[]>([]);
   const [facts, setFacts] = useState<Fact[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>(MOCK_APPROVALS);
-  const [findings, setFindings] = useState<Finding[]>(MOCK_FINDINGS);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [findings, setFindings] = useState<Finding[]>([]);
   const [results, setResults] = useState<RunResults | null>(null);
   const [chains, setChains] = useState<AttackChain[]>([]);
   const [skillApps, setSkillApps] = useState<RunSkillApplication[]>([]);
@@ -2036,11 +1973,11 @@ export default function App() {
     setTesting(true);
     try {
       await api.systemStatus();
-      setDemoMode(false);
+      setConnected(true);
       flash("Connected to live API");
-    } catch {
-      setDemoMode(true);
-      flash("Cannot reach API — running in demo mode");
+    } catch (error) {
+      setConnected(false);
+      flash(`Cannot reach API: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setTesting(false);
     }
@@ -2055,15 +1992,15 @@ export default function App() {
     try {
       const rows = await api.listRuns();
       setRuns(rows);
-    } catch {
-      // silent — demo mode
+    } catch (error) {
+      flash(`Run list failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, []);
+  }, [flash]);
 
   const refreshRun = useCallback(
     async (runId: string) => {
       try {
-        const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runChains] =
+        const [run, graph, runFacts, learningHits, runMessages, runVectors, runResults, runSkills, runChains, runTerminal] =
           await Promise.all([
             api.getRun(runId),
             api.getGraph(runId),
@@ -2074,6 +2011,7 @@ export default function App() {
             api.getResults(runId).catch(() => null as RunResults | null),
             api.getSkills(runId).catch(() => [] as RunSkillApplication[]),
             api.getAttackChains(runId).catch(() => [] as AttackChain[]),
+            api.getTerminal(runId).catch(() => ({ run_id: runId, content: "" })),
           ]);
         setSelectedRun(run);
         setPhase(graph.phase);
@@ -2088,6 +2026,9 @@ export default function App() {
         setFindings(runResults?.findings || []);
         setSkillApps(runSkills);
         setChains(runChains);
+        if (runTerminal?.content) {
+          setTermLines(runTerminal.content.split("\n"));
+        }
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) {
           setSelectedRun(null);
@@ -2101,19 +2042,19 @@ export default function App() {
     [flash, refreshRuns],
   );
 
-  // Load run list + select first when switching out of demo mode
+  // Load run list when connected
   useEffect(() => {
-    if (demoMode) return;
+    if (!connected) return;
     (async () => {
       await refreshRuns();
     })();
-  }, [demoMode, refreshRuns]);
+  }, [connected, refreshRuns]);
 
   // Watch selected run; poll / stream while in live mode
   useEffect(() => {
     streamRef.current?.close();
     streamRef.current = null;
-    if (demoMode || !selectedRun) return;
+    if (!connected || !selectedRun) return;
     refreshRun(selectedRun.id);
     if (apiToken) {
       const interval = window.setInterval(() => refreshRun(selectedRun.id), 3000);
@@ -2142,32 +2083,16 @@ export default function App() {
     } catch {
       // EventSource unavailable — silent
     }
-  }, [demoMode, selectedRun?.id, apiToken, refreshRun]);
+  }, [connected, selectedRun?.id, apiToken, refreshRun]);
 
   // Live terminal text from results summary (fallback) when in live mode with no stream
   useEffect(() => {
-    if (demoMode) return;
+    if (!connected) return;
     const summary = results?.terminal_summary;
     if (summary && streamRef.current === null) {
       setTermLines(summary.split("\n"));
     }
-  }, [demoMode, results?.terminal_summary]);
-
-  // Demo mode streams the canned terminal lines
-  useEffect(() => {
-    if (!demoMode) return;
-    setTermLines([]);
-    let i = 0;
-    const id = window.setInterval(() => {
-      if (i < TERMINAL_LINES.length) {
-        setTermLines((l) => [...l, TERMINAL_LINES[i]]);
-        i++;
-      } else {
-        window.clearInterval(id);
-      }
-    }, 250);
-    return () => window.clearInterval(id);
-  }, [demoMode]);
+  }, [connected, results?.terminal_summary]);
 
   async function handleSend(event: FormEvent) {
     event.preventDefault();
@@ -2184,25 +2109,6 @@ export default function App() {
       created_at: "",
     };
     setMessages((m) => [...m, userMsg]);
-    if (demoMode) {
-      window.setTimeout(
-        () =>
-          setMessages((m) => [
-            ...m,
-            {
-              id: `m${Date.now() + 1}`,
-              run_id: selectedRun?.id || "",
-              role: "orchestrator",
-              author: "Vantix",
-              content: `Received: "${txt}". Connect the API in the Config tab to dispatch a real engagement.`,
-              metadata: {},
-              created_at: "",
-            },
-          ]),
-        700,
-      );
-      return;
-    }
     setChatLoading(true);
     try {
       const res = await api.submitChat({
@@ -2234,33 +2140,29 @@ export default function App() {
   }
 
   async function handleApprove(a: Approval) {
-    if (!demoMode) {
-      try {
-        await api.approve(a.id);
-      } catch (error) {
-        flash(`Approve failed: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      if (selectedRun) refreshRun(selectedRun.id);
+    try {
+      await api.approve(a.id);
+    } catch (error) {
+      flash(`Approve failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
+    if (selectedRun) refreshRun(selectedRun.id);
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "approved" } : x)));
     flash(`Approved: ${a.title}`);
   }
   async function handleReject(a: Approval) {
-    if (!demoMode) {
-      try {
-        await api.reject(a.id);
-      } catch (error) {
-        flash(`Reject failed: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      if (selectedRun) refreshRun(selectedRun.id);
+    try {
+      await api.reject(a.id);
+    } catch (error) {
+      flash(`Reject failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
+    if (selectedRun) refreshRun(selectedRun.id);
     setApprovals((ap) => ap.map((x) => (x.id === a.id ? { ...x, status: "rejected" } : x)));
     flash(`Rejected: ${a.title}`);
   }
   async function handleSelectVector(v: Vector) {
-    if (!demoMode && selectedRun) {
+    if (selectedRun) {
       try {
         await api.selectVector(selectedRun.id, v.id);
       } catch (error) {
@@ -2274,48 +2176,40 @@ export default function App() {
   }
   async function handlePromoteVector(v: Vector) {
     if (!selectedRun) return;
-    if (!demoMode) {
-      try {
-        await api.promoteFinding(selectedRun.id, {
-          source_kind: "vector",
-          source_id: v.id,
-          title: v.title,
-          severity: v.severity,
-          summary: v.summary,
-          evidence: v.evidence,
-        });
-      } catch (error) {
-        flash(`Promote failed: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      refreshRun(selectedRun.id);
+    try {
+      await api.promoteFinding(selectedRun.id, {
+        source_kind: "vector",
+        source_id: v.id,
+        title: v.title,
+        severity: v.severity,
+        summary: v.summary,
+        evidence: v.evidence,
+      });
+    } catch (error) {
+      flash(`Promote failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
+    refreshRun(selectedRun.id);
     flash(`Promoted: ${v.title}`);
   }
   async function handlePromoteChain(c: AttackChain) {
     if (!selectedRun) return;
-    if (!demoMode) {
-      try {
-        await api.promoteFinding(selectedRun.id, {
-          source_kind: "attack_chain",
-          source_id: c.id,
-          title: c.name,
-          evidence: c.notes,
-        });
-      } catch (error) {
-        flash(`Promote failed: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      refreshRun(selectedRun.id);
+    try {
+      await api.promoteFinding(selectedRun.id, {
+        source_kind: "attack_chain",
+        source_id: c.id,
+        title: c.name,
+        evidence: c.notes,
+      });
+    } catch (error) {
+      flash(`Promote failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
+    refreshRun(selectedRun.id);
     flash(`Chain promoted: ${c.name}`);
   }
   async function handleApplySkills() {
     if (!selectedRun) return;
-    if (demoMode) {
-      flash("Skills reapplied (demo)");
-      return;
-    }
     try {
       await api.applySkills(selectedRun.id);
       refreshRun(selectedRun.id);
@@ -2326,13 +2220,11 @@ export default function App() {
   }
   async function handleSaveNote() {
     if (!selectedRun || !note.trim()) return;
-    if (!demoMode) {
-      try {
-        await api.addNote(selectedRun.id, note);
-      } catch (error) {
-        flash(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
+    try {
+      await api.addNote(selectedRun.id, note);
+    } catch (error) {
+      flash(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
     setNote("");
     flash("Note saved");
@@ -2340,11 +2232,10 @@ export default function App() {
 
   function handleSelectRun(run: Run) {
     setSelectedRun(run);
-    if (demoMode) return;
     refreshRun(run.id);
   }
 
-  const cveFacts = useMemo(() => facts.filter((f) => f.kind === "cve"), [facts]);
+  const cveFacts = useMemo(() => facts.filter((f) => ["cve", "port", "service"].includes(f.kind)), [facts]);
 
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: "overview", label: "Overview" },
@@ -2356,12 +2247,8 @@ export default function App() {
   async function runAction(action: "pause" | "retry" | "replan" | "cancel" | "refresh") {
     if (!selectedRun) return;
     if (action === "refresh") {
-      if (!demoMode) refreshRun(selectedRun.id);
+      refreshRun(selectedRun.id);
       flash("Refreshed");
-      return;
-    }
-    if (demoMode) {
-      flash(`${action} (demo)`);
       return;
     }
     try {
@@ -2398,7 +2285,7 @@ export default function App() {
           onReplan={() => runAction("replan")}
           onCancel={() => runAction("cancel")}
         />
-        <RiskBar run={selectedRun} findings={findings} phase={phase} demoMode={demoMode} />
+        <RiskBar run={selectedRun} findings={findings} phase={phase} connected={connected} />
         <PendingApprovalsBanner approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
 
         <div className="vx-tabs">
@@ -2462,7 +2349,7 @@ export default function App() {
             <ApiConfigPanel
               apiToken={apiToken}
               setApiTokenValue={setApiTokenValue}
-              demoMode={demoMode}
+              connected={connected}
               onTest={testConnection}
               testing={testing}
             />

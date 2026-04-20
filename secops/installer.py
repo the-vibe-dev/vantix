@@ -483,6 +483,9 @@ class Wizard:
         runtime = self.prompt("Runtime root", default_runtime)
         self.runtime_root = Path(runtime).expanduser().resolve()
         self.runtime_root.mkdir(parents=True, exist_ok=True)
+        reports_root = self.runtime_root / "reports"
+        reports_root.mkdir(parents=True, exist_ok=True)
+        database_url = f"sqlite+pysqlite:///{self.runtime_root / 'secops.db'}"
         self.state = InstallerStateService(self.runtime_root)
         self.tool_service = ToolService(self.repo_root, self.runtime_root)
         lan_mode = self.confirm("Expose API/UI on LAN (bind 0.0.0.0)", default=False)
@@ -496,17 +499,33 @@ class Wizard:
             {
                 "SECOPS_REPO_ROOT": str(self.repo_root),
                 "SECOPS_RUNTIME_ROOT": str(self.runtime_root),
-                "SECOPS_REPORTS_ROOT": str(self.runtime_root / "reports"),
+                "SECOPS_REPORTS_ROOT": str(reports_root),
                 "SECOPS_HOST": api_host,
                 "SECOPS_PORT": api_port,
                 "SECOPS_UI_HOST": ui_host,
                 "SECOPS_UI_PORT": ui_port,
+                "SECOPS_DATABASE_URL": database_url,
+                "VANTIX_SKILLS_ROOT": str(self.repo_root / "agent_skills"),
                 "SECOPS_API_TOKEN": self.env_updates.get("SECOPS_API_TOKEN") or secrets.token_urlsafe(24),
                 "SECOPS_CODEX_BIN": self.env_updates.get("SECOPS_CODEX_BIN") or "codex",
                 "SECOPS_ENABLE_SCRIPT_EXECUTION": "true",
                 "SECOPS_ENABLE_WRITE_EXECUTION": "true",
             }
         )
+
+    def bootstrap_database(self) -> None:
+        code = (
+            "from pathlib import Path;"
+            "from secops.config import settings;"
+            "from secops.db import Base, engine;"
+            "Path(settings.runtime_root).mkdir(parents=True, exist_ok=True);"
+            "Path(settings.reports_root).mkdir(parents=True, exist_ok=True);"
+            "Base.metadata.create_all(bind=engine);"
+            "print('ok')"
+        )
+        proc = self._repo_python(code)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "Database bootstrap failed").strip())
 
     def configure_provider_flow(self) -> dict[str, Any]:
         codex_ok = self.ensure_codex_cli()
@@ -801,6 +820,7 @@ class Wizard:
         self.write_env()
         self.section("Backend environment", "Installing Python dependencies and the editable backend package.")
         self.ensure_backend()
+        self.bootstrap_database()
         self.section("Web UI", "Installing frontend dependencies and optionally building the static UI.")
         frontend = self.ensure_frontend(build=self.confirm("Build the static Web UI now", default=True))
         self.section("Runtime provider", "Checking Codex and optional model provider configuration.")

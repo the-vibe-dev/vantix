@@ -235,6 +235,87 @@ def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
         object.__setattr__(settings, "enable_script_execution", old_script)
 
 
+def test_vantix_quick_scan_starts_recon_only_and_approval_resumes() -> None:
+    reset_db()
+    old_codex = settings.enable_codex_execution
+    old_script = settings.enable_script_execution
+    object.__setattr__(settings, "enable_codex_execution", False)
+    object.__setattr__(settings, "enable_script_execution", True)
+    client = TestClient(create_app())
+
+    try:
+        response = client.post("/api/v1/chat", json={"message": "Run a quick scan on 10.10.10.10", "mode": "pentest"})
+        assert response.status_code == 200
+        payload = response.json()
+        run_id = payload["run"]["id"]
+        assert payload["run"]["config"]["scan_profile"] == "quick"
+        messages = client.get(f"/api/v1/runs/{run_id}/messages")
+        assert messages.status_code == 200
+        assert "Recon-only quick scan" in messages.json()[-1]["content"]
+
+        approvals = []
+        for _ in range(80):
+            time.sleep(0.2)
+            graph = client.get(f"/api/v1/runs/{run_id}/graph")
+            assert graph.status_code == 200
+            gp = graph.json()
+            approvals = gp["approvals"]
+            if any(item["reason"] == "recon_high_noise-policy" and item["status"] == "pending" for item in approvals):
+                break
+        recon_gate = next(item for item in approvals if item["reason"] == "recon_high_noise-policy")
+        approved = client.post(f"/api/v1/approvals/{recon_gate['id']}/approve", json={"note": "continue"})
+        assert approved.status_code == 200
+
+        quick_gate_id = ""
+        for _ in range(120):
+            time.sleep(0.2)
+            graph = client.get(f"/api/v1/runs/{run_id}")
+            assert graph.status_code == 200
+            run_payload = graph.json()
+            approvals = client.get(f"/api/v1/runs/{run_id}/approvals").json()
+            recon_pending = [item for item in approvals if item["reason"] == "recon_high_noise-policy" and item["status"] == "pending"]
+            if recon_pending:
+                raise AssertionError("recon_high_noise-policy approval re-prompted after approval")
+            quick_pending = [item for item in approvals if item["reason"] == "quick-scan-gate" and item["status"] == "pending"]
+            if quick_pending:
+                quick_gate_id = quick_pending[0]["id"]
+                break
+            if run_payload["status"] in {"blocked", "failed", "cancelled"}:
+                # keep polling while workflow moves to quick scan gate
+                pass
+        assert quick_gate_id
+        approved_quick = client.post(f"/api/v1/approvals/{quick_gate_id}/approve", json={"note": "continue to full flow"})
+        assert approved_quick.status_code == 200
+
+        for _ in range(80):
+            time.sleep(0.2)
+            run_payload = client.get(f"/api/v1/runs/{run_id}").json()
+            if run_payload["config"].get("scan_profile") == "full":
+                break
+        graph_after_quick = client.get(f"/api/v1/runs/{run_id}/graph")
+        assert graph_after_quick.status_code == 200
+        roles = {agent["role"] for agent in graph_after_quick.json()["agents"]}
+        assert {"knowledge_base", "vector_store", "researcher", "developer", "executor", "reporter"} <= roles
+        assert "research" not in roles
+
+        skills = client.get(f"/api/v1/runs/{run_id}/skills")
+        assert skills.status_code == 200
+        payload = skills.json()
+        skills_by_role = {item["agent_role"]: item["skills"] for item in payload}
+        assert len(skills_by_role.get("orchestrator", [])) > 0
+        assert len(skills_by_role.get("knowledge_base", [])) > 0
+        assert len(skills_by_role.get("researcher", [])) > 0
+
+        terminal = client.get(f"/api/v1/runs/{run_id}/terminal")
+        assert terminal.status_code == 200
+        content = terminal.json()["content"]
+        assert "[recon] starting:" in content
+        assert "[recon] blocked by policy:" in content
+    finally:
+        object.__setattr__(settings, "enable_codex_execution", old_codex)
+        object.__setattr__(settings, "enable_script_execution", old_script)
+
+
 def test_vantix_chat_requires_target_for_new_run_and_appends_existing_run() -> None:
     reset_db()
     old_codex = settings.enable_codex_execution

@@ -1,38 +1,354 @@
-# Vantix
+<p align="center">
+  <img src="./assets/banner.svg" alt="VANTIX banner" width="100%">
+</p>
 
-Vantix is a Codex-native offensive-security control plane for authorized CTF, King-of-the-Hill, pentest, bug bounty, CVE-intel, and learning-memory workflows. It runs from a normal user-owned clone directory, stores runtime state under the user profile by default, and does not require NFS, root-owned mounts, or private infrastructure.
+<h1 align="center">VANTIX</h1>
 
-## Core Capabilities
+<p align="center">
+  <strong>Autonomous Offensive Security Framework</strong><br>
+  Chat-first control plane for pentest, bug bounty, CTF, KOTH, and long-horizon agent campaigns.
+</p>
 
-- Chat-first Vantix orchestrator for starting or continuing target-scoped runs.
-- Specialist scheduler state for Recon, Knowledge Base, Vector Store, Researcher, Developer, Executor, and Reporter roles.
-- FastAPI backend with run state, messages, approvals, artifacts, vectors, facts, memory, CVE, provider settings, benchmarks, and SSE stream endpoints.
-- React/Vite UI with orchestrator chat, run sidebar, terminal stream, specialist timeline, target context, vector panel, memory/CVE panels, approvals, results, and runtime settings.
-- Repo-local skill packs that compact agent prompts by role, mode, and run context.
-- Agent handoff and attack-chain APIs for reviewable machine-readable state transfer.
-- Dense autosaved memory records for compact session continuity and learning ingestion.
-- Local CVE and vulnerability-intel cache with optional MCP server exposure.
-- Optional provider records for future model routing; Codex OAuth/runtime remains the default execution mechanism.
-- Generic remote cracking-node workflow for operator-owned hashcat workers.
+<p align="center">
+  <img src="https://img.shields.io/badge/backend-FastAPI-111111?style=for-the-badge" alt="FastAPI">
+  <img src="https://img.shields.io/badge/frontend-React%20%2B%20Vite-111111?style=for-the-badge" alt="React and Vite">
+  <img src="https://img.shields.io/badge/runtime-Python%203.11+-111111?style=for-the-badge" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/execution-chat--first-red?style=for-the-badge" alt="Chat first">
+  <img src="https://img.shields.io/badge/agents-multi--role-red?style=for-the-badge" alt="Multi-role agents">
+</p>
 
-## Quick Start
+<p align="center">
+  <img src="./assets/vantix-logo.png" alt="VANTIX logo" width="180">
+</p>
 
-Interactive installer:
+---
+
+## Table of Contents
+
+- [What is VANTIX?](#what-is-vantix)
+- [Why VANTIX is different](#why-vantix-is-different)
+- [Core capabilities](#core-capabilities)
+- [Architecture](#architecture)
+- [Specialist roles](#specialist-roles)
+- [How a run works](#how-a-run-works)
+- [Supported modes](#supported-modes)
+- [UI model](#ui-model)
+- [Quick start](#quick-start)
+- [Operational workflow](#operational-workflow)
+- [API highlights](#api-highlights)
+- [Runtime and storage](#runtime-and-storage)
+- [Benchmarking direction](#benchmarking-direction)
+- [Repo layout](#repo-layout)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Authorized use only](#authorized-use-only)
+
+---
+
+## What is VANTIX?
+
+VANTIX is an autonomous offensive security framework built for **authorized security testing**.
+
+It is designed as a **chat-first offensive security control plane** that combines:
+
+- a FastAPI backend
+- a React/Vite frontend
+- durable run state
+- specialist agent roles
+- vector selection
+- attack-chain modeling
+- handoffs
+- approvals
+- memory and CVE context
+- evidence and reporting workflows
+
+VANTIX is not built as a one-shot scanner or a thin prompt wrapper.
+
+It is built around **stateful campaigns** that can be created, continued, reviewed, paused, resumed, and reported through the same control plane.
+
+### Primary use cases
+
+- **Autonomous pentesting** for authorized targets
+- **Bug bounty-style research** and vector discovery
+- **CTF** and **KOTH** workflows
+- **Security research** with reusable memory and handoff state
+- **Operator-led engagements** where a human steers while specialists execute
+
+---
+
+## Why VANTIX is different
+
+Most AI security projects expose a single agent and a tool list.
+
+VANTIX is structured around **campaign execution**.
+
+That changes the shape of the system:
+
+| Area | Typical AI security wrapper | VANTIX |
+| --- | --- | --- |
+| Run model | Single prompt / single session | Durable run with persistent state |
+| Operator control | Minimal | Chat guidance, approvals, vector review |
+| Agent strategy | One generalist | Multiple specialist roles |
+| Workflow model | Best-effort loop | Phases, retries, checkpoints, replan |
+| Evidence model | Ad hoc logs | Findings, artifacts, results, reports |
+| Continuity | Session-local | Dense memory and machine-readable handoffs |
+| Product shell | CLI only or raw backend | UI + API control plane |
+
+### The core design principle
+
+VANTIX treats an assessment as a **living run**.
+
+A run can:
+
+1. accept a scoped objective
+2. spawn specialist work
+3. gather facts
+4. generate candidate vectors
+5. execute under controls
+6. replan when blocked
+7. preserve results and handoff state
+8. produce report-ready output
+
+---
+
+## Core capabilities
+
+### Chat-first orchestration
+
+The main entrypoint is an orchestrator chat. A message can create a new run or continue an existing one.
+
+### Durable workflow execution
+
+Runs are tracked with phase data, workflow execution records, retries, checkpoints, and worker leases.
+
+### Specialist scheduling
+
+The scheduler seeds tasks, roles, vectors, and notes instead of pushing everything into a single agent context.
+
+### Skill-pack selection
+
+Compact skill packs are selected by role, mode, and run context, then written into the runtime for agent use.
+
+### Vector review and selection
+
+Candidate vectors are stored as first-class objects, can be manually inserted, and can be selected to trigger replanning.
+
+### Handoffs and machine-readable continuity
+
+Runs expose dense handoff state that another agent or session can consume directly.
+
+### Evidence-backed results
+
+Findings, artifacts, vectors, terminal summaries, and report paths are exposed through both the UI and API.
+
+### Local CVE and intelligence context
+
+VANTIX includes a local CVE and vulnerability-intel workflow, with optional MCP exposure.
+
+### User-owned runtime storage
+
+Runtime state defaults to a per-user local path rather than requiring root-owned shared storage.
+
+---
+
+## Architecture
+
+<p align="center">
+  <img src="./assets/architecture.svg" alt="VANTIX architecture" width="100%">
+</p>
+
+### Architectural model
+
+VANTIX is split into a few clear layers:
+
+#### 1. Product shell
+The frontend is a React/Vite application that centers the operator around:
+- orchestrator chat
+- active run context
+- specialist timeline
+- terminal stream
+- vectors
+- memory
+- CVE intel
+- approvals
+- results
+- runtime settings
+
+#### 2. Control plane
+The backend exposes a FastAPI control plane with routers for:
+- chat
+- runs
+- vectors
+- skills
+- handoffs
+- attack chains
+- results
+- tools
+- providers
+- system status
+- install status
+- CVE endpoints
+
+#### 3. Durable workflow layer
+The workflow layer tracks execution state through:
+- workflow executions
+- phase runs
+- checkpoints
+- worker leases
+- run metrics
+
+This gives long-running work structure instead of relying on raw loop state.
+
+#### 4. Worker runtime
+A worker claims phases, executes them, and writes:
+- completion
+- retry
+- blocked
+- failure
+
+That makes it possible to recover stale work and preserve execution progress.
+
+#### 5. Safety and execution adapters
+Execution is mediated through dispatching, policies, and reporting synthesis, rather than treating tool execution as an uncontrolled free-for-all.
+
+---
+
+## Specialist roles
+
+VANTIX uses durable specialist records rather than pretending one agent should handle everything equally well.
+
+| Role | Product name | Responsibility |
+| --- | --- | --- |
+| `orchestrator` | Vantix Orchestrator | normalize scope, decide phase transitions, write handoffs |
+| `recon` | Vantix Recon | low-noise target discovery and service facts |
+| `knowledge_base` | Knowledge Base | load memory, methods, prior cases, and tool notes |
+| `vector_store` | Vector Store | rank candidate paths and similar prior work |
+| `researcher` | Researcher | correlate CVE, exploit, and source intelligence |
+| `developer` | Vantix Forge | build validation helpers and lab notes when evidence supports it |
+| `executor` | Vantix Exploit | execute selected vectors through current controls |
+| `reporter` | Vantix Report | findings, artifacts, evidence, summaries, and next actions |
+
+### Why this matters
+
+This structure makes VANTIX more useful for long-horizon work because:
+- different responsibilities stay explicit
+- handoffs are cleaner
+- prompts stay shorter
+- evidence can be attached to the right phase
+- operator review becomes easier
+
+---
+
+## How a run works
+
+<p align="center">
+  <img src="./assets/workflow.svg" alt="VANTIX workflow" width="100%">
+</p>
+
+### Run lifecycle
+
+```mermaid
+flowchart LR
+    A[Objective] --> B[Run Created]
+    B --> C[Recon]
+    C --> D[Vectors]
+    D --> E[Execution]
+    E --> F{Validated?}
+    F -->|Yes| G[Finding Stored]
+    F -->|No| H[Replan]
+    H --> D
+    G --> I[Artifacts and Evidence]
+    I --> J[Results and Report]
+```
+
+### What actually happens
+
+1. The operator enters an authorized objective in the UI or sends it to `POST /api/v1/chat`.
+2. VANTIX creates or continues a run.
+3. The scheduler seeds specialist tasks and initial vectors.
+4. Skill packs are selected from role, mode, and run facts.
+5. Prompts and state are written into the user-owned runtime path.
+6. Agents produce observations, evidence, risk notes, next actions, blockers, and vectors.
+7. Candidate vectors can be reviewed and selected.
+8. Findings and artifacts accumulate into results.
+9. Dense handoff state can be exported at any point.
+10. A final report path is surfaced when reporting completes.
+
+---
+
+## Supported modes
+
+The UI and scheduling model already reflect multiple operator modes.
+
+| Mode | Purpose |
+| --- | --- |
+| `pentest` | authorized offensive security testing |
+| `ctf` | challenge solving and exploit-path work |
+| `koth` | attack/defend competitive operations |
+| `bugbounty` | recon, validation, and finding development |
+| `windows-ctf` | Windows-specific challenge workflows |
+| `windows-koth` | Windows-specific adversarial workflows |
+
+### Why the mode system matters
+
+The point is not cosmetic labels.
+
+Modes let VANTIX adapt:
+- prompt selection
+- skill packs
+- operator expectations
+- target assumptions
+- reporting behavior
+- workflow posture
+
+---
+
+## UI model
+
+The UI is not decorative. It is the operator shell.
+
+### Main panels
+
+- **Run Sidebar** — recent runs and active run selection
+- **Orchestrator Chat** — durable messages and run guidance
+- **Agent Timeline** — task and agent-session status
+- **Terminal** — live execution stream
+- **Target** — target, mode, objective, scheduler status
+- **Vectors** — candidate paths and manual insertion
+- **Memory** — facts and learning hits
+- **CVE Intel** — active target intelligence
+- **Results** — findings, artifacts, report path, summary
+- **Approvals** — pending operator decisions
+- **Runtime Settings** — status, token, provider records
+
+### Design philosophy
+
+The UI is designed for:
+- **reviewability**
+- **operator intervention**
+- **long-running work**
+- **evidence-first navigation**
+
+---
+
+## Quick start
+
+### Interactive installer
 
 ```bash
 bash scripts/install-vantix.sh
 ```
 
-The installer bootstraps the Python environment, frontend dependencies, `.env`, runtime paths, optional provider records, local CVE/MCP deployment, and a selected host tool suite. It prints embedded Vantix ASCII art, safety warnings, visible progress, and live command output for long-running steps. If the configured CVE API is already reachable, the installer reuses it instead of starting another local cve-search process.
+The installer bootstraps:
+- Python environment
+- frontend dependencies
+- `.env`
+- runtime paths
+- optional provider records
+- local CVE/MCP deployment
+- a selected host tool suite
 
-At the end of installation you can install and start user-level systemd services for the API and UI:
-
-```bash
-systemctl --user status vantix-api.service vantix-ui.service
-journalctl --user -u vantix-api.service -u vantix-ui.service -f
-```
-
-Updates are handled separately from installation. Install once, then update from GitHub with:
+### Update flow
 
 ```bash
 bash scripts/update-vantix.sh --check
@@ -40,9 +356,7 @@ bash scripts/update-vantix.sh
 bash scripts/update-vantix.sh --verify
 ```
 
-The updater fast-forwards from `origin/main`, blocks when local non-ignored changes are present, refreshes backend/frontend dependencies, verifies the install, and restarts services that were started with `bash scripts/vantixctl.sh start`.
-
-Manual bootstrap:
+### Manual bootstrap
 
 ```bash
 python3 -m venv .venv
@@ -55,9 +369,7 @@ bash scripts/doctor.sh
 bash scripts/secops-api.sh
 ```
 
-API docs: `http://127.0.0.1:8787/docs`
-
-Frontend:
+### Frontend
 
 ```bash
 cd frontend
@@ -65,265 +377,7 @@ corepack pnpm install
 corepack pnpm dev
 ```
 
-Open the UI and enter an authorized objective such as `Full test of 10.10.10.10`. Vantix creates a run, records the chat message, seeds specialist tasks, and streams run state back to the dashboard.
-
-## User Workflow
-
-1. Start the user systemd services selected during install, or start repo-local managed services with `bash scripts/vantixctl.sh start`.
-2. Or start the API/UI manually with `bash scripts/secops-api.sh` and `bash scripts/secops-ui.sh`.
-3. Open the UI and submit a scoped objective in Orchestrator Chat.
-4. Review Specialists, Skill Packs, Agent Handoff, Vectors, Memory, CVE Intel, and Results.
-5. Select a vector only when the evidence and scope are clear.
-6. Add Operator Notes when a run needs human guidance.
-7. Use Results and Report artifacts for final review.
-
-For API-only operation, start with:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"Full test of https://example.test","mode":"pentest"}'
-```
-
-Use the returned `run.id` for follow-up calls.
-
-## Runtime Model
-
-Generated state defaults to a per-user local state directory:
-
-```text
-${XDG_STATE_HOME:-$HOME/.local/state}/ctf-security-ops/<repo-name>-<repo-hash>
-```
-
-This avoids SQLite locking issues and root-owned file drift on shared mounts. Reports/artifacts default to `$SECOPS_RUNTIME_ROOT/reports` unless `SECOPS_REPORTS_ROOT` or the legacy `SECOPS_ARTIFACTS_ROOT` alias is set.
-
-| Variable | Purpose |
-| --- | --- |
-| `SECOPS_REPO_ROOT` | Project root. Defaults to this clone. |
-| `SECOPS_RUNTIME_ROOT` | User-owned runtime data. Set this to force a custom local path. |
-| `SECOPS_REPORTS_ROOT` | Reports/artifacts root for backend output. |
-| `SECOPS_ARTIFACTS_ROOT` | Legacy reports/artifacts alias and shell-script output root. |
-| `SECOPS_SHARED_ROOT` | Optional shared storage root. Not required. |
-| `VANTIX_SKILLS_ROOT` | Optional override for repo-local skill packs. Defaults to `agent_skills/`. |
-| `SECOPS_API_TOKEN` | Bearer token for protected API/MCP routes. |
-| `VANTIX_SECRET_KEY` | Preferred encryption key for optional provider secrets. |
-| `SECOPS_CODEX_BIN` | Codex CLI binary path/name. |
-| `OPERATOR_NAME` | Generic operator label for lab-only workflows. |
-
-Run `bash scripts/doctor.sh` if memory or artifact writes fail. Use `bash scripts/fix-permissions.sh --apply` only for project-owned runtime paths.
-
-## API Highlights
-
-- `POST /api/v1/chat`: create or continue a run from orchestrator chat.
-- `GET /api/v1/system/status`: sanitized Codex/runtime/provider readiness.
-- `GET /api/v1/system/install-status`: file-backed installer/bootstrap state.
-- `GET /api/v1/runs/{run_id}/messages`: durable chat history.
-- `GET /api/v1/runs/{run_id}/vectors`: candidate validation/exploit vectors.
-- `POST /api/v1/runs/{run_id}/vectors`: insert a manual vector.
-- `POST /api/v1/runs/{run_id}/vectors/{vector_id}/select`: mark a vector planned and trigger replan.
-- `GET /api/v1/skills`: installed skill-pack catalog.
-- `GET /api/v1/runs/{run_id}/skills`: selected skill packs and prompt files per agent.
-- `POST /api/v1/runs/{run_id}/skills/apply`: re-run skill selection.
-- `GET /api/v1/runs/{run_id}/handoff`: dense run handoff for agent continuation.
-- `GET/POST /api/v1/runs/{run_id}/attack-chains`: modeled attack paths for planning/review.
-- `GET /api/v1/runs/{run_id}/results`: findings, artifacts, vectors, terminal summary, and report path.
-- `GET/POST /api/v1/providers`: optional provider records without secret leakage.
-- `GET /api/v1/tools`: registered tool readiness and paths.
-- `GET /api/v1/tools/suites`: installable tool suite definitions.
-- `POST /api/v1/tools/install`: install or dry-run install allowlisted tools.
-- `GET /api/v1/tools/install/history`: recent installer/tool actions.
-
-### Chat Usage
-
-Start a run:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"Full test of 10.10.10.10","mode":"pentest"}'
-```
-
-Continue or replan a run:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"run_id":"<run_id>","message":"Prioritize low-noise web validation and refresh CVE context."}'
-```
-
-### Skill Packs
-
-Vantix loads compact skill packs from `agent_skills/` and applies them to each specialist based on role, mode, and current run facts. This keeps agent prompts shorter and makes final notes more machine-readable.
-
-List installed packs:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/skills
-```
-
-Review selected packs for a run:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/skills
-```
-
-Reapply skills after adding notes, vectors, or new facts:
-
-```bash
-curl -s -X POST http://127.0.0.1:8787/api/v1/runs/<run_id>/skills/apply
-```
-
-Prompt files are written under:
-
-```text
-$SECOPS_RUNTIME_ROOT/runs/<workspace_id>/prompts/
-```
-
-Skill authoring details are in `docs/skill-authoring.md`.
-
-### Handoffs
-
-The handoff endpoint produces dense continuation state for another agent or session:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/handoff
-```
-
-The same payload is mirrored to:
-
-```text
-$SECOPS_RUNTIME_ROOT/runs/<workspace_id>/handoffs/current.json
-```
-
-Use this before switching agents, pausing a session, or restarting work.
-
-### Attack Chains
-
-Attack chains model candidate paths without requiring immediate execution.
-
-Create a chain:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/attack-chains \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Recon to validated finding","score":70,"steps":[{"phase":"recon"},{"phase":"validate"}],"notes":"Evidence-backed candidate path."}'
-```
-
-List chains:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/attack-chains
-```
-
-### Vectors
-
-Vectors are stored as run facts with `kind="vector"` and are used by the orchestrator to decide what to validate next.
-
-Create a manual vector:
-
-```bash
-curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/vectors \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Manual validation path","summary":"operator supplied","confidence":0.8,"next_action":"validate safely"}'
-```
-
-Select a vector:
-
-```bash
-curl -s -X POST http://127.0.0.1:8787/api/v1/runs/<run_id>/vectors/<vector_id>/select
-```
-
-## Memory
-
-Session state is saved as dense JSONL records and mirrored to readable markdown for compatibility.
-
-```bash
-bash scripts/codex-start.sh --print-only
-bash scripts/codex-close.sh --mode checkpoint --objective "..." --done "..." --next "..."
-bash scripts/memory-health.sh
-```
-
-The startup wrapper writes a startup checkpoint and can run `scripts/codex-memory-watch.sh` to heartbeat active sessions.
-
-## Dense Codex Context
-
-Codex-facing playbooks now use searchable dense records instead of long explanatory prose. Use lookup commands to load only the slice needed for the current target:
-
-Recon should emit:
-
-```text
-focus={mode,tags,ports,svc,versions,cves,phase,role,confidence}
-```
-
-Agents should read `LOOKUP.md` first, then query from that focus instead of opening broad context.
-
-```bash
-cat LOOKUP.md
-python3 scripts/learn_engine.py --root . lookup mode:pentest tag:web service:http --format prompt
-python3 scripts/learn_engine.py --root . lookup mode:koth tag:koth --format prompt
-python3 scripts/learn_engine.py --root . context mode:windows-ctf tag:ad
-```
-
-Dense record format:
-
-```text
-id=<id> mode=<csv|*> role=<csv|*> phase=<phase> tags=<csv> ports=<csv> svc=<csv> pre=<conds> act=<bounded_action> verify=<proof> next=<next> block=<stop_conditions> refs=<paths>
-```
-
-Verbose pre-conversion references are archived under `docs/reference/legacy_playbooks/<timestamp>/`. Memory mirrors are compacted to dense lines, while full historical copies are archived under `memory/archive/<timestamp>/`.
-
-## CVE REST And MCP
-
-REST endpoints are available under `/api/v1/cve/*` when the API is running.
-
-Repo-local CVE search management:
-
-```bash
-bash scripts/secops-cve-search.sh start
-bash scripts/secops-cve-search.sh status
-bash scripts/secops-cve-search.sh update
-```
-
-Enable MCP:
-
-```bash
-SECOPS_ENABLE_CVE_MCP=true SECOPS_API_TOKEN=dev bash scripts/secops-api.sh
-```
-
-MCP URL: `http://127.0.0.1:8787/mcp/cve`
-
-Use header: `Authorization: Bearer dev`
-
-See `docs/cve_mcp.md`.
-
-## Optional Providers
-
-Codex OAuth/runtime is the default path. Provider API keys are opt-in and are not used silently. To store provider secrets, set `VANTIX_SECRET_KEY` first. See `docs/providers.md`.
-
-## Cracking Nodes
-
-Remote GPU cracking is operator-owned and optional. Copy `agent_ops/config/cracking_nodes.example.yaml` to `agent_ops/config/cracking_nodes.yaml`, fill in your own host, and verify with:
-
-```bash
-bash scripts/crack-node-doctor.sh --node gpu-primary
-```
-
-See `docs/cracking_nodes.md`.
-
-## Safety
-
-Use only on systems you own or are explicitly authorized to test. Keep scope, rules of engagement, and stop conditions in ignored local configuration. Do not commit `.env`, real client data, target evidence, personal SSH keys, production credentials, provider keys, or private topology.
-
-## Development
-
-```bash
-pytest
-bash scripts/check-all.sh
-bash scripts/sanitize-check.sh
-bash scripts/doctor.sh
-```
-
-Service control:
+### Service control
 
 ```bash
 systemctl --user status vantix-api.service vantix-ui.service
@@ -332,20 +386,244 @@ bash scripts/vantixctl.sh status
 bash scripts/vantixctl.sh restart
 ```
 
-Key docs:
+---
 
-- `PLAN2.md`
-- `docs/installation.md`
-- `docs/configuration.md`
-- `docs/architecture.md`
-- `docs/agents.md`
-- `docs/skill-authoring.md`
-- `docs/api.md`
-- `docs/testing.md`
-- `docs/orchestration.md`
-- `docs/vantix_ui.md`
-- `docs/providers.md`
-- `docs/permissions.md`
-- `docs/memory.md`
-- `docs/cve_mcp.md`
-- `docs/cracking_nodes.md`
+## Operational workflow
+
+### UI flow
+
+1. Start the API and UI
+2. Open the frontend
+3. Enter an authorized objective
+4. Review specialists, vectors, memory, CVE intel, and results
+5. Select vectors only when evidence and scope are clear
+6. Add operator notes when human guidance is needed
+7. Review findings and artifacts before report handoff
+
+### API-only flow
+
+Create a run:
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/chat   -H 'Content-Type: application/json'   -d '{"message":"Full test of https://example.test","mode":"pentest"}'
+```
+
+Continue or replan a run:
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/chat   -H 'Content-Type: application/json'   -d '{"run_id":"<run_id>","message":"Prioritize low-noise web validation and refresh CVE context."}'
+```
+
+---
+
+## API highlights
+
+### Core entrypoints
+
+```text
+POST /api/v1/chat
+GET  /api/v1/system/status
+GET  /api/v1/system/install-status
+```
+
+### Run review
+
+```text
+GET /api/v1/runs/<run_id>/messages
+GET /api/v1/runs/<run_id>/vectors
+GET /api/v1/runs/<run_id>/results
+GET /api/v1/runs/<run_id>/skills
+GET /api/v1/runs/<run_id>/handoff
+GET /api/v1/runs/<run_id>/graph
+```
+
+### Vector operations
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/vectors   -H 'Content-Type: application/json'   -d '{"title":"Manual validation path","summary":"operator supplied","confidence":0.8,"next_action":"validate safely"}'
+```
+
+Select a vector:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/api/v1/runs/<run_id>/vectors/<vector_id>/select
+```
+
+### Skill-pack operations
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/skills
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/skills
+curl -s -X POST http://127.0.0.1:8787/api/v1/runs/<run_id>/skills/apply
+```
+
+### Attack-chain operations
+
+```bash
+curl -s http://127.0.0.1:8787/api/v1/runs/<run_id>/attack-chains   -H 'Content-Type: application/json'   -d '{"name":"Recon to validated finding","score":70,"steps":[{"phase":"recon"},{"phase":"validate"}],"notes":"Evidence-backed candidate path."}'
+```
+
+---
+
+## Runtime and storage
+
+VANTIX defaults to a **user-owned runtime root**:
+
+```text
+${XDG_STATE_HOME:-$HOME/.local/state}/ctf-security-ops/<repo-name>-<repo-hash>
+```
+
+That helps avoid:
+- SQLite locking issues on shared mounts
+- root-owned runtime drift
+- fragile assumptions about NFS or privileged storage
+
+### Important variables
+
+| Variable | Purpose |
+| --- | --- |
+| `SECOPS_REPO_ROOT` | project root |
+| `SECOPS_RUNTIME_ROOT` | user-owned runtime data |
+| `SECOPS_REPORTS_ROOT` | reports and artifact root |
+| `SECOPS_SHARED_ROOT` | optional shared storage root |
+| `VANTIX_SKILLS_ROOT` | override for repo-local skill packs |
+| `SECOPS_API_TOKEN` | bearer token for protected routes |
+| `VANTIX_SECRET_KEY` | encryption key for optional provider secrets |
+| `SECOPS_CODEX_BIN` | Codex CLI binary path or name |
+
+---
+
+## Benchmarking direction
+
+VANTIX is best positioned as:
+
+- **A: primary** — an open-source autonomous pentest framework
+- **D: broader vision** — an offensive security operating platform that also supports bug bounty, CTF, KOTH, and research ops
+
+### Evaluation model
+
+A serious benchmark story for VANTIX should include all three modes:
+
+| Mode | Inputs |
+| --- | --- |
+| Black-box | target URL / IP only |
+| Gray-box | target + standard user credentials |
+| White-box | target + source / repo context |
+
+### Candidate targets
+
+- OWASP Juice Shop
+- OWASP crAPI
+- c{api}tal API
+- custom internal labs
+- modified benchmark forks to reduce overfitting
+
+### What should be measured
+
+- validated findings
+- exploit success rate
+- false positives
+- time to first valid finding
+- endpoint / route coverage
+- severity-weighted score
+- evidence completeness
+- operator review quality
+
+For a longer benchmark plan, see [docs/BENCHMARKS.md](./docs/BENCHMARKS.md).
+
+---
+
+## Repo layout
+
+```text
+.
+├── frontend/                 # React + Vite operator UI
+├── docs/                     # architecture, agents, API, install, memory, orchestration
+├── scripts/                  # installer, updater, runtime control, doctor, CVE helpers
+├── agent_skills/             # compact skill packs by role and mode
+├── tests/                    # test suite
+├── pyproject.toml            # Python package and dependencies
+└── README.md
+```
+
+---
+
+## Roadmap
+
+### Product
+- benchmark harness for black-box / gray-box / white-box runs
+- stronger benchmark reporting and scorecards
+- richer evidence navigation in the UI
+- more visual run analytics and campaign summaries
+- browser-assisted workflows where appropriate
+
+### Platform
+- more distributed worker execution options
+- better CI and release workflows
+- deeper service health / observability surfaces
+- stronger packaging for self-hosted deployments
+
+### Operator workflow
+- improved report templates
+- benchmark comparison output
+- team collaboration primitives
+- better guided review for approvals and findings
+
+---
+
+## Contributing
+
+Contributions are welcome.
+
+The most useful contributions are usually one of these:
+
+- bug fixes
+- architecture cleanup
+- runtime reliability work
+- benchmark harness improvements
+- documentation upgrades
+- test coverage
+- better UI review flows
+- safer execution controls
+
+### Good issue reports include
+
+- environment details
+- reproduction steps
+- expected behavior
+- actual behavior
+- logs or screenshots when relevant
+
+---
+
+## Authorized use only
+
+VANTIX is for **systems you own or are explicitly authorized to test**.
+
+Do not use it against:
+- third-party targets without permission
+- production systems outside approved scope
+- environments that prohibit autonomous security testing
+
+Keep these out of committed files:
+- `.env`
+- provider keys
+- real client data
+- production credentials
+- private topology
+- SSH keys
+- target evidence that should remain local
+
+---
+
+## Further reading
+
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- [docs/QUICKSTART.md](./docs/QUICKSTART.md)
+- [docs/BENCHMARKS.md](./docs/BENCHMARKS.md)
+
+---
+
+<p align="center">
+  Built by <strong>the-vibe-dev</strong>
+</p>

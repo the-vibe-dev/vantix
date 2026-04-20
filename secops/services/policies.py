@@ -35,6 +35,27 @@ SECRET_PATTERNS = [
 
 
 class ExecutionPolicyService:
+    def _approval_grants(self, run: WorkspaceRun) -> dict[str, int]:
+        raw = (run.config_json or {}).get("approval_grants")
+        if not isinstance(raw, dict):
+            return {}
+        grants: dict[str, int] = {}
+        for key, value in raw.items():
+            try:
+                grants[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return grants
+
+    def _consume_grant(self, run: WorkspaceRun, kind: str) -> bool:
+        grants = self._approval_grants(run)
+        remaining = int(grants.get(kind, 0))
+        if remaining <= 0:
+            return False
+        grants[kind] = remaining - 1
+        run.config_json = {**(run.config_json or {}), "approval_grants": grants}
+        return True
+
     def evaluate(self, run: WorkspaceRun, *, action_kind: str) -> PolicyDecision:
         kind = (action_kind or "").strip().lower()
         if run.status in {"cancelled", "failed"}:
@@ -52,6 +73,8 @@ class ExecutionPolicyService:
                 return PolicyDecision(verdict="require_approval", reason="write actions require approval", audit=True)
             return PolicyDecision(verdict="allow_with_audit", reason="write action allowed", audit=True)
         if kind in {"recon_high_noise", "exploit_validation"}:
+            if self._consume_grant(run, kind):
+                return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
             return PolicyDecision(verdict="require_approval", reason=f"{kind} requires operator approval", audit=True)
         if kind in {"external_network", "network"}:
             return PolicyDecision(verdict="allow_with_audit", reason="external network action audited", audit=True)

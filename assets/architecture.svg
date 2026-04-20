@@ -1,0 +1,70 @@
+<svg width="1400" height="820" viewBox="0 0 1400 820" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
+<stop stop-color="#ff4d4d"/><stop offset="1" stop-color="#930000"/>
+</linearGradient>
+<style>
+  .box { fill:#0d1117; stroke:rgba(255,255,255,0.16); stroke-width:2; rx:20; }
+  .t1 { fill:#f0f6fc; font: 700 26px Arial, Helvetica, sans-serif; }
+  .t2 { fill:#c9d1d9; font: 500 18px Arial, Helvetica, sans-serif; }
+  .mini { fill:#ffb3b3; font: 700 16px Arial, Helvetica, sans-serif; letter-spacing:1px; }
+</style>
+</defs>
+<rect width="1400" height="820" rx="28" fill="#07090d"/>
+<g opacity="0.1" stroke="#fff">
+<path d="M0 100H1400"/><path d="M0 200H1400"/><path d="M0 300H1400"/><path d="M0 400H1400"/><path d="M0 500H1400"/><path d="M0 600H1400"/><path d="M0 700H1400"/>
+<path d="M100 0V820"/><path d="M300 0V820"/><path d="M500 0V820"/><path d="M700 0V820"/><path d="M900 0V820"/><path d="M1100 0V820"/><path d="M1300 0V820"/>
+</g>
+
+<rect x="70" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.2" stroke="#ff4d4d"/>
+<text x="100" y="118" class="mini">OPERATOR EXPERIENCE</text>
+<text x="100" y="154" class="t1">React / Vite UI</text>
+<text x="100" y="182" class="t2">Chat • Runs • Vectors • Results • Settings</text>
+
+<rect x="550" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.22" stroke="#ff4d4d"/>
+<text x="580" y="118" class="mini">CONTROL PLANE</text>
+<text x="580" y="154" class="t1">FastAPI Backend</text>
+<text x="580" y="182" class="t2">Routers • APIs • status • skills • tools</text>
+
+<rect x="1030" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.14" stroke="#ff4d4d"/>
+<text x="1060" y="118" class="mini">RUN ORCHESTRATION</text>
+<text x="1060" y="154" class="t1">Scheduler</text>
+<text x="1060" y="182" class="t2">Seeds tasks, vectors, notes, phases</text>
+
+<rect x="430" y="260" width="540" height="120" rx="22" fill="#0d1117" stroke="rgba(255,255,255,0.16)"/>
+<text x="460" y="308" class="mini">DURABLE EXECUTION</text>
+<text x="460" y="344" class="t1">Workflow Engine</text>
+<text x="460" y="372" class="t2">Phase runs • retries • checkpoints • worker leases • run metrics</text>
+
+<rect x="100" y="470" width="220" height="110" class="box"/>
+<text x="130" y="518" class="t1" style="font-size:24px;">Memory</text>
+<text x="130" y="548" class="t2">Dense records, facts, continuity</text>
+
+<rect x="360" y="470" width="220" height="110" class="box"/>
+<text x="390" y="518" class="t1" style="font-size:24px;">CVE Intel</text>
+<text x="390" y="548" class="t2">Local cache and enrichment</text>
+
+<rect x="620" y="470" width="220" height="110" class="box"/>
+<text x="650" y="518" class="t1" style="font-size:24px;">Skill Packs</text>
+<text x="650" y="548" class="t2">Role/mode-aware prompt compaction</text>
+
+<rect x="880" y="470" width="220" height="110" class="box"/>
+<text x="910" y="518" class="t1" style="font-size:24px;">Approvals</text>
+<text x="910" y="548" class="t2">Review gates and operator control</text>
+
+<rect x="1140" y="470" width="220" height="110" class="box"/>
+<text x="1170" y="518" class="t1" style="font-size:24px;">Results</text>
+<text x="1170" y="548" class="t2">Findings, artifacts, reports</text>
+
+<rect x="240" y="650" width="920" height="110" rx="22" fill="#0d1117" stroke="rgba(255,255,255,0.16)"/>
+<text x="270" y="698" class="mini">SPECIALIST LAYER</text>
+<text x="270" y="734" class="t1">Orchestrator • Recon • Knowledge Base • Vector Store • Researcher • Forge • Exploit • Report</text>
+
+<g stroke="rgba(255,255,255,0.22)" stroke-width="3">
+<path d="M370 130H550"/>
+<path d="M850 130H1030"/>
+<path d="M700 190V260"/>
+<path d="M700 380V440"/>
+<path d="M700 580V650"/>
+</g>
+</svg>

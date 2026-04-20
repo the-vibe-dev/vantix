@@ -11,6 +11,7 @@ os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 from secops.db import Base, SessionLocal, engine
 from secops.models import Engagement, RunCheckpoint, RunMetric, WorkerLease, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 from secops.services.workflows.checkpoints import CheckpointService
+from secops.services.workflows.engine import WorkflowEngine
 from secops.services.workflows.types import PhaseStatus, RetryClass, WorkerLeaseState, WorkflowStatus
 
 
@@ -125,3 +126,59 @@ def test_workflow_schema_and_checkpoint_latest_semantics() -> None:
         assert [row.attempt for row in phase_runs] == [1, 2]
         assert db.query(WorkerLease).filter(WorkerLease.run_id == run.id).count() == 1
         assert db.query(RunMetric).filter(RunMetric.run_id == run.id, RunMetric.metric_name == "phase_duration_seconds").count() == 1
+
+
+def test_enqueue_run_reopens_blocked_workflow() -> None:
+    reset_db()
+    with SessionLocal() as db:
+        engagement = Engagement(name="Workflow Reopen", mode="pentest", target="10.10.10.10", tags=["pentest"])
+        db.add(engagement)
+        db.flush()
+        run = WorkspaceRun(
+            engagement_id=engagement.id,
+            mode=engagement.mode,
+            workspace_id="pentest-workflow-reopen-test",
+            status="blocked",
+            objective="Reopen blocked workflow after approval",
+            target="10.10.10.10",
+            config_json={"ports": [], "services": [], "tags": ["pentest", "vantix"]},
+        )
+        db.add(run)
+        db.flush()
+        workflow = WorkflowExecution(
+            run_id=run.id,
+            workflow_kind="vantix-run",
+            status=WorkflowStatus.BLOCKED.value,
+            current_phase="recon-sidecar",
+        )
+        db.add(workflow)
+        db.flush()
+        db.add(
+            WorkflowPhaseRun(
+                run_id=run.id,
+                workflow_id=workflow.id,
+                phase_name="context-bootstrap",
+                attempt=1,
+                status=PhaseStatus.COMPLETED.value,
+            )
+        )
+        db.add(
+            WorkflowPhaseRun(
+                run_id=run.id,
+                workflow_id=workflow.id,
+                phase_name="recon-sidecar",
+                attempt=1,
+                status=PhaseStatus.PENDING.value,
+            )
+        )
+        db.commit()
+
+        engine_svc = WorkflowEngine()
+        engine_svc.enqueue_run(db, run)
+        db.commit()
+        db.refresh(workflow)
+        db.refresh(run)
+
+        assert workflow.status == WorkflowStatus.QUEUED.value
+        assert workflow.current_phase == "recon-sidecar"
+        assert run.status == "queued"

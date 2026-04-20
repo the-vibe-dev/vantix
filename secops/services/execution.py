@@ -4,6 +4,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import subprocess
+import time
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -17,6 +19,7 @@ from secops.models import (
     Artifact,
     Fact,
     OperatorNote,
+    RunMessage,
     Task,
     WorkspaceRun,
 )
@@ -32,6 +35,17 @@ from secops.services.reporting import ReportingService
 from secops.services.storage import StorageLayout
 from secops.services.worker_runtime import worker_runtime
 from secops.services.workflows.engine import WorkflowEngine
+
+ROLE_DISPLAY_NAMES = {
+    "orchestrator": "Orchestrator",
+    "recon": "Vantix Recon",
+    "knowledge_base": "Knowledge Base",
+    "vector_store": "Vector Store",
+    "researcher": "Researcher",
+    "developer": "Developer",
+    "executor": "Executor",
+    "reporter": "Vantix Report",
+}
 
 
 class PhaseBlockedError(Exception):
@@ -169,6 +183,7 @@ class ExecutionManager:
             task = self._task_by_kind(db, run.id, "learning-recall")
             if task.status == "completed":
                 return
+            self._set_role_status(db, run.id, "knowledge_base", "running")
             paths = self.nas.for_workspace(run.workspace_id)
             results = self.learning.retrieve_for_run(
                 mode=run.mode,
@@ -182,6 +197,7 @@ class ExecutionManager:
             task.status = "completed"
             task.result_json = {"hits": len(results)}
             self.events.emit(db, run.id, "phase", f"Learning recall completed: {len(results)} hits")
+            self._set_role_status(db, run.id, "knowledge_base", "completed")
             self._write_memory(db, run, mode="phase", phase="learning-recall", done=[f"learning hits={len(results)}"], files=[str(paths.facts / "learning_hits.json")], next_action="recon sidecar")
             db.commit()
 
@@ -195,6 +211,7 @@ class ExecutionManager:
                 return
             paths = self.nas.for_workspace(run.workspace_id)
             session = self._create_agent_session(db, run.id, "recon", "Recon Sidecar", paths)
+            self._set_role_status(db, run.id, "recon", "running")
             command = []
             recon_target = self._recon_target(run.target)
             if recon_target:
@@ -219,6 +236,16 @@ class ExecutionManager:
                 run.status = "blocked"
                 session.status = "blocked"
                 session.completed_at = datetime.now(timezone.utc)
+                self._set_role_status(db, run.id, "recon", "blocked")
+                self.events.emit(
+                    db,
+                    run.id,
+                    "terminal",
+                    f"[recon] blocked by policy: {decision.reason}",
+                    level="warning",
+                    payload={"agent": "recon", "action_kind": action_kind},
+                    agent_session_id=session.id,
+                )
                 self._create_approval(
                     db,
                     run.id,
@@ -238,8 +265,17 @@ class ExecutionManager:
                 )
                 db.commit()
                 return
-            output = self._run_command(command, session.log_path, run=run) if command else "No target supplied; recon skipped.\n"
+            self.events.emit(
+                db,
+                run.id,
+                "terminal",
+                f"[recon] starting: {' '.join(command) if command else 'no command'}",
+                payload={"agent": "recon"},
+                agent_session_id=session.id,
+            )
+            output = self._run_command(command, session.log_path, run_id=run.id) if command else "No target supplied; recon skipped.\n"
             paths.write_text(Path(session.log_path), output)
+            self._emit_terminal_excerpt(db, run_id=run.id, output=output, agent_session_id=session.id, agent="recon")
             discovered = self._parse_nmap(output)
             if discovered["ports"]:
                 run.config_json["ports"] = sorted(set(run.config_json.get("ports", []) + discovered["ports"]))
@@ -251,11 +287,25 @@ class ExecutionManager:
                 db.add(Fact(run_id=run.id, source="recon", kind="service", value=service, confidence=0.95, tags=["recon"]))
             session.status = "completed"
             session.completed_at = datetime.now(timezone.utc)
+            self._set_role_status(db, run.id, "recon", "completed")
             task.status = "completed"
             task.result_json = discovered
             self.events.emit(db, run.id, "phase", "Recon completed", payload=discovered, agent_session_id=session.id)
             facts = [[ "port", port ] for port in discovered["ports"]] + [[ "service", service ] for service in discovered["services"]]
             self._write_memory(db, run, mode="phase", phase="recon", done=["recon completed"], facts=facts, files=[str(session.log_path)], next_action="cve analysis")
+            if str(run.config_json.get("scan_profile", "full")).lower() == "quick":
+                cfg = dict(run.config_json or {})
+                cfg["quick_scan_recon_done"] = True
+                cfg["quick_scan_gate_pending"] = True
+                run.config_json = cfg
+                self.events.emit(
+                    db,
+                    run.id,
+                    "phase",
+                    "Quick scan recon complete",
+                    level="warning",
+                    agent_session_id=session.id,
+                )
             db.add(
                 Artifact(
                     run_id=run.id,
@@ -274,8 +324,28 @@ class ExecutionManager:
             task = self._task_by_kind(db, run.id, "cve-analysis")
             if task.status == "completed":
                 return
+            if bool((run.config_json or {}).get("quick_scan_gate_pending")):
+                run.status = "blocked"
+                self.events.emit(
+                    db,
+                    run.id,
+                    "terminal",
+                    "[cve] waiting for operator approval to continue beyond quick scan",
+                    level="warning",
+                    payload={"agent": "researcher"},
+                )
+                self._create_approval(
+                    db,
+                    run.id,
+                    title="Recon complete: continue beyond quick scan",
+                    detail="Recon completed successfully. Approve to continue with CVE analysis, orchestration, and reporting phases.",
+                    reason="quick-scan-gate",
+                )
+                db.commit()
+                return
             paths = self.nas.for_workspace(run.workspace_id)
-            session = self._create_agent_session(db, run.id, "research", "CVE Research Sidecar", paths)
+            session = self._create_agent_session(db, run.id, "researcher", "Researcher Sidecar", paths)
+            self._set_role_status(db, run.id, "researcher", "running")
             results = []
             services = run.config_json.get("services", [])
             for service in services:
@@ -297,6 +367,7 @@ class ExecutionManager:
             paths.write_json(cve_path, results)
             session.status = "completed"
             session.completed_at = datetime.now(timezone.utc)
+            self._set_role_status(db, run.id, "researcher", "completed")
             task.status = "completed"
             task.result_json = {"queries": len(results)}
             self.events.emit(db, run.id, "phase", f"CVE analysis completed: {len(results)} queries", agent_session_id=session.id)
@@ -328,6 +399,7 @@ class ExecutionManager:
             paths.write_text(prompt_path, prompt)
             session.prompt_path = str(prompt_path)
             session.status = "running"
+            self._set_role_status(db, run.id, "orchestrator", "running")
             db.flush()
             self.events.emit(db, run.id, "phase", "Primary orchestration started", agent_session_id=session.id)
             self._write_memory(db, run, mode="phase", phase="orchestrate-start", done=["primary orchestration started"], files=[str(prompt_path)], next_action="monitor orchestrator")
@@ -359,6 +431,7 @@ class ExecutionManager:
                     refreshed = inner_db.get(AgentSession, session.id)
                     refreshed.status = "blocked"
                     refreshed.completed_at = datetime.now(timezone.utc)
+                    self._set_role_status(inner_db, run.id, "orchestrator", "blocked")
                     task = self._task_by_kind(inner_db, run.id, "orchestrate")
                     task.status = "blocked"
                     task.result_json = {"reason": codex_policy.reason, "verdict": codex_policy.verdict}
@@ -385,6 +458,7 @@ class ExecutionManager:
                         refreshed = inner_db.get(AgentSession, session.id)
                         refreshed.status = "blocked"
                         refreshed.completed_at = datetime.now(timezone.utc)
+                        self._set_role_status(inner_db, run.id, "orchestrator", "blocked")
                         task = self._task_by_kind(inner_db, run.id, "orchestrate")
                         task.status = "blocked"
                         task.result_json = {"reason": "codex-unavailable", "codex_bin": settings.codex_bin}
@@ -437,6 +511,7 @@ class ExecutionManager:
                     refreshed = inner_db.get(AgentSession, session.id)
                     refreshed.status = "completed" if result.returncode == 0 else "failed"
                     refreshed.completed_at = datetime.now(timezone.utc)
+                    self._set_role_status(inner_db, run.id, "orchestrator", "completed" if result.returncode == 0 else "failed")
                     task = self._task_by_kind(inner_db, run.id, "orchestrate")
                     task.status = "completed" if result.returncode == 0 else "failed"
                     task.result_json = {"returncode": result.returncode}
@@ -518,8 +593,10 @@ class ExecutionManager:
             task = self._task_by_kind(db, run.id, "report")
             if task.status == "completed":
                 return
+            self._set_role_status(db, run.id, "reporter", "running")
             generated = self.reporting.generate(db, run)
             task.status = "completed"
+            self._set_role_status(db, run.id, "reporter", "completed")
             task.result_json = {"report_path": generated["markdown_path"], "report_json_path": generated["json_path"]}
             db.add(
                 Artifact(
@@ -538,6 +615,21 @@ class ExecutionManager:
         return db.execute(select(Task).where(Task.run_id == run_id, Task.kind == kind)).scalar_one()
 
     def _create_agent_session(self, db, run_id: str, role: str, name: str, paths) -> AgentSession:
+        existing = (
+            db.query(AgentSession)
+            .filter(AgentSession.run_id == run_id, AgentSession.role == role)
+            .order_by(AgentSession.started_at.desc())
+            .first()
+        )
+        if existing is not None:
+            existing.name = name
+            existing.workspace_path = str(paths.agents / role)
+            existing.prompt_path = str(paths.prompts / f"{role}.txt")
+            existing.log_path = str(paths.logs / f"{role}.log")
+            existing.status = "pending"
+            existing.completed_at = None
+            db.flush()
+            return existing
         session = AgentSession(
             run_id=run_id,
             role=role,
@@ -550,12 +642,78 @@ class ExecutionManager:
         )
         db.add(session)
         db.flush()
+        run = db.get(WorkspaceRun, run_id)
+        if run is not None:
+            from secops.services.skills import SkillApplicationService
+
+            SkillApplicationService().apply_to_run(db, run)
         return session
 
+    def _emit_terminal_excerpt(
+        self,
+        db,
+        *,
+        run_id: str,
+        output: str,
+        agent_session_id: str,
+        agent: str,
+        max_lines: int = 120,
+    ) -> None:
+        lines = [line for line in output.splitlines() if line.strip()]
+        if not lines:
+            self.events.emit(
+                db,
+                run_id,
+                "terminal",
+                f"[{agent}] no output",
+                payload={"agent": agent},
+                agent_session_id=agent_session_id,
+            )
+            return
+        for line in lines[:max_lines]:
+            self.events.emit(
+                db,
+                run_id,
+                "terminal",
+                line,
+                payload={"agent": agent},
+                agent_session_id=agent_session_id,
+            )
+        if len(lines) > max_lines:
+            self.events.emit(
+                db,
+                run_id,
+                "terminal",
+                f"[{agent}] output truncated ({len(lines) - max_lines} lines omitted)",
+                payload={"agent": agent},
+                agent_session_id=agent_session_id,
+            )
+
     def _create_approval(self, db, run_id: str, title: str, detail: str, reason: str) -> ApprovalRequest:
+        existing = (
+            db.query(ApprovalRequest)
+            .filter(
+                ApprovalRequest.run_id == run_id,
+                ApprovalRequest.reason == reason,
+                ApprovalRequest.status == "pending",
+            )
+            .order_by(ApprovalRequest.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return existing
         approval = ApprovalRequest(run_id=run_id, title=title, detail=detail, reason=reason, status="pending")
         db.add(approval)
         self.events.emit(db, run_id, "approval", title, level="warning", payload={"reason": reason})
+        db.add(
+            RunMessage(
+                run_id=run_id,
+                role="system",
+                author="System",
+                content=f"Approval required: {title}. {detail}",
+                metadata_json={"approval_reason": reason},
+            )
+        )
         return approval
 
     def _write_memory(
@@ -592,20 +750,95 @@ class ExecutionManager:
         except Exception as exc:  # noqa: BLE001
             self.events.emit(db, run.id, "memory_error", f"Memory write failed: {exc}", level="warning")
 
-    def _run_command(self, command: list[str], log_path: str, *, run: WorkspaceRun | None = None) -> str:
+    def _run_command(self, command: list[str], log_path: str, *, run_id: str | None = None) -> str:
         if not command:
             return ""
-        if run is not None:
-            decision = self.policies.evaluate(run, action_kind="script")
+        if run_id is not None:
+            with SessionLocal() as db:
+                run = db.get(WorkspaceRun, run_id)
+                if run is None:
+                    return "Run not found for command execution.\n"
+                decision = self.policies.evaluate(run, action_kind="script")
+        else:
+            decision = None
+        if decision is not None:
             if decision.verdict in {"block", "require_approval"}:
                 return f"Command blocked by policy: {decision.reason}\n"
-        record = self.policies.run_subprocess(command, timeout_seconds=120, redactions=[settings.secret_key])
-        output = (record.stdout or "") + ("\n" + record.stderr if record.stderr else "")
-        if record.timed_out:
-            return output + f"\nCommand timed out after {record.duration_seconds:.1f}s.\n"
-        if record.error_class and record.returncode != 0:
-            return output + f"\nCommand failed ({record.error_class}) rc={record.returncode} after {record.duration_seconds:.1f}s.\n"
-        return output
+        started = time.monotonic()
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        timed_out = False
+        cancelled = False
+        try:
+            while True:
+                try:
+                    stdout, stderr = process.communicate(timeout=1)
+                    break
+                except subprocess.TimeoutExpired:
+                    if run_id:
+                        with SessionLocal() as db:
+                            run = db.get(WorkspaceRun, run_id)
+                            if run is None or run.status in {"cancelled", "failed"}:
+                                cancelled = True
+                                process.terminate()
+                                try:
+                                    stdout, stderr = process.communicate(timeout=3)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    stdout, stderr = process.communicate()
+                                break
+                    if time.monotonic() - started > 120:
+                        timed_out = True
+                        process.terminate()
+                        try:
+                            stdout, stderr = process.communicate(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            stdout, stderr = process.communicate()
+                        break
+            elapsed = max(0.0, time.monotonic() - started)
+            output = self.policies._redact(stdout or "", redactions=[settings.secret_key])  # noqa: SLF001
+            err = self.policies._redact(stderr or "", redactions=[settings.secret_key])  # noqa: SLF001
+            combined = output + ("\n" + err if err else "")
+            if cancelled:
+                return combined + "\nCommand interrupted: run cancelled.\n"
+            if timed_out:
+                return combined + f"\nCommand timed out after {elapsed:.1f}s.\n"
+            if process.returncode != 0:
+                return combined + f"\nCommand failed rc={process.returncode} after {elapsed:.1f}s.\n"
+            return combined
+        except OSError as exc:
+            return f"Command failed (oserror): {exc}\n"
+
+    def _set_role_status(self, db, run_id: str, role: str, status: str) -> None:
+        agent = (
+            db.query(AgentSession)
+            .filter(AgentSession.run_id == run_id, AgentSession.role == role)
+            .order_by(AgentSession.started_at.desc())
+            .first()
+        )
+        if agent is None:
+            run = db.get(WorkspaceRun, run_id)
+            if run is None:
+                return
+            paths = self.nas.for_workspace(run.workspace_id)
+            agent = AgentSession(
+                run_id=run_id,
+                role=role,
+                name=ROLE_DISPLAY_NAMES.get(role, role.replace("_", " ").title()),
+                status="pending",
+                workspace_path=str(paths.agents / role),
+                prompt_path=str(paths.prompts / f"{role}.txt"),
+                log_path=str(paths.logs / f"{role}.log"),
+                metadata_json={},
+            )
+            db.add(agent)
+            db.flush()
+            from secops.services.skills import SkillApplicationService
+
+            SkillApplicationService().apply_to_run(db, run)
+        agent.status = status
+        if status in {"completed", "failed", "blocked"}:
+            agent.completed_at = datetime.now(timezone.utc)
 
     def _emit_policy_decision(
         self,
