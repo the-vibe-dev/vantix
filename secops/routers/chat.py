@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 
 from secops.db import get_db
 from secops.schemas import ChatCreate, ChatResponse
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.execution import execution_manager
 from secops.services.vantix import VantixChatService
 
-router = APIRouter(prefix="/api/v1/chat", tags=["chat"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/chat", tags=["chat"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 
 
 @router.post("", response_model=ChatResponse)

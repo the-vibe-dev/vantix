@@ -342,8 +342,9 @@ class ApprovalDecision(BaseModel):
 
 class OperatorNoteCreate(BaseModel):
     content: str
-    author: str = "operator"
+    author: str = "operator"  # ignored; author is derived from the session (PRA-044)
     applies_to: str = "run"
+    classification: str = "unrestricted"  # unrestricted|internal|sensitive
 
 
 class OperatorNoteRead(BaseModel):

@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from secops.schemas import SkillPackCreate, SkillPackRead, SkillPackUpdate, SkillRegistryReloadRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.skills import SkillRegistry
 
 
-router = APIRouter(prefix="/api/v1/skills", tags=["skills"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/skills", tags=["skills"], dependencies=[Depends(require_user("viewer")), Depends(require_csrf)])
 
 
 @router.get("", response_model=list[SkillPackRead])

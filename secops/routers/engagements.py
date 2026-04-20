@@ -7,10 +7,10 @@ from secops.db import get_db
 from secops.models import Engagement
 from secops.mode_profiles import MODE_PROFILES
 from secops.schemas import EngagementCreate, EngagementRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 
 
-router = APIRouter(prefix="/api/v1/engagements", tags=["engagements"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/engagements", tags=["engagements"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 
 
 @router.post("", response_model=EngagementRead)

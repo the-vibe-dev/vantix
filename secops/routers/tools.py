@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from secops.schemas import ToolInstallCreate, ToolInstallResultRead, ToolStatusRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.tools import ToolService
 
-router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(require_user("viewer")), Depends(require_csrf)])
 
 
 @router.get("", response_model=list[ToolStatusRead])

@@ -6,7 +6,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -63,7 +63,7 @@ from secops.schemas import (
     RunProviderRouteCreate,
     PlanningBundleRead,
 )
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.context_builder import ContextBuilder
 from secops.services.execution import execution_manager
 from secops.services.finding_promotion import FindingPromotionService
@@ -81,7 +81,7 @@ from secops.services.skills import (
 from secops.services.vantix import build_planning_bundle, create_vector_fact, summarize_terminal, vector_from_fact, VantixScheduler
 
 
-router = APIRouter(prefix="/api/v1/runs", tags=["runs"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/runs", tags=["runs"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 
 
 WORKFLOW_SPECIALIST_MAP = {
@@ -395,18 +395,34 @@ def list_run_approvals(run_id: str, db: Session = Depends(get_db)) -> list[Appro
 
 
 @router.post("/{run_id}/operator-notes", response_model=OperatorNoteRead)
-def create_operator_note(run_id: str, payload: OperatorNoteCreate, db: Session = Depends(get_db)) -> OperatorNote:
+def create_operator_note(
+    run_id: str,
+    payload: OperatorNoteCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> OperatorNote:
     run = db.get(WorkspaceRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    note = OperatorNote(run_id=run_id, content=payload.content, author=payload.author, applies_to=payload.applies_to)
+    # PRA-044: author comes from the session, never from the client body.
+    auth = getattr(request.state, "auth", None)
+    author = auth.username if auth is not None else "operator"
+    classification = (payload.classification or "unrestricted").lower()
+    if classification not in {"unrestricted", "internal", "sensitive"}:
+        raise HTTPException(status_code=400, detail="Invalid classification")
+    note = OperatorNote(
+        run_id=run_id,
+        content=payload.content,
+        author=author,
+        applies_to=payload.applies_to,
+    )
     db.add(note)
     db.commit()
     db.refresh(note)
     paths = StorageLayout().for_workspace(run.workspace_id)
     note_path = paths.notes / f"{note.created_at.strftime('%Y%m%d_%H%M%S')}_{note.id}.md"
     note_path.write_text(
-        f"# Operator Note\n\n- Author: {note.author}\n- Applies To: {note.applies_to}\n- Content: {note.content}\n",
+        f"# Operator Note\n\n- Author: {note.author}\n- Classification: {classification}\n- Applies To: {note.applies_to}\n- Content: {note.content}\n",
         encoding="utf-8",
     )
     return note

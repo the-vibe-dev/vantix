@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session
 from secops.db import get_db
 from secops.models import Engagement
 from secops.schemas import RunControlResponse
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.benchmarks import BenchmarkCatalog
 from secops.services.execution import execution_manager
 from secops.services.run_service import RunService
 
 
-router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 
 
 @router.get("")

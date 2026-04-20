@@ -65,6 +65,9 @@ def require_user(min_role: str = "operator") -> Callable[..., AuthContext]:
             request.state.auth = ctx
             return ctx
 
+        if settings.service_token_enabled and not settings.api_token:
+            _reject(status.HTTP_503_SERVICE_UNAVAILABLE, "Server misconfigured: SECOPS_API_TOKEN is not set")
+
         if _service_token_ok(credentials):
             ctx = AuthContext(kind="service", username="service", role="admin")
             request.state.auth = ctx

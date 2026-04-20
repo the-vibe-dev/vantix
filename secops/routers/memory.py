@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 
 from secops.db import get_db
 from secops.schemas import DenseMemoryCreate, DenseMemoryReceipt, MemoryHealthRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.learning import LearningService
 from secops.services.memory_writer import DenseMemoryRecord, MemoryWriteService
 
 
-router = APIRouter(prefix="/api/v1/memory", tags=["memory"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/memory", tags=["memory"], dependencies=[Depends(require_user("viewer")), Depends(require_csrf)])
 
 
 @router.get("/search")

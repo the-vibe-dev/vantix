@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session
 from secops.db import get_db
 from secops.models import ApprovalRequest, RunMessage, WorkspaceRun
 from secops.schemas import ApprovalDecision, ApprovalRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.events import RunEventService
 from secops.services.execution import execution_manager
 from secops.services.vantix import VantixScheduler
 
 
-router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 events = RunEventService()
 
 def _action_kind_from_reason(reason: str) -> str:

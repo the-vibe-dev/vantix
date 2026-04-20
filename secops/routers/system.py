@@ -11,14 +11,14 @@ from secops.config import settings
 from secops.db import get_db
 from secops.models import ProviderConfig, WorkerRuntimeStatus
 from secops.schemas import InstallerStateRead, SystemStatusRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.codex_runner import CodexRunner
 from secops.services.installer_state import InstallerStateService
 from secops.services.memory_writer import MemoryWriteService
 from secops.services.tools import ToolService
 from secops.services.worker_runtime import worker_runtime
 
-router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/system", tags=["system"], dependencies=[Depends(require_user("admin")), Depends(require_csrf)])
 
 
 def _writable(path: Path) -> bool:

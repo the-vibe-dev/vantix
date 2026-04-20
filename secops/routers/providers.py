@@ -5,10 +5,10 @@ from sqlalchemy.orm import Session
 
 from secops.db import get_db
 from secops.schemas import ProviderConfigCreate, ProviderConfigRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 from secops.services.providers import ProviderService
 
-router = APIRouter(prefix="/api/v1/providers", tags=["providers"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/providers", tags=["providers"], dependencies=[Depends(require_user("admin")), Depends(require_csrf)])
 
 
 @router.get("", response_model=list[ProviderConfigRead])

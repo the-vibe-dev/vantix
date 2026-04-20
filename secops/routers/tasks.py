@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 from secops.db import get_db
 from secops.models import Action, Task
 from secops.schemas import ActionRead, TaskRead
-from secops.security import require_api_token
+from secops.security import require_csrf, require_user
 
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(require_api_token)])
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(require_user("operator")), Depends(require_csrf)])
 
 
 @router.get("/{task_id}", response_model=TaskRead)
