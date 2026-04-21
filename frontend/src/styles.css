@@ -1,23 +1,71 @@
-:root {
+/* ─────────────────────────────────────────────────────────────────────────
+   Vantix UI — dual-theme operations console
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root,
+:root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0c0f14;
-  --bg-deep: #0a0d12;
-  --panel: #121620;
-  --panel-alt: #161b27;
-  --panel-raised: #1a2030;
-  --line: rgba(148, 163, 184, 0.14);
-  --line-soft: rgba(148, 163, 184, 0.08);
-  --line-strong: rgba(148, 163, 184, 0.24);
-  --accent: #6ea8fe;
-  --accent-hover: #89baff;
-  --accent-soft: rgba(110, 168, 254, 0.14);
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --danger: #f87171;
-  --ink: #e6ebf2;
-  --ink-dim: #94a3b8;
-  --muted: #64748b;
-  --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+  --bg:            #0b0e14;
+  --bg-deep:       #080a0f;
+  --surface:       #111520;
+  --surface-2:     #161b27;
+  --surface-3:     #1b2130;
+  --line:          rgba(148, 163, 184, 0.12);
+  --line-strong:   rgba(148, 163, 184, 0.22);
+  --ink:           #e6ebf2;
+  --ink-soft:      #c4cdd9;
+  --ink-dim:       #8b95a5;
+  --ink-muted:     #64748b;
+  --accent:        #7aa7ff;
+  --accent-hover:  #94b8ff;
+  --accent-ink:    #08101e;
+  --accent-soft:   rgba(122, 167, 255, 0.14);
+  --ok:            #4ade80;
+  --ok-soft:       rgba(74, 222, 128, 0.14);
+  --warn:          #fbbf24;
+  --warn-soft:     rgba(251, 191, 36, 0.14);
+  --danger:        #f87171;
+  --danger-soft:   rgba(248, 113, 113, 0.14);
+  --info:          #60a5fa;
+  --info-soft:     rgba(96, 165, 250, 0.14);
+  --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md:     0 4px 14px rgba(0, 0, 0, 0.35);
+  --radius-sm:     6px;
+  --radius-md:     10px;
+  --radius-lg:     14px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:            #f4f5f7;
+  --bg-deep:       #eceef2;
+  --surface:       #ffffff;
+  --surface-2:     #f7f8fa;
+  --surface-3:     #eef0f4;
+  --line:          rgba(15, 23, 42, 0.10);
+  --line-strong:   rgba(15, 23, 42, 0.18);
+  --ink:           #0f172a;
+  --ink-soft:      #1f2937;
+  --ink-dim:       #475569;
+  --ink-muted:     #64748b;
+  --accent:        #2563eb;
+  --accent-hover:  #1d4ed8;
+  --accent-ink:    #ffffff;
+  --accent-soft:   rgba(37, 99, 235, 0.10);
+  --ok:            #16a34a;
+  --ok-soft:       rgba(22, 163, 74, 0.10);
+  --warn:          #b45309;
+  --warn-soft:     rgba(180, 83, 9, 0.10);
+  --danger:        #dc2626;
+  --danger-soft:   rgba(220, 38, 38, 0.10);
+  --info:          #2563eb;
+  --info-soft:     rgba(37, 99, 235, 0.10);
+  --shadow-sm:     0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md:     0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+:root {
+  --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: "IBM Plex Sans", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -28,7 +76,8 @@
 }
 
 html,
-body {
+body,
+#root {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -37,12 +86,12 @@ body {
 body {
   font-family: var(--sans);
   color: var(--ink);
-  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
-  background-attachment: fixed;
+  background: var(--bg);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "ss01", "cv11";
+  overflow: hidden;
 }
 
 button,
@@ -50,12 +99,28 @@ input,
 textarea,
 select {
   font: inherit;
+  color: inherit;
 }
 
 input,
 textarea,
 select {
   outline: none;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="file"],
+input:not([type]),
+textarea,
+select {
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
 input:focus,
@@ -68,11 +133,12 @@ select:focus {
 button {
   cursor: pointer;
   border: none;
+  color: inherit;
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -80,177 +146,125 @@ button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.18);
+  background: var(--line-strong);
   border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.3);
+  background: var(--ink-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 
+/* ─── Animations ───────────────────────────────────────────────────────── */
 @keyframes vx-pulse {
-  0%,
-  100% {
-    opacity: 0.4;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.1;
-    transform: scale(2.4);
-  }
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 0.1; transform: scale(2.4); }
 }
-
 @keyframes vx-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
 }
-
 @keyframes vx-fadein {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-
 @keyframes vx-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
-/* ─── Shell ─────────────────────────────────────────────────────────────── */
+/* ─── Shell ────────────────────────────────────────────────────────────── */
 .vx-shell {
   display: grid;
-  grid-template-columns: 244px 1fr;
-  min-height: 100vh;
-  gap: 0;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg);
 }
 
 .vx-sidebar {
-  position: sticky;
-  top: 0;
   height: 100vh;
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
 }
 
 .vx-sidebar-inner {
-  padding: 18px 16px;
+  padding: 18px 14px 20px;
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .vx-main {
-  padding: 18px 20px 24px;
-  min-width: 0;
+  height: 100vh;
+  padding: 14px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-/* ─── Panel base ────────────────────────────────────────────────────────── */
-.vx-panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 18px 20px;
-  animation: vx-fadein 0.22s ease both;
-  display: flex;
-  flex-direction: column;
+  gap: 10px;
   min-width: 0;
-  width: 100%;
-  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.vx-panel h3,
-.vx-panel h4 {
-  margin: 0 0 12px 0;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
-
-/* ─── Top bar ───────────────────────────────────────────────────────────── */
+/* ─── Top bar ──────────────────────────────────────────────────────────── */
 .vx-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 18px;
-  background: var(--panel);
+  padding: 12px 16px;
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
 }
 
 .vx-riskbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 10px 14px;
-  background: var(--panel-alt);
+  gap: 14px;
+  padding: 9px 14px;
+  background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
-/* ─── Grid ──────────────────────────────────────────────────────────────── */
-.vx-grid {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 12px;
-  align-items: start;
+.vx-riskbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line);
+  flex-shrink: 0;
 }
 
-.vx-grid > * {
-  grid-column: span 6;
-}
-
-.vx-grid > .vx-span-full {
-  grid-column: span 12;
-}
-.vx-grid > .vx-span-8 {
-  grid-column: span 8;
-}
-.vx-grid > .vx-span-4 {
-  grid-column: span 4;
-}
-
-/* ─── Tabs ──────────────────────────────────────────────────────────────── */
+/* ─── Tabs ─────────────────────────────────────────────────────────────── */
 .vx-tabs {
   display: flex;
-  gap: 0;
+  gap: 2px;
   border-bottom: 1px solid var(--line);
-  padding: 0;
-  margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .vx-tab {
   position: relative;
-  padding: 10px 18px;
+  padding: 9px 16px;
   border: none;
   border-radius: 0;
   font-size: 0.78rem;
   font-weight: 500;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   background: transparent;
   color: var(--ink-dim);
   transition: color 0.15s;
-  cursor: pointer;
 }
 
 .vx-tab::after {
@@ -264,29 +278,92 @@ button {
   transition: background 0.15s;
 }
 
-.vx-tab.active {
-  color: var(--ink);
+.vx-tab.active { color: var(--ink); }
+.vx-tab.active::after { background: var(--accent); }
+.vx-tab:hover:not(.active) { color: var(--ink-soft); }
+
+/* ─── Workspace: two-column split that fills viewport ──────────────────── */
+.vx-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  overflow: hidden;
 }
 
-.vx-tab.active::after {
-  background: var(--accent);
+.vx-workspace-split {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
 }
 
-.vx-tab:hover:not(.active) {
-  color: var(--ink);
+.vx-workspace-main {
+  grid-template-columns: 1fr;
 }
 
-/* ─── Run cards ─────────────────────────────────────────────────────────── */
+.vx-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.vx-col > .vx-panel {
+  flex-shrink: 0;
+}
+
+/* ─── Panel base ───────────────────────────────────────────────────────── */
+.vx-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  animation: vx-fadein 0.22s ease both;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.vx-panel > * {
+  min-width: 0;
+}
+
+.vx-panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.vx-panel h3,
+.vx-panel h4 {
+  margin: 0 0 10px 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  flex-shrink: 0;
+}
+
+.vx-panel.vx-flex-1 { flex: 1 1 auto; }
+.vx-panel.vx-flex-2 { flex: 2 1 0; }
+
+/* ─── Run cards ────────────────────────────────────────────────────────── */
 .vx-run-card {
   width: 100%;
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
-  background: var(--panel-alt);
+  background: var(--surface-2);
   color: var(--ink);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
@@ -294,7 +371,7 @@ button {
 
 .vx-run-card:hover {
   border-color: var(--line-strong);
-  background: var(--panel-raised);
+  background: var(--surface-3);
 }
 
 .vx-run-card.active {
@@ -302,104 +379,128 @@ button {
   background: var(--accent-soft);
 }
 
-/* ─── Inputs ────────────────────────────────────────────────────────────── */
-input[type="text"],
-input[type="password"],
-input[type="email"],
-input:not([type]),
-textarea,
-select {
-  background: var(--bg);
-  border: 1px solid var(--line-strong);
-  color: var(--ink);
-  border-radius: 8px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-/* ─── Buttons (utility) ─────────────────────────────────────────────────── */
+/* ─── Buttons ──────────────────────────────────────────────────────────── */
 .vx-btn {
-  padding: 8px 14px;
-  border-radius: 8px;
+  padding: 7px 13px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
-  background: var(--panel-alt);
+  background: var(--surface-2);
   color: var(--ink);
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   font-weight: 500;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition: all 0.15s;
+  white-space: nowrap;
 }
-
 .vx-btn:hover {
   border-color: var(--accent);
   color: var(--ink);
+  background: var(--surface-3);
 }
-
 .vx-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0a0d12;
+  color: var(--accent-ink);
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
-
 .vx-btn-primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #0a0d12;
+  color: var(--accent-ink);
 }
 
-/* ─── Label helpers ─────────────────────────────────────────────────────── */
+/* ─── Badges / pills ───────────────────────────────────────────────────── */
+.vx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.3;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* ─── Labels ───────────────────────────────────────────────────────────── */
 .vx-label {
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
 
-/* ─── Responsive ────────────────────────────────────────────────────────── */
-@media (max-width: 1400px) {
-  .vx-grid > * {
-    grid-column: span 6;
-  }
-  .vx-grid > .vx-span-8 {
-    grid-column: span 12;
-  }
-  .vx-grid > .vx-span-4 {
-    grid-column: span 6;
-  }
+/* ─── Theme toggle button ──────────────────────────────────────────────── */
+.vx-theme-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.vx-theme-toggle:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.vx-theme-toggle svg {
+  width: 16px;
+  height: 16px;
 }
 
-@media (max-width: 900px) {
+/* ─── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 1280px) {
+  .vx-workspace-split {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+@media (max-width: 1024px) {
   .vx-shell {
+    grid-template-columns: 220px 1fr;
+  }
+  .vx-workspace-split {
     grid-template-columns: 1fr;
   }
-  .vx-sidebar {
-    position: static;
+}
+@media (max-width: 800px) {
+  .vx-shell {
+    grid-template-columns: 1fr;
     height: auto;
+    overflow: auto;
   }
-  .vx-grid > * {
-    grid-column: span 12;
-  }
+  body { overflow: auto; }
+  .vx-sidebar { position: static; height: auto; }
+  .vx-main { height: auto; overflow: visible; }
+  .vx-workspace { overflow: visible; }
 }
 
-/* ─── Login ─────────────────────────────────────────────────────────────── */
+/* ─── Login ────────────────────────────────────────────────────────────── */
 .login-shell {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+  background: var(--bg);
   color: var(--ink);
 }
 .login-card {
   width: 360px;
   padding: 32px 32px 28px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-shadow: var(--shadow-md);
 }
 .login-card h1 {
   margin: 0;
@@ -417,31 +518,29 @@ select {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
 }
 .login-card input {
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--ink);
   font-size: 0.86rem;
 }
 .login-card button {
   margin-top: 6px;
   padding: 11px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #0a0d12;
+  color: var(--accent-ink);
   font-weight: 600;
   letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
 }
 .login-card button:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -453,9 +552,9 @@ select {
 }
 .login-error {
   padding: 10px 12px;
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.08);
-  border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: var(--danger-soft);
+  border-radius: var(--radius-sm);
   color: var(--danger);
   font-size: 0.78rem;
 }

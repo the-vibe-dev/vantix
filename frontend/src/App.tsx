@@ -48,16 +48,16 @@ type Variant =
   | "default";
 
 const SEV: Record<Variant, { bg: string; color: string; border: string }> = {
-  critical: { bg: "rgba(239,68,68,.14)", color: "#ff6b6b", border: "rgba(239,68,68,.35)" },
-  high: { bg: "rgba(249,115,22,.14)", color: "#f97316", border: "rgba(249,115,22,.35)" },
-  medium: { bg: "rgba(244,184,96,.14)", color: "#f4b860", border: "rgba(244,184,96,.35)" },
-  low: { bg: "rgba(25,195,125,.12)", color: "#19c37d", border: "rgba(25,195,125,.3)" },
-  ok: { bg: "rgba(25,195,125,.12)", color: "#19c37d", border: "rgba(25,195,125,.3)" },
-  warn: { bg: "rgba(249,115,22,.12)", color: "#f97316", border: "rgba(249,115,22,.3)" },
-  danger: { bg: "rgba(239,68,68,.12)", color: "#ef4444", border: "rgba(239,68,68,.3)" },
-  amber: { bg: "rgba(244,184,96,.12)", color: "#f4b860", border: "rgba(244,184,96,.3)" },
-  blue: { bg: "rgba(99,179,237,.12)", color: "#63b3ed", border: "rgba(99,179,237,.3)" },
-  default: { bg: "rgba(255,255,255,.05)", color: "#a69599", border: "rgba(217,58,73,.25)" },
+  critical: { bg: "var(--danger-soft)", color: "var(--danger)", border: "var(--danger)" },
+  high:     { bg: "var(--warn-soft)",   color: "var(--warn)",   border: "var(--warn)" },
+  medium:   { bg: "var(--info-soft)",   color: "var(--info)",   border: "var(--info)" },
+  low:      { bg: "var(--ok-soft)",     color: "var(--ok)",     border: "var(--ok)" },
+  ok:       { bg: "var(--ok-soft)",     color: "var(--ok)",     border: "var(--ok)" },
+  warn:     { bg: "var(--warn-soft)",   color: "var(--warn)",   border: "var(--warn)" },
+  danger:   { bg: "var(--danger-soft)", color: "var(--danger)", border: "var(--danger)" },
+  amber:    { bg: "var(--warn-soft)",   color: "var(--warn)",   border: "var(--warn)" },
+  blue:     { bg: "var(--info-soft)",   color: "var(--info)",   border: "var(--info)" },
+  default:  { bg: "var(--surface-3)",   color: "var(--ink-dim)", border: "var(--line-strong)" },
 };
 
 function Badge({
@@ -75,16 +75,18 @@ function Badge({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        padding: "2px 8px",
+        height: 20,
+        padding: "0 8px",
         borderRadius: 99,
         fontSize: ".68rem",
-        fontWeight: 700,
-        letterSpacing: ".07em",
+        fontWeight: 600,
+        letterSpacing: ".04em",
         textTransform: "uppercase",
         background: c.bg,
         color: c.color,
         border: `1px solid ${c.border}`,
         whiteSpace: "nowrap",
+        lineHeight: 1,
         ...style,
       }}
     >
@@ -103,12 +105,12 @@ function SevBadge({ severity }: { severity?: string }) {
 
 function StatusDot({ status, size = 8 }: { status?: string; size?: number }) {
   const cols: Record<string, string> = {
-    running: "#f4b860",
-    completed: "#19c37d",
-    failed: "#ef4444",
-    blocked: "#ef4444",
-    pending: "rgba(140,185,165,.3)",
-    idle: "rgba(140,185,165,.3)",
+    running: "var(--warn)",
+    completed: "var(--ok)",
+    failed: "var(--danger)",
+    blocked: "var(--danger)",
+    pending: "var(--ink-muted)",
+    idle: "var(--ink-muted)",
   };
   const color = cols[status || ""] || cols.idle;
   const pulse = status === "running";
@@ -230,12 +232,12 @@ function Btn({
   style?: CSSProperties;
 }) {
   const vs: Record<BtnVariant, CSSProperties> = {
-    primary: { background: "linear-gradient(135deg,#d93a49,#ef5c67)", color: "#140507", border: "none" },
-    ghost: { background: "rgba(255,255,255,.04)", color: "#e8f4ee", border: "1px solid rgba(217,58,73,.25)" },
-    danger: { background: "rgba(239,68,68,.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,.3)" },
-    amber: { background: "rgba(244,184,96,.1)", color: "#f4b860", border: "1px solid rgba(244,184,96,.3)" },
-    green: { background: "rgba(25,195,125,.1)", color: "#19c37d", border: "1px solid rgba(25,195,125,.3)" },
-    blue: { background: "rgba(96,165,250,.1)", color: "#60a5fa", border: "1px solid rgba(96,165,250,.3)" },
+    primary: { background: "var(--accent)", color: "var(--accent-ink)", border: "1px solid var(--accent)" },
+    ghost: { background: "var(--surface-2)", color: "var(--ink)", border: "1px solid var(--line-strong)" },
+    danger: { background: "var(--danger-soft)", color: "var(--danger)", border: "1px solid var(--danger)" },
+    amber: { background: "var(--warn-soft)", color: "var(--warn)", border: "1px solid var(--warn)" },
+    green: { background: "var(--ok-soft)", color: "var(--ok)", border: "1px solid var(--ok)" },
+    blue: { background: "var(--info-soft)", color: "var(--info)", border: "1px solid var(--info)" },
   };
   const ss: Record<BtnSize, CSSProperties> = {
     xs: { padding: "3px 8px", fontSize: ".68rem", borderRadius: 6 },
@@ -272,11 +274,11 @@ function Label({ children }: { children: ReactNode }) {
   return (
     <div
       style={{
-        fontSize: ".67rem",
-        fontWeight: 700,
+        fontSize: ".66rem",
+        fontWeight: 600,
         letterSpacing: ".1em",
         textTransform: "uppercase",
-        color: "#7a9e92",
+        color: "var(--ink-dim)",
         marginBottom: 6,
       }}
     >
@@ -491,22 +493,18 @@ function RiskBar({
   const phasePct = Math.round((done / DISPLAY_PHASES.length) * 100);
   return (
     <div className="vx-riskbar">
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 4 }}>
         <StatusDot status={run.status} size={7} />
         <span
-          style={{ fontFamily: "var(--mono)", fontSize: ".74rem", fontWeight: 600, color: "#e8f4ee" }}
+          style={{ fontFamily: "var(--mono)", fontSize: ".74rem", fontWeight: 600, color: "var(--ink)" }}
         >
           {run.workspace_id}
         </span>
       </div>
-      <div style={{ width: 1, height: 20, background: "rgba(140,185,165,.15)" }} />
+      <div className="vx-riskbar-sep" />
       {risk && (
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span
-            style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "uppercase", letterSpacing: ".08em" }}
-          >
-            Risk
-          </span>
+          <span className="vx-label">Risk</span>
           <span
             style={{
               fontFamily: "var(--mono)",
@@ -520,13 +518,13 @@ function RiskBar({
           <Badge variant={risk.variant}>{risk.level}</Badge>
         </div>
       )}
-      <div style={{ width: 1, height: 20, background: "rgba(140,185,165,.15)" }} />
-      <div style={{ display: "flex", gap: 8 }}>
+      <div className="vx-riskbar-sep" />
+      <div style={{ display: "flex", gap: 10 }}>
         {[
-          ["critical", "#ff6b6b"],
-          ["high", "#f97316"],
-          ["medium", "#f4b860"],
-          ["low", "#19c37d"],
+          ["critical", "var(--danger)"],
+          ["high", "var(--warn)"],
+          ["medium", "var(--info)"],
+          ["low", "var(--ok)"],
         ].map(([k, c]) => (
           <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span
@@ -534,39 +532,28 @@ function RiskBar({
             />
             <span
               style={{
-                fontSize: ".72rem",
-                color: counts[k] > 0 ? c : "#7a9e92",
-                fontWeight: counts[k] > 0 ? 700 : 400,
+                fontSize: ".74rem",
+                color: counts[k] > 0 ? "var(--ink)" : "var(--ink-dim)",
+                fontWeight: counts[k] > 0 ? 600 : 400,
+                fontFamily: "var(--mono)",
               }}
             >
               {counts[k]}
             </span>
-            <span
-              style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "capitalize" }}
-            >
+            <span style={{ fontSize: ".68rem", color: "var(--ink-dim)", textTransform: "capitalize" }}>
               {k}
             </span>
           </div>
         ))}
       </div>
-      <div style={{ width: 1, height: 20, background: "rgba(140,185,165,.15)" }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 120 }}>
-        <span
-          style={{
-            fontSize: ".67rem",
-            color: "#7a9e92",
-            whiteSpace: "nowrap",
-            textTransform: "uppercase",
-            letterSpacing: ".08em",
-          }}
-        >
-          Progress
-        </span>
+      <div className="vx-riskbar-sep" />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 160 }}>
+        <span className="vx-label">Progress</span>
         <div
           style={{
             flex: 1,
             height: 4,
-            background: "rgba(255,255,255,.07)",
+            background: "var(--surface-3)",
             borderRadius: 99,
             overflow: "hidden",
           }}
@@ -575,20 +562,20 @@ function RiskBar({
             style={{
               width: `${phasePct}%`,
               height: "100%",
-              background: "#19c37d",
+              background: "var(--accent)",
               borderRadius: 99,
               transition: "width .5s",
             }}
           />
         </div>
         <span
-          style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92", whiteSpace: "nowrap" }}
+          style={{ fontFamily: "var(--mono)", fontSize: ".72rem", color: "var(--ink-dim)", whiteSpace: "nowrap" }}
         >
-          {currentDisplay}
+          {phasePct}%
         </span>
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-        {connected ? <Badge variant="ok">● Live API</Badge> : <Badge variant="danger">API Offline</Badge>}
+        {connected ? <Badge variant="ok">● Live</Badge> : <Badge variant="danger">Offline</Badge>}
       </div>
     </div>
   );
@@ -819,17 +806,17 @@ function ChatPanel({
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
   const rStyle: Record<string, { color: string; label: string }> = {
-    user: { color: "#f4b860", label: "Operator" },
-    orchestrator: { color: "#19c37d", label: "Vantix" },
-    agent: { color: "#63b3ed", label: "Agent" },
-    system: { color: "#7a9e92", label: "System" },
+    user: { color: "var(--warn)", label: "Operator" },
+    orchestrator: { color: "var(--accent)", label: "Vantix" },
+    agent: { color: "var(--info)", label: "Agent" },
+    system: { color: "var(--ink-dim)", label: "System" },
   };
   return (
     <Panel
       title="Mission Chat"
       meta="Guides and replans the engagement"
       loading={loading}
-      style={{ gridColumn: "span 2", gridRow: "span 2", display: "flex", flexDirection: "column" }}
+      style={{ minHeight: 360 }}
     >
       <div
         ref={scrollRef}
@@ -839,7 +826,7 @@ function ChatPanel({
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          maxHeight: 300,
+          minHeight: 200,
           paddingRight: 4,
         }}
       >
@@ -871,11 +858,11 @@ function ChatPanel({
                   style={{
                     maxWidth: "88%",
                     padding: "10px 14px",
-                    borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                    background: isUser ? "rgba(244,184,96,.08)" : "rgba(25,195,125,.07)",
-                    border: `1px solid ${isUser ? "rgba(244,184,96,.2)" : "rgba(25,195,125,.18)"}`,
+                    borderRadius: isUser ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                    background: isUser ? "var(--accent-soft)" : "var(--surface-2)",
+                    border: `1px solid ${isUser ? "var(--accent)" : "var(--line)"}`,
                     fontSize: ".82rem",
-                    color: "#e8f4ee",
+                    color: "var(--ink)",
                     lineHeight: 1.55,
                     whiteSpace: "pre-wrap",
                   }}
@@ -889,7 +876,7 @@ function ChatPanel({
           <EmptyState icon="⬡" text="Enter a target and objective to start an engagement." />
         )}
       </div>
-      <form onSubmit={onSend} style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "flex-end" }}>
+      <form onSubmit={onSend} style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "flex-end", flexShrink: 0 }}>
         <textarea
           value={chatText}
           onChange={(e) => setChatText(e.target.value)}
@@ -902,19 +889,19 @@ function ChatPanel({
           placeholder="e.g. Full pentest of 10.10.10.10 — check for web vulnerabilities and misconfigurations"
           style={{
             flex: 1,
-            minHeight: 52,
-            maxHeight: 120,
+            minHeight: 44,
+            maxHeight: 100,
             resize: "vertical",
             padding: "10px 12px",
-            background: "rgba(6,12,12,.9)",
-            border: "1px solid rgba(140,185,165,.18)",
-            borderRadius: 12,
-            color: "#e8f4ee",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line-strong)",
+            borderRadius: 8,
+            color: "var(--ink)",
             fontSize: ".82rem",
             lineHeight: 1.5,
           }}
         />
-        <Btn type="submit" size="md" style={{ whiteSpace: "nowrap", height: 52 }}>
+        <Btn type="submit" size="md" style={{ whiteSpace: "nowrap", height: 44 }}>
           Send
         </Btn>
       </form>
@@ -929,35 +916,35 @@ function TerminalPanel({ lines }: { lines: string[] }) {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [lines]);
   const colorLine = (l: string): string => {
-    if (!l) return "#7a9e92";
-    if (l.startsWith("[!]") || l.includes("CRITICAL") || l.includes("←")) return "#ff6b6b";
-    if (l.startsWith("[+]") || l.includes(" open")) return "#19c37d";
-    if (l.startsWith("[*]")) return "#63b3ed";
-    if (l.includes("CVE-")) return "#f4b860";
-    if (l.startsWith("|") || l.startsWith("  ")) return "#a8d5c2";
-    return "#7a9e92";
+    if (!l) return "var(--ink-dim)";
+    if (l.startsWith("[!]") || l.includes("CRITICAL") || l.includes("←")) return "var(--danger)";
+    if (l.startsWith("[+]") || l.includes(" open")) return "var(--ok)";
+    if (l.startsWith("[*]")) return "var(--info)";
+    if (l.includes("CVE-")) return "var(--warn)";
+    if (l.startsWith("|") || l.startsWith("  ")) return "var(--ink-soft)";
+    return "var(--ink-dim)";
   };
   return (
-    <Panel title="Live Activity" meta="Technical execution output" style={{ gridColumn: "span 2" }}>
+    <Panel title="Live Activity" meta="Technical execution output" style={{ minHeight: 260 }}>
       <div
         ref={ref}
         style={{
+          flex: 1,
+          minHeight: 200,
           fontFamily: "var(--mono)",
           fontSize: ".76rem",
           lineHeight: 1.65,
-          background: "#030706",
-          border: "1px solid rgba(140,185,165,.1)",
-          borderRadius: 12,
-          padding: "14px 16px",
-          minHeight: 200,
-          maxHeight: 290,
+          background: "var(--bg-deep)",
+          border: "1px solid var(--line)",
+          borderRadius: 8,
+          padding: "12px 14px",
           overflowY: "auto",
           whiteSpace: "pre-wrap",
           wordBreak: "break-all",
         }}
       >
         {lines.length === 0 && (
-          <div style={{ color: "#7a9e92" }}>No live terminal output yet.</div>
+          <div style={{ color: "var(--ink-dim)" }}>No live terminal output yet.</div>
         )}
         {lines.map((l, i) => (
           <div key={i} style={{ color: colorLine(l) }}>
@@ -969,7 +956,7 @@ function TerminalPanel({ lines }: { lines: string[] }) {
             display: "inline-block",
             width: 7,
             height: "1em",
-            background: "#19c37d",
+            background: "var(--accent)",
             animation: "vx-blink 1s step-end infinite",
             verticalAlign: "text-bottom",
             marginLeft: 2,
@@ -2465,6 +2452,8 @@ function TopBar({
   onRetry,
   onReplan,
   onCancel,
+  theme,
+  onToggleTheme,
 }: {
   run: Run | null;
   phase: RunPhase | null;
@@ -2475,6 +2464,8 @@ function TopBar({
   onRetry: () => void;
   onReplan: () => void;
   onCancel: () => void;
+  theme: "dark" | "light";
+  onToggleTheme: () => void;
 }) {
   const runVariant: Variant =
     run?.status === "running"
@@ -2484,29 +2475,43 @@ function TopBar({
       : run?.status === "failed" || run?.status === "blocked"
       ? "danger"
       : "default";
+  const phaseLabel = phase?.current ? String(phase.current) : "";
+  const statusLabel = run?.status ? String(run.status) : "";
+  const showPhase = phaseLabel && phaseLabel.toLowerCase() !== statusLabel.toLowerCase();
   return (
     <div className="vx-topbar">
       <div style={{ minWidth: 0, flex: 1 }}>
         <div
           style={{
-            fontSize: ".63rem",
-            fontWeight: 700,
-            letterSpacing: ".12em",
+            fontSize: ".62rem",
+            fontWeight: 600,
+            letterSpacing: ".1em",
             textTransform: "uppercase",
-            color: "#7a9e92",
+            color: "var(--ink-dim)",
             marginBottom: 4,
           }}
         >
           Vantix Orchestrator
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontFamily: "var(--mono)", fontSize: "1rem", fontWeight: 700, color: "#e8f4ee" }}>
+          <span
+            style={{
+              fontFamily: "var(--mono)",
+              fontSize: ".95rem",
+              fontWeight: 600,
+              color: "var(--ink)",
+              letterSpacing: "-0.01em",
+            }}
+          >
             {run ? run.workspace_id : "No active engagement"}
           </span>
           {run && <Badge variant={runVariant}>{run.status}</Badge>}
-          {run && <Badge variant="default">{run.mode}</Badge>}
-          {phase && <Badge variant="amber">↳ {phase.current}</Badge>}
-          {workflowState?.workers?.length ? <Badge variant="blue">workers {metricNumber(workflowState, "active_worker_count")}</Badge> : null}
+          {showPhase && <Badge variant="blue">{phaseLabel}</Badge>}
+          {workflowState?.workers?.length ? (
+            <Badge variant="default">
+              {metricNumber(workflowState, "active_worker_count")} workers
+            </Badge>
+          ) : null}
           {metricNumber(workflowState, "approval_pending_count") > 0 ? (
             <Badge variant="warn">approvals {metricNumber(workflowState, "approval_pending_count")}</Badge>
           ) : null}
@@ -2515,8 +2520,8 @@ function TopBar({
           <div
             style={{
               fontFamily: "var(--mono)",
-              fontSize: ".7rem",
-              color: "#7a9e92",
+              fontSize: ".72rem",
+              color: "var(--ink-dim)",
               marginTop: 4,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -2528,31 +2533,41 @@ function TopBar({
           </div>
         )}
         {workflowState?.workflow?.blocked_reason ? (
-          <div style={{ fontSize: ".72rem", color: "#ef4444", marginTop: 4 }}>
+          <div style={{ fontSize: ".72rem", color: "var(--danger)", marginTop: 4 }}>
             Blocked: {workflowState.workflow.blocked_reason}
           </div>
         ) : null}
-        {statusMsg && <div style={{ fontSize: ".72rem", color: "#f4b860", marginTop: 4 }}>{statusMsg}</div>}
+        {statusMsg && <div style={{ fontSize: ".72rem", color: "var(--warn)", marginTop: 4 }}>{statusMsg}</div>}
       </div>
-      {run && (
-        <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Btn size="sm" variant="ghost" onClick={onRefresh}>
-            Refresh
-          </Btn>
-          <Btn size="sm" variant="ghost" onClick={onPause}>
-            Pause
-          </Btn>
-          <Btn size="sm" variant="ghost" onClick={onRetry}>
-            Retry
-          </Btn>
-          <Btn size="sm" variant="amber" onClick={onReplan}>
-            Replan
-          </Btn>
-          <Btn size="sm" variant="danger" onClick={onCancel}>
-            Cancel
-          </Btn>
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end" }}>
+        {run && (
+          <>
+            <Btn size="sm" variant="ghost" onClick={onRefresh}>Refresh</Btn>
+            <Btn size="sm" variant="ghost" onClick={onPause}>Pause</Btn>
+            <Btn size="sm" variant="ghost" onClick={onRetry}>Retry</Btn>
+            <Btn size="sm" variant="amber" onClick={onReplan}>Replan</Btn>
+            <Btn size="sm" variant="danger" onClick={onCancel}>Cancel</Btn>
+          </>
+        )}
+        <button
+          type="button"
+          className="vx-theme-toggle"
+          onClick={onToggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          aria-label="Toggle theme"
+        >
+          {theme === "dark" ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2590,6 +2605,21 @@ export default function App() {
   const [termLines, setTermLines] = useState<string[]>([]);
 
   const [tab, setTab] = useState<Tab>("overview");
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window === "undefined") return "dark";
+    const stored = window.localStorage.getItem("vx-theme");
+    return stored === "light" ? "light" : "dark";
+  });
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      window.localStorage.setItem("vx-theme", theme);
+    } catch {}
+  }, [theme]);
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  }, []);
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
@@ -3108,6 +3138,8 @@ export default function App() {
           onRetry={() => runAction("retry")}
           onReplan={() => runAction("replan")}
           onCancel={() => runAction("cancel")}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
         <RiskBar run={selectedRun} findings={findings} phase={phase} connected={connected} />
         <PendingApprovalsBanner approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
@@ -3125,11 +3157,9 @@ export default function App() {
         </div>
 
         {tab === "overview" && (
-          <div className="vx-grid">
-            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
+          <div className="vx-workspace vx-workspace-split">
+            <div className="vx-col">
               <ExecSummary run={selectedRun} findings={findings} phase={phase} approvals={approvals} />
-            </div>
-            <div className="vx-span-8" style={{ display: "flex", minWidth: 0 }}>
               <ChatPanel
                 messages={messages}
                 chatText={chatText}
@@ -3137,69 +3167,73 @@ export default function App() {
                 onSend={handleSend}
                 loading={chatLoading}
               />
-            </div>
-            <div className="vx-span-4" style={{ display: "flex", minWidth: 0 }}>
-              <PhasePanel phase={phase} />
-            </div>
-            <div className="vx-span-8" style={{ display: "flex", minWidth: 0 }}>
-              <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
-            </div>
-            <div className="vx-span-4" style={{ display: "flex", minWidth: 0 }}>
-              <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
-            </div>
-            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
-              <TimelinePanel events={events} />
-            </div>
-            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
               <TerminalPanel lines={termLines} />
+            </div>
+            <div className="vx-col">
+              <PhasePanel phase={phase} />
+              <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
+              <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
+              <TimelinePanel events={events} />
             </div>
           </div>
         )}
 
         {tab === "intel" && (
-          <div className="vx-grid">
-            <VectorsPanel
-              vectors={vectors}
-              selectedRunId={selectedRun?.id}
-              onSelect={handleSelectVector}
-              onPromote={handlePromoteVector}
-            />
-            <CvePanel facts={cveFacts} />
-            <BrowserPanel state={browserState} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
-            <MemoryPanel hits={learning} />
-            <ChainsPanel chains={chains} onPromote={handlePromoteChain} selectedRunId={selectedRun?.id} />
+          <div className="vx-workspace vx-workspace-split">
+            <div className="vx-col">
+              <VectorsPanel
+                vectors={vectors}
+                selectedRunId={selectedRun?.id}
+                onSelect={handleSelectVector}
+                onPromote={handlePromoteVector}
+              />
+              <BrowserPanel state={browserState} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
+            </div>
+            <div className="vx-col">
+              <CvePanel facts={cveFacts} />
+              <ChainsPanel chains={chains} onPromote={handlePromoteChain} selectedRunId={selectedRun?.id} />
+              <MemoryPanel hits={learning} />
+            </div>
           </div>
         )}
 
         {tab === "results" && (
-          <div className="vx-grid">
-            <ResultsPanel results={results} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
-            <ReplayPanel replay={replayState} />
+          <div className="vx-workspace vx-workspace-split">
+            <div className="vx-col">
+              <ResultsPanel results={results} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
+            </div>
+            <div className="vx-col">
+              <ReplayPanel replay={replayState} />
+            </div>
           </div>
         )}
 
         {tab === "config" && (
-          <div className="vx-grid">
-            <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
-            <SourcePanel sourceStatus={sourceStatus} />
-            <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />
-            <NotesPanel
-              note={note}
-              setNote={setNote}
-              classification={noteClassification}
-              setClassification={setNoteClassification}
-              onSave={handleSaveNote}
-              canSave={Boolean(selectedRun && note.trim()) && user?.role !== "viewer"}
-            />
-            {user ? (
-              <AccountPanel
-                user={user}
-                connected={connected}
-                onTest={testConnection}
-                testing={testing}
-                onLogout={handleLogout}
+          <div className="vx-workspace vx-workspace-split">
+            <div className="vx-col">
+              <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
+              <SourcePanel sourceStatus={sourceStatus} />
+              <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />
+            </div>
+            <div className="vx-col">
+              <NotesPanel
+                note={note}
+                setNote={setNote}
+                classification={noteClassification}
+                setClassification={setNoteClassification}
+                onSave={handleSaveNote}
+                canSave={Boolean(selectedRun && note.trim()) && user?.role !== "viewer"}
               />
-            ) : null}
+              {user ? (
+                <AccountPanel
+                  user={user}
+                  connected={connected}
+                  onTest={testConnection}
+                  testing={testing}
+                  onLogout={handleLogout}
+                />
+              ) : null}
+            </div>
           </div>
         )}
       </main>
