@@ -612,178 +612,189 @@ function ExecSummary({
     completed: "Completed",
   };
   const currentDisplay = toDisplayPhase(phase?.current);
+  const cardStyle: CSSProperties = {
+    padding: "10px 12px",
+    background: "var(--surface)",
+    border: "1px solid var(--line)",
+    borderRadius: "var(--radius-md)",
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
+    minWidth: 0,
+    overflow: "hidden",
+    boxShadow: "var(--shadow-sm)",
+  };
+  const headStyle: CSSProperties = {
+    fontSize: ".64rem",
+    fontWeight: 700,
+    letterSpacing: ".1em",
+    textTransform: "uppercase",
+    color: "var(--ink-dim)",
+    marginBottom: 8,
+    flexShrink: 0,
+  };
+  const bulletStyle: CSSProperties = { fontSize: ".72rem", color: "var(--ink)", lineHeight: 1.4 };
   return (
     <div
-      className="vx-panel"
       style={{
-        gridColumn: "span 4",
-        marginBottom: 0,
-        background: "var(--surface)",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gap: 10,
+        flexShrink: 0,
       }}
     >
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
-        <div>
-          <div
-            style={{
-              fontSize: ".67rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "var(--ink-dim)",
-              marginBottom: 10,
-            }}
-          >
-            Engagement Status
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            {risk && (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 52,
-                  height: 52,
-                  borderRadius: 12,
-                  background: SEV[risk.variant].bg,
-                  border: `1px solid ${SEV[risk.variant].border}`,
-                  flexShrink: 0,
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: "1.1rem",
-                    fontWeight: 700,
-                    color: SEV[risk.variant].color,
-                    lineHeight: 1,
-                  }}
-                >
-                  {risk.score}
-                </span>
-                <span
-                  style={{
-                    fontSize: ".55rem",
-                    color: SEV[risk.variant].color,
-                    letterSpacing: ".06em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  risk
-                </span>
-              </div>
-            )}
-            <div>
-              <div style={{ fontSize: ".88rem", fontWeight: 700, color: "var(--ink)", marginBottom: 2 }}>
-                {risk?.level || "Pending"} Risk
-              </div>
-              <div style={{ fontSize: ".74rem", color: "var(--ink-dim)" }}>
-                {phaseLabels[currentDisplay] || "Initializing"}
-              </div>
-              <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", marginTop: 2 }}>{run.target}</div>
-            </div>
-          </div>
-          {pendingApprovals.length > 0 && (
+      <div style={cardStyle}>
+        <div style={headStyle}>Engagement Status</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {risk && (
             <div
               style={{
-                padding: "8px 10px",
-                borderRadius: 9,
-                background: "var(--warn-soft)",
-                border: "1px solid var(--warn)",
-                fontSize: ".73rem",
-                color: "var(--warn)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 44,
+                height: 44,
+                borderRadius: 10,
+                background: SEV[risk.variant].bg,
+                border: `1px solid ${SEV[risk.variant].border}`,
+                flexShrink: 0,
               }}
             >
-              ⚠ {pendingApprovals.length} action{pendingApprovals.length > 1 ? "s" : ""} awaiting your approval
-            </div>
-          )}
-        </div>
-        <div>
-          <div
-            style={{
-              fontSize: ".67rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "var(--ink-dim)",
-              marginBottom: 10,
-            }}
-          >
-            Confirmed Findings
-          </div>
-          {findings.length ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {findings.slice(0, 3).map((f) => (
-                <div key={f.id} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                  <SevBadge severity={f.severity} />
-                  <div>
-                    <div
-                      style={{ fontSize: ".76rem", fontWeight: 600, color: "var(--ink)", lineHeight: 1.3 }}
-                    >
-                      {f.title}
-                    </div>
-                    <div
-                      style={{ fontSize: ".71rem", color: "var(--ink-dim)", lineHeight: 1.4, marginTop: 2 }}
-                    >
-                      {(f.summary || "").slice(0, 90)}
-                      {(f.summary || "").length > 90 ? "…" : ""}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: ".78rem", color: "var(--ink-dim)", padding: "8px 0" }}>
-              No confirmed findings yet — scan in progress.
-            </div>
-          )}
-        </div>
-        <div>
-          <div
-            style={{
-              fontSize: ".67rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "var(--ink-dim)",
-              marginBottom: 10,
-            }}
-          >
-            Recommended Next Steps
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {pendingApprovals.length > 0 && (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "var(--warn)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
-                  Review and approve exploitation actions in the{" "}
-                  <strong style={{ color: "var(--warn)" }}>Config</strong> tab
-                </span>
-              </div>
-            )}
-            {criticals.length > 0 && (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "var(--danger)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
-                  Patch {criticals.length} critical vulnerability{criticals.length > 1 ? "s" : ""} immediately
-                </span>
-              </div>
-            )}
-            {highs.length > 0 && (
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "var(--warn)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
-                  Schedule remediation for {highs.length} high-severity issue{highs.length > 1 ? "s" : ""} within 14 days
-                </span>
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-              <span style={{ color: "var(--ok)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-              <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
-                Full report will be available once the engagement completes
+              <span
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: ".95rem",
+                  fontWeight: 700,
+                  color: SEV[risk.variant].color,
+                  lineHeight: 1,
+                }}
+              >
+                {risk.score}
+              </span>
+              <span
+                style={{
+                  fontSize: ".5rem",
+                  color: SEV[risk.variant].color,
+                  letterSpacing: ".06em",
+                  textTransform: "uppercase",
+                }}
+              >
+                risk
               </span>
             </div>
+          )}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: ".8rem", fontWeight: 700, color: "var(--ink)" }}>
+              {risk?.level || "Pending"} Risk
+            </div>
+            <div style={{ fontSize: ".7rem", color: "var(--ink-dim)" }}>
+              {phaseLabels[currentDisplay] || "Initializing"}
+            </div>
+            <div
+              style={{
+                fontSize: ".68rem",
+                color: "var(--ink-dim)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {run.target}
+            </div>
+          </div>
+        </div>
+        {pendingApprovals.length > 0 && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "6px 9px",
+              borderRadius: 8,
+              background: "var(--warn-soft)",
+              border: "1px solid var(--warn)",
+              fontSize: ".7rem",
+              color: "var(--warn)",
+            }}
+          >
+            ⚠ {pendingApprovals.length} action{pendingApprovals.length > 1 ? "s" : ""} awaiting approval
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={headStyle}>Confirmed Findings</div>
+        {findings.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {findings.slice(0, 3).map((f) => (
+              <div key={f.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
+                <SevBadge severity={f.severity} />
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: ".74rem",
+                      fontWeight: 600,
+                      color: "var(--ink)",
+                      lineHeight: 1.3,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {f.title}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: ".68rem",
+                      color: "var(--ink-dim)",
+                      lineHeight: 1.35,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {f.summary || ""}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)" }}>
+            No confirmed findings yet — scan in progress.
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={headStyle}>Recommended Next Steps</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          {pendingApprovals.length > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ color: "var(--warn)", fontSize: ".75rem", flexShrink: 0 }}>→</span>
+              <span style={bulletStyle}>
+                Review and approve actions in <strong style={{ color: "var(--warn)" }}>Config</strong>
+              </span>
+            </div>
+          )}
+          {criticals.length > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ color: "var(--danger)", fontSize: ".75rem", flexShrink: 0 }}>→</span>
+              <span style={bulletStyle}>
+                Patch {criticals.length} critical vuln{criticals.length > 1 ? "s" : ""} immediately
+              </span>
+            </div>
+          )}
+          {highs.length > 0 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ color: "var(--warn)", fontSize: ".75rem", flexShrink: 0 }}>→</span>
+              <span style={bulletStyle}>
+                Remediate {highs.length} high-severity issue{highs.length > 1 ? "s" : ""} within 14 days
+              </span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <span style={{ color: "var(--ok)", fontSize: ".75rem", flexShrink: 0 }}>→</span>
+            <span style={bulletStyle}>Full report available once engagement completes</span>
           </div>
         </div>
       </div>
@@ -979,11 +990,13 @@ function AgentsPanel({
   tasks,
   roles,
   phase,
+  style,
 }: {
   agents: AgentSession[];
   tasks: Task[];
   roles: string[];
   phase: RunPhase | null;
+  style?: CSSProperties;
 }) {
   const current = String(phase?.current || "").toLowerCase();
   const activeRoles = new Set<string>(
@@ -1002,7 +1015,7 @@ function AgentsPanel({
       : ["orchestrator", "recon"]
   );
   return (
-    <Panel title="Agent Team" meta="Specialist agents">
+    <Panel title="Agent Team" meta="Specialist agents" style={style} scroll>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {roles.map((role) => {
           const agent = agents.find((a) => a.role === role);
@@ -1063,9 +1076,11 @@ function AgentsPanel({
 function ControlCenterPanel({
   workflowState,
   approvals,
+  style,
 }: {
   workflowState: WorkflowState | null;
   approvals: Approval[];
+  style?: CSSProperties;
 }) {
   const pendingApprovals = approvals.filter((row) => row.status === "pending").length;
   const blockedClasses = Array.isArray(workflowState?.metrics?.blocked_reason_classes)
@@ -1073,7 +1088,7 @@ function ControlCenterPanel({
     : [];
   const phaseDurations = workflowState?.metrics?.phase_durations_seconds as Record<string, number> | undefined;
   return (
-    <Panel title="Control Center" meta="Workflow health">
+    <Panel title="Control Center" meta="Workflow health" style={style} scroll>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         <Badge variant="blue">workers {metricNumber(workflowState, "active_worker_count")}</Badge>
         <Badge variant={metricNumber(workflowState, "stale_worker_count") > 0 ? "danger" : "ok"}>
@@ -1179,14 +1194,15 @@ function ControlCenterPanel({
   );
 }
 
-function TimelinePanel({ events }: { events: EventRecord[] }) {
+function TimelinePanel({ events, style }: { events: EventRecord[]; style?: CSSProperties }) {
   const visibleEvents = events.filter((event) => !(event.event_type === "terminal" && String(event.level || "info").toLowerCase() === "info"));
   const hiddenTerminalCount = Math.max(0, events.length - visibleEvents.length);
   return (
     <Panel
       title="Attack Timeline"
       meta={`${visibleEvents.length} events${hiddenTerminalCount ? ` · ${hiddenTerminalCount} terminal lines hidden` : ""}`}
-      style={{ gridColumn: "span 2" }}
+      style={style}
+      scroll
     >
       {visibleEvents.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
@@ -1254,17 +1270,17 @@ function SourcePanel({ sourceStatus }: { sourceStatus: SourceStatus | null }) {
 }
 
 // ─── Phase ─────────────────────────────────────────────────────────────────
-function PhasePanel({ phase }: { phase: RunPhase | null }) {
+function PhasePanel({ phase, style }: { phase: RunPhase | null; style?: CSSProperties }) {
   if (!phase)
     return (
-      <Panel title="Engagement Phase">
+      <Panel title="Engagement Phase" style={style}>
         <EmptyState icon="◎" text="No phase state loaded." />
       </Panel>
     );
   const completed = normalizeCompletedPhases(phase.completed);
   const currentDisplay = toDisplayPhase(phase.current);
   return (
-    <Panel title="Engagement Phase" meta={currentDisplay}>
+    <Panel title="Engagement Phase" meta={currentDisplay} style={style} scroll>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {DISPLAY_PHASES.map((p, i) => {
           const done = completed.includes(p);
@@ -1330,15 +1346,17 @@ function VectorsPanel({
   onSelect,
   onPromote,
   selectedRunId,
+  style,
 }: {
   vectors: Vector[];
   onSelect: (v: Vector) => void;
   onPromote: (v: Vector) => void;
   selectedRunId: string | undefined;
+  style?: CSSProperties;
 }) {
   const selectedCount = vectors.filter((row) => row.status === "planned" || row.status === "selected").length;
   return (
-    <Panel title="Attack Vectors" meta={`${vectors.length} candidates · ${selectedCount} selected`} style={{ gridColumn: "span 2" }}>
+    <Panel title="Attack Vectors" meta={`${vectors.length} candidates · ${selectedCount} selected`} style={style} scroll>
       {vectors.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {vectors.map((v) => {
@@ -1421,9 +1439,9 @@ function VectorsPanel({
 }
 
 // ─── CVE, Memory, Chains ────────────────────────────────────────────────────
-function CvePanel({ facts }: { facts: Fact[] }) {
+function CvePanel({ facts, style }: { facts: Fact[]; style?: CSSProperties }) {
   return (
-    <Panel title="Intel Findings" meta={`${facts.length} items`}>
+    <Panel title="Intel Findings" meta={`${facts.length} items`} style={style} scroll>
       {facts.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {facts.map((f, i) => (
@@ -1466,9 +1484,9 @@ function CvePanel({ facts }: { facts: Fact[] }) {
   );
 }
 
-function MemoryPanel({ hits }: { hits: Array<Record<string, unknown>> }) {
+function MemoryPanel({ hits, style }: { hits: Array<Record<string, unknown>>; style?: CSSProperties }) {
   return (
-    <Panel title="Prior Experience" meta="Similar engagements">
+    <Panel title="Prior Experience" meta="Similar engagements" style={style} scroll>
       {hits.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {hits.slice(0, 5).map((h, i) => (
@@ -1514,13 +1532,15 @@ function ChainsPanel({
   chains,
   onPromote,
   selectedRunId,
+  style,
 }: {
   chains: AttackChain[];
   onPromote: (c: AttackChain) => void;
   selectedRunId: string | undefined;
+  style?: CSSProperties;
 }) {
   return (
-    <Panel title="Attack Chains" meta={`${chains.length} modelled`}>
+    <Panel title="Attack Chains" meta={`${chains.length} modelled`} style={style} scroll>
       {chains.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {chains.map((c) => (
@@ -1570,14 +1590,16 @@ function BrowserPanel({
   state,
   selectedRunId,
   onOpenPath,
+  style,
 }: {
   state: BrowserState | null;
   selectedRunId: string | undefined;
   onOpenPath: (path: string) => void;
+  style?: CSSProperties;
 }) {
   if (!state) {
     return (
-      <Panel title="Browser Assessment">
+      <Panel title="Browser Assessment" style={style}>
         <EmptyState icon="◉" text="No browser assessment data yet." />
       </Panel>
     );
@@ -1592,7 +1614,7 @@ function BrowserPanel({
   const jsSignals = Array.isArray(state.js_signals) ? state.js_signals : [];
   const routeHints = Array.isArray(state.route_hints) ? state.route_hints : [];
   return (
-    <Panel title="Browser Assessment" meta={`${state.status} · ${state.pages_visited} pages`}>
+    <Panel title="Browser Assessment" meta={`${state.status} · ${state.pages_visited} pages`} style={style} scroll>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Badge variant="default">auth: {state.authenticated}</Badge>
@@ -1691,18 +1713,35 @@ function ResultsPanel({
   results,
   selectedRunId,
   onOpenPath,
+  style,
 }: {
   results: RunResults | null;
   selectedRunId: string | undefined;
   onOpenPath: (path: string) => void;
+  style?: CSSProperties;
 }) {
   const findings = results?.findings || [];
   const artifacts = results?.artifacts || [];
   const validatedCount = findings.filter((row) => ["validated", "confirmed", "draft"].includes(String(row.status || "").toLowerCase())).length;
+  const colStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
+    minWidth: 0,
+  };
+  const listStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 7,
+    flex: "1 1 auto",
+    minHeight: 0,
+    overflowY: "auto",
+    paddingRight: 4,
+  };
   return (
-    <Panel title="Findings & Report" meta={`${validatedCount} validated · ${artifacts.length} artifacts`} style={{ gridColumn: "span 2" }}>
+    <Panel title="Findings & Report" meta={`${validatedCount} validated · ${artifacts.length} artifacts`} style={style}>
       {results ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "1 1 auto", minHeight: 0, minWidth: 0 }}>
           {results.executive_summary && (
             <div
               style={{
@@ -1713,15 +1752,24 @@ function ResultsPanel({
                 fontSize: ".74rem",
                 color: "var(--ink)",
                 lineHeight: 1.5,
+                flexShrink: 0,
               }}
             >
               {results.executive_summary}
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 16,
+              flex: "1 1 auto",
+              minHeight: 0,
+            }}
+          >
+          <div style={colStyle}>
             <Label>Confirmed Findings ({findings.length})</Label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            <div style={listStyle}>
               {findings.length ? (
                 findings.map((f) => (
                   <div
@@ -1731,13 +1779,26 @@ function ResultsPanel({
                       borderRadius: 10,
                       background: "var(--surface-2)",
                       border: "1px solid var(--line)",
+                      minWidth: 0,
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4, minWidth: 0 }}>
                       <SevBadge severity={f.severity} />
-                      <span style={{ fontSize: ".76rem", fontWeight: 600, color: "var(--ink)" }}>{f.title}</span>
+                      <span
+                        style={{
+                          fontSize: ".76rem",
+                          fontWeight: 600,
+                          color: "var(--ink)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          minWidth: 0,
+                        }}
+                      >
+                        {f.title}
+                      </span>
                     </div>
-                    <p style={{ margin: 0, fontSize: ".72rem", color: "var(--ink-dim)" }}>{f.summary}</p>
+                    <p style={{ margin: 0, fontSize: ".72rem", color: "var(--ink-dim)", wordBreak: "break-word" }}>{f.summary}</p>
                   </div>
                 ))
               ) : (
@@ -1745,9 +1806,9 @@ function ResultsPanel({
               )}
             </div>
           </div>
-          <div>
+          <div style={colStyle}>
             <Label>Evidence & Artifacts ({artifacts.length})</Label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 280, overflowY: "auto" }}>
+            <div style={listStyle}>
               {artifacts.map((a, i) => (
                 <div
                   key={a.id || i}
@@ -1759,6 +1820,7 @@ function ResultsPanel({
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
+                    minWidth: 0,
                   }}
                 >
                   <Badge variant="default">{a.kind}</Badge>
@@ -1770,8 +1832,10 @@ function ResultsPanel({
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      flex: 1,
+                      flex: "1 1 0",
+                      minWidth: 0,
                     }}
+                    title={a.path}
                   >
                     {a.path}
                   </span>
@@ -1793,6 +1857,7 @@ function ResultsPanel({
                   border: "1px solid var(--warn)",
                   fontSize: ".73rem",
                   color: "var(--ink-dim)",
+                  flexShrink: 0,
                 }}
               >
                 Report will be generated automatically when the engagement completes.
@@ -1806,13 +1871,27 @@ function ResultsPanel({
                   borderRadius: 10,
                   background: "var(--ok-soft)",
                   border: "1px solid var(--ok)",
+                  flexShrink: 0,
+                  minWidth: 0,
                 }}
               >
                 <div style={{ fontSize: ".68rem", color: "var(--ok)", fontWeight: 600, marginBottom: 2 }}>
                   Report Ready
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "var(--ink-dim)", flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: ".7rem",
+                      color: "var(--ink-dim)",
+                      flex: "1 1 0",
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={results.report_path}
+                  >
                     {results.report_path}
                   </div>
                   {selectedRunId && (
@@ -1860,9 +1939,9 @@ function ResultsPanel({
   );
 }
 
-function ReplayPanel({ replay }: { replay: ReplayState | null }) {
+function ReplayPanel({ replay, style }: { replay: ReplayState | null; style?: CSSProperties }) {
   return (
-    <Panel title="Replay" meta={replay ? `${replay.summary?.event_count || 0} events` : "history"}>
+    <Panel title="Replay" meta={replay ? `${replay.summary?.event_count || 0} events` : "history"} style={style} scroll>
       {replay ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -3284,41 +3363,67 @@ export default function App() {
                 <TerminalPanel lines={termLines} style={{ flex: "1 1 0", minHeight: 0 }} />
               </div>
             </div>
-            <div className="vx-col">
-              <PhasePanel phase={phase} />
-              <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
-              <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
-              <TimelinePanel events={events} />
+            <div className="vx-col" style={{ overflow: "hidden" }}>
+              <PhasePanel phase={phase} style={{ flex: "1 1 0", minHeight: 0 }} />
+              <AgentsPanel
+                agents={agents}
+                tasks={tasks}
+                roles={ROLES}
+                phase={phase}
+                style={{ flex: "1 1 0", minHeight: 0 }}
+              />
+              <ControlCenterPanel
+                workflowState={workflowState}
+                approvals={approvals}
+                style={{ flex: "1 1 0", minHeight: 0 }}
+              />
+              <TimelinePanel events={events} style={{ flex: "1 1 0", minHeight: 0 }} />
             </div>
           </div>
         )}
 
         {tab === "intel" && (
           <div className="vx-workspace vx-workspace-split">
-            <div className="vx-col">
+            <div className="vx-col" style={{ overflow: "hidden" }}>
               <VectorsPanel
                 vectors={vectors}
                 selectedRunId={selectedRun?.id}
                 onSelect={handleSelectVector}
                 onPromote={handlePromoteVector}
+                style={{ flex: "1 1 0", minHeight: 0 }}
               />
-              <BrowserPanel state={browserState} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
+              <BrowserPanel
+                state={browserState}
+                selectedRunId={selectedRun?.id}
+                onOpenPath={handleOpenPath}
+                style={{ flex: "1 1 0", minHeight: 0 }}
+              />
             </div>
-            <div className="vx-col">
-              <CvePanel facts={cveFacts} />
-              <ChainsPanel chains={chains} onPromote={handlePromoteChain} selectedRunId={selectedRun?.id} />
-              <MemoryPanel hits={learning} />
+            <div className="vx-col" style={{ overflow: "hidden" }}>
+              <CvePanel facts={cveFacts} style={{ flex: "1 1 0", minHeight: 0 }} />
+              <ChainsPanel
+                chains={chains}
+                onPromote={handlePromoteChain}
+                selectedRunId={selectedRun?.id}
+                style={{ flex: "1 1 0", minHeight: 0 }}
+              />
+              <MemoryPanel hits={learning} style={{ flex: "1 1 0", minHeight: 0 }} />
             </div>
           </div>
         )}
 
         {tab === "results" && (
           <div className="vx-workspace vx-workspace-split">
-            <div className="vx-col">
-              <ResultsPanel results={results} selectedRunId={selectedRun?.id} onOpenPath={handleOpenPath} />
+            <div className="vx-col" style={{ overflow: "hidden" }}>
+              <ResultsPanel
+                results={results}
+                selectedRunId={selectedRun?.id}
+                onOpenPath={handleOpenPath}
+                style={{ flex: "1 1 auto", minHeight: 0 }}
+              />
             </div>
-            <div className="vx-col">
-              <ReplayPanel replay={replayState} />
+            <div className="vx-col" style={{ overflow: "hidden" }}>
+              <ReplayPanel replay={replayState} style={{ flex: "1 1 auto", minHeight: 0 }} />
             </div>
           </div>
         )}
