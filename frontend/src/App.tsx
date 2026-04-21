@@ -2257,10 +2257,6 @@ function Sidebar({
   runs,
   selected,
   onSelect,
-  mode,
-  setMode,
-  target,
-  setTarget,
   sourceType,
   setSourceType,
   githubUrl,
@@ -2275,10 +2271,6 @@ function Sidebar({
   runs: Run[];
   selected: Run | null;
   onSelect: (r: Run) => void;
-  mode: string;
-  setMode: (v: string) => void;
-  target: string;
-  setTarget: (v: string) => void;
   sourceType: "none" | "github" | "local" | "upload";
   setSourceType: (v: "none" | "github" | "local" | "upload") => void;
   githubUrl: string;
@@ -2295,134 +2287,69 @@ function Sidebar({
       <div className="vx-sidebar-inner">
         <div
           style={{
-            marginBottom: 14,
-            border: "1px solid rgba(217,58,73,.24)",
-            borderRadius: 8,
-            padding: 10,
-            background: "rgba(255,255,255,.02)",
+            marginBottom: 18,
+            borderBottom: "1px solid var(--line)",
+            paddingBottom: 16,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <div
               style={{
-                width: 24,
-                height: 24,
-                borderRadius: 6,
-                background: "linear-gradient(145deg,#25080d,#511019)",
-                border: "1px solid rgba(217,58,73,.4)",
+                width: 30,
+                height: 30,
+                borderRadius: 7,
+                background: "var(--accent-soft)",
+                border: "1px solid var(--accent)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: ".7rem",
-                color: "#ff6d7a",
+                fontSize: ".72rem",
+                color: "var(--accent)",
                 fontWeight: 700,
+                letterSpacing: ".02em",
               }}
             >
               VX
             </div>
-            <div
-              style={{
-                fontSize: ".62rem",
-                fontWeight: 700,
-                letterSpacing: ".1em",
-                textTransform: "uppercase",
-                color: "#a69599",
-              }}
-            >
-              Autonomous Offensive Security Suite
-            </div>
-          </div>
-          <div
-            style={{
-              fontSize: "2.1rem",
-              fontWeight: 700,
-              letterSpacing: ".14em",
-              lineHeight: 0.9,
-              color: "#19c37d",
-              fontFamily: "var(--mono)",
-            }}
-          >
-            VANTIX
-          </div>
-          <div style={{ fontSize: ".68rem", color: "#a69599", marginTop: 6 }}>Recon · Exploit · Forge · Report</div>
-        </div>
-        <div style={{ display: "flex", gap: 5, marginBottom: 18, flexWrap: "wrap" }}>
-          <Badge variant="ok">● Codex</Badge>
-          <Badge variant="ok">● Worker</Badge>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <div
-            style={{
-              fontSize: ".66rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "#7a9e92",
-              marginBottom: 7,
-            }}
-          >
-            Module
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {MODES.map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
+            <div>
+              <div
                 style={{
-                  padding: "3px 9px",
-                  borderRadius: 6,
-                  fontSize: ".68rem",
+                  fontSize: "1.05rem",
                   fontWeight: 600,
-                  background: mode === m ? "rgba(217,58,73,.2)" : "rgba(255,255,255,.04)",
-                  border: `1px solid ${mode === m ? "rgba(217,58,73,.45)" : "rgba(217,58,73,.18)"}`,
-                  color: mode === m ? "#ff6d7a" : "#a69599",
-                  transition: "all .15s",
+                  letterSpacing: "-0.005em",
+                  lineHeight: 1,
+                  color: "var(--ink)",
                 }}
               >
-                {m}
-              </button>
-            ))}
+                Vantix
+              </div>
+              <div
+                style={{
+                  fontSize: ".62rem",
+                  fontWeight: 500,
+                  letterSpacing: ".08em",
+                  textTransform: "uppercase",
+                  color: "var(--ink-dim)",
+                  marginTop: 3,
+                }}
+              >
+                Offensive Security Suite
+              </div>
+            </div>
           </div>
-        </div>
-        <div style={{ marginBottom: 20 }}>
-          <div
-            style={{
-              fontSize: ".66rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "#7a9e92",
-              marginBottom: 6,
-            }}
-          >
-            Target
-          </div>
-          <input
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            placeholder="10.10.10.10 or https://target"
-            style={{
-              width: "100%",
-              padding: "8px 11px",
-              background: "rgba(5,10,10,.9)",
-              border: "1px solid rgba(217,58,73,.25)",
-              borderRadius: 8,
-              color: "#e8f4ee",
-              fontSize: ".76rem",
-            }}
-          />
-          <div style={{ fontSize: ".66rem", color: "#7a9e92", marginTop: 5 }}>
-            Use the chat to launch or continue an engagement.
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <Badge variant="ok">● Codex</Badge>
+            <Badge variant="ok">● Worker</Badge>
           </div>
         </div>
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: ".66rem", fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "#7a9e92", marginBottom: 6 }}>
+          <div className="vx-label" style={{ marginBottom: 8 }}>
             Source (White-box)
           </div>
           <select
             value={sourceType}
             onChange={(e) => setSourceType(e.target.value as "none" | "github" | "local" | "upload")}
-            style={{ width: "100%", padding: "8px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.25)", borderRadius: 8, color: "#e8f4ee", fontSize: ".74rem", marginBottom: 6 }}
+            style={{ width: "100%", padding: "9px 11px", fontSize: ".78rem", marginBottom: 8 }}
           >
             <option value="none">None (black-box)</option>
             <option value="github">GitHub Repo</option>
@@ -2435,13 +2362,13 @@ function Sidebar({
                 value={githubUrl}
                 onChange={(e) => setGithubUrl(e.target.value)}
                 placeholder="https://github.com/org/repo"
-                style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+                style={{ width: "100%", padding: "8px 11px", fontSize: ".76rem" }}
               />
               <input
                 value={githubRef}
                 onChange={(e) => setGithubRef(e.target.value)}
                 placeholder="branch/tag/commit (optional)"
-                style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+                style={{ width: "100%", padding: "8px 11px", fontSize: ".76rem" }}
               />
             </div>
           )}
@@ -2450,7 +2377,7 @@ function Sidebar({
               value={localPath}
               onChange={(e) => setLocalPath(e.target.value)}
               placeholder="/path/to/source"
-              style={{ width: "100%", padding: "7px 10px", background: "rgba(5,10,10,.9)", border: "1px solid rgba(217,58,73,.2)", borderRadius: 8, color: "#e8f4ee", fontSize: ".72rem" }}
+              style={{ width: "100%", padding: "8px 11px", fontSize: ".76rem" }}
             />
           )}
           {sourceType === "upload" && (
@@ -2462,28 +2389,19 @@ function Sidebar({
                   const file = e.target.files?.[0];
                   if (file) onUpload(file);
                 }}
-                style={{ width: "100%", padding: "4px", fontSize: ".7rem", color: "#e8f4ee" }}
+                style={{ width: "100%", padding: "6px", fontSize: ".74rem", color: "var(--ink)" }}
               />
-              <div style={{ fontSize: ".65rem", color: "#7a9e92" }}>{uploadLabel || "No upload staged yet."}</div>
+              <div style={{ fontSize: ".7rem", color: "var(--ink-dim)" }}>{uploadLabel || "No upload staged yet."}</div>
             </div>
           )}
         </div>
         <div>
-          <div
-            style={{
-              fontSize: ".66rem",
-              fontWeight: 700,
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-              color: "#7a9e92",
-              marginBottom: 8,
-            }}
-          >
+          <div className="vx-label" style={{ marginBottom: 10 }}>
             Recent Engagements
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {runs.length === 0 && (
-              <div style={{ fontSize: ".7rem", color: "#7a9e92" }}>No runs yet.</div>
+              <div style={{ fontSize: ".74rem", color: "var(--ink-dim)" }}>No runs yet.</div>
             )}
             {runs.map((run) => {
               const variant: Variant =
@@ -2675,8 +2593,7 @@ export default function App() {
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
-  const [mode, setMode] = useState("pentest");
-  const [target, setTarget] = useState("");
+  const mode = "pentest";
   const [sourceType, setSourceType] = useState<"none" | "github" | "local" | "upload">("none");
   const [githubUrl, setGithubUrl] = useState("");
   const [githubRef, setGithubRef] = useState("");
@@ -2924,7 +2841,6 @@ export default function App() {
       message,
       run_id: selectedRun && !forceNew ? selectedRun.id : undefined,
       mode,
-      target: forceNew || !selectedRun ? target || undefined : undefined,
       metadata: sourceMetadata,
     });
     setSelectedRun(res.run);
@@ -2938,10 +2854,8 @@ export default function App() {
     if (!chatText.trim()) return;
     const txt = chatText;
     const sourceInput = buildSourceInput();
-    const newTarget = target.trim();
-    const targetChanged = Boolean(selectedRun && newTarget && newTarget !== (selectedRun.target || ""));
     const sourceAttached = sourceInput.type !== "none";
-    const shouldStartNew = Boolean(selectedRun && (targetChanged || sourceAttached));
+    const shouldStartNew = Boolean(selectedRun && sourceAttached);
     setChatText("");
     const userMsg: RunMessage = {
       id: `m${Date.now()}`,
@@ -3172,10 +3086,6 @@ export default function App() {
         runs={runs}
         selected={selectedRun}
         onSelect={handleSelectRun}
-        mode={mode}
-        setMode={setMode}
-        target={target}
-        setTarget={setTarget}
         sourceType={sourceType}
         setSourceType={setSourceType}
         githubUrl={githubUrl}
@@ -3216,19 +3126,33 @@ export default function App() {
 
         {tab === "overview" && (
           <div className="vx-grid">
-            <ExecSummary run={selectedRun} findings={findings} phase={phase} approvals={approvals} />
-            <ChatPanel
-              messages={messages}
-              chatText={chatText}
-              setChatText={setChatText}
-              onSend={handleSend}
-              loading={chatLoading}
-            />
-            <PhasePanel phase={phase} />
-            <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
-            <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
-            <TimelinePanel events={events} />
-            <TerminalPanel lines={termLines} />
+            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
+              <ExecSummary run={selectedRun} findings={findings} phase={phase} approvals={approvals} />
+            </div>
+            <div className="vx-span-8" style={{ display: "flex", minWidth: 0 }}>
+              <ChatPanel
+                messages={messages}
+                chatText={chatText}
+                setChatText={setChatText}
+                onSend={handleSend}
+                loading={chatLoading}
+              />
+            </div>
+            <div className="vx-span-4" style={{ display: "flex", minWidth: 0 }}>
+              <PhasePanel phase={phase} />
+            </div>
+            <div className="vx-span-8" style={{ display: "flex", minWidth: 0 }}>
+              <AgentsPanel agents={agents} tasks={tasks} roles={ROLES} phase={phase} />
+            </div>
+            <div className="vx-span-4" style={{ display: "flex", minWidth: 0 }}>
+              <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
+            </div>
+            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
+              <TimelinePanel events={events} />
+            </div>
+            <div className="vx-span-full" style={{ display: "flex", minWidth: 0 }}>
+              <TerminalPanel lines={termLines} />
+            </div>
           </div>
         )}
 
@@ -3257,7 +3181,6 @@ export default function App() {
         {tab === "config" && (
           <div className="vx-grid">
             <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
-            <ControlCenterPanel workflowState={workflowState} approvals={approvals} />
             <SourcePanel sourceStatus={sourceStatus} />
             <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />
             <NotesPanel

@@ -1,16 +1,24 @@
 :root {
   color-scheme: dark;
-  --bg: #0b0506;
-  --panel: rgba(15, 8, 10, 0.94);
-  --line: rgba(156, 43, 56, 0.35);
-  --line-soft: rgba(143, 37, 49, 0.2);
-  --accent: #d93a49;
-  --accent-2: #f4b860;
-  --ok: #22c55e;
-  --ink: #e8f4ee;
-  --muted: #9a8d91;
-  --mono: "IBM Plex Mono", "Cascadia Mono", monospace;
-  --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --bg: #0c0f14;
+  --bg-deep: #0a0d12;
+  --panel: #121620;
+  --panel-alt: #161b27;
+  --panel-raised: #1a2030;
+  --line: rgba(148, 163, 184, 0.14);
+  --line-soft: rgba(148, 163, 184, 0.08);
+  --line-strong: rgba(148, 163, 184, 0.24);
+  --accent: #6ea8fe;
+  --accent-hover: #89baff;
+  --accent-soft: rgba(110, 168, 254, 0.14);
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --ink: #e6ebf2;
+  --ink-dim: #94a3b8;
+  --muted: #64748b;
+  --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+  --sans: "IBM Plex Sans", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 *,
@@ -29,12 +37,12 @@ body {
 body {
   font-family: var(--sans);
   color: var(--ink);
-  background:
-    radial-gradient(circle at 14% 12%, rgba(217, 58, 73, 0.16) 0%, transparent 24%),
-    radial-gradient(circle at 82% 24%, rgba(142, 30, 45, 0.15) 0%, transparent 26%),
-    linear-gradient(170deg, #090304 0%, #130609 52%, #100507 100%);
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
   background-attachment: fixed;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
 }
 
 button,
@@ -53,7 +61,8 @@ select {
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: rgba(25, 195, 125, 0.4) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 button {
@@ -62,8 +71,8 @@ button {
 }
 
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -71,8 +80,12 @@ button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(140, 185, 165, 0.18);
+  background: rgba(148, 163, 184, 0.18);
   border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.3);
 }
 
 @keyframes vx-pulse {
@@ -100,7 +113,7 @@ button {
 @keyframes vx-fadein {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(4px);
   }
   to {
     opacity: 1;
@@ -114,9 +127,10 @@ button {
   }
 }
 
+/* ─── Shell ─────────────────────────────────────────────────────────────── */
 .vx-shell {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 244px 1fr;
   min-height: 100vh;
   gap: 0;
 }
@@ -126,130 +140,232 @@ button {
   top: 0;
   height: 100vh;
   overflow-y: auto;
-  border-right: 1px solid var(--line-soft);
-  background: rgba(9, 4, 5, 0.95);
-  backdrop-filter: blur(20px);
+  border-right: 1px solid var(--line);
+  background: var(--panel);
   display: flex;
   flex-direction: column;
 }
 
 .vx-sidebar-inner {
-  padding: 14px 12px;
+  padding: 18px 16px;
   flex: 1;
   display: flex;
   flex-direction: column;
 }
 
 .vx-main {
-  padding: 14px;
+  padding: 18px 20px 24px;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
+/* ─── Panel base ────────────────────────────────────────────────────────── */
 .vx-panel {
   background: var(--panel);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  padding: 12px;
-  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
   animation: vx-fadein 0.22s ease both;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.01);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  flex: 1 1 auto;
 }
 
+.vx-panel h3,
+.vx-panel h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* ─── Top bar ───────────────────────────────────────────────────────────── */
 .vx-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: 14px 18px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  backdrop-filter: blur(16px);
+  border-radius: 10px;
 }
 
 .vx-riskbar {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 8px 10px;
-  margin-bottom: 8px;
-  background: rgba(17, 8, 10, 0.9);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: 10px;
   flex-wrap: wrap;
 }
 
+/* ─── Grid ──────────────────────────────────────────────────────────────── */
 .vx-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
 }
 
+.vx-grid > * {
+  grid-column: span 6;
+}
+
+.vx-grid > .vx-span-full {
+  grid-column: span 12;
+}
+.vx-grid > .vx-span-8 {
+  grid-column: span 8;
+}
+.vx-grid > .vx-span-4 {
+  grid-column: span 4;
+}
+
+/* ─── Tabs ──────────────────────────────────────────────────────────────── */
 .vx-tabs {
   display: flex;
-  gap: 4px;
-  padding: 3px;
-  background: rgba(22, 8, 10, 0.95);
-  border-radius: 8px;
-  border: 1px solid var(--line-soft);
-  margin-bottom: 8px;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+  margin-bottom: 4px;
 }
 
 .vx-tab {
-  flex: 1;
-  padding: 7px 10px;
-  border-radius: 6px;
+  position: relative;
+  padding: 10px 18px;
   border: none;
-  font-size: 0.74rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  border-radius: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   background: transparent;
-  color: #b69ea4;
-  transition: all 0.15s;
+  color: var(--ink-dim);
+  transition: color 0.15s;
   cursor: pointer;
 }
 
-.vx-tab.active {
-  background: rgba(217, 58, 73, 0.22);
-  color: #ff6d7a;
+.vx-tab::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  background: transparent;
+  transition: background 0.15s;
 }
 
-.vx-tab:hover:not(.active) {
-  background: rgba(255, 255, 255, 0.05);
+.vx-tab.active {
   color: var(--ink);
 }
 
+.vx-tab.active::after {
+  background: var(--accent);
+}
+
+.vx-tab:hover:not(.active) {
+  color: var(--ink);
+}
+
+/* ─── Run cards ─────────────────────────────────────────────────────────── */
 .vx-run-card {
   width: 100%;
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid var(--line-soft);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
   color: var(--ink);
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 
 .vx-run-card:hover {
-  border-color: rgba(217, 58, 73, 0.45);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--line-strong);
+  background: var(--panel-raised);
 }
 
 .vx-run-card.active {
-  border-color: rgba(217, 58, 73, 0.6);
-  background: rgba(217, 58, 73, 0.12);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
-@media (max-width: 1300px) {
-  .vx-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* ─── Inputs ────────────────────────────────────────────────────────────── */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input:not([type]),
+textarea,
+select {
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  border-radius: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+/* ─── Buttons (utility) ─────────────────────────────────────────────────── */
+.vx-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-alt);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.vx-btn:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.vx-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0a0d12;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.vx-btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #0a0d12;
+}
+
+/* ─── Label helpers ─────────────────────────────────────────────────────── */
+.vx-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* ─── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 1400px) {
+  .vx-grid > * {
+    grid-column: span 6;
+  }
+  .vx-grid > .vx-span-8 {
+    grid-column: span 12;
+  }
+  .vx-grid > .vx-span-4 {
+    grid-column: span 6;
   }
 }
 
@@ -261,8 +377,8 @@ button {
     position: static;
     height: auto;
   }
-  .vx-grid {
-    grid-template-columns: 1fr;
+  .vx-grid > * {
+    grid-column: span 12;
   }
 }
 
@@ -272,63 +388,74 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #05090a;
-  color: #e8f4ee;
+  background: linear-gradient(180deg, var(--bg) 0%, var(--bg-deep) 100%);
+  color: var(--ink);
 }
 .login-card {
-  width: 340px;
-  padding: 28px 28px 24px;
-  border: 1px solid rgba(140, 185, 165, 0.18);
-  border-radius: 14px;
-  background: rgba(12, 18, 18, 0.92);
+  width: 360px;
+  padding: 32px 32px 28px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 .login-card h1 {
   margin: 0;
-  font-size: 1.1rem;
-  letter-spacing: 0.04em;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 .login-card .muted {
-  color: #7a9e92;
-  font-size: 0.78rem;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
   margin: 0;
 }
 .login-card label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   font-size: 0.72rem;
-  color: #a69599;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
 }
 .login-card input {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(140, 185, 165, 0.22);
-  background: rgba(6, 12, 12, 0.9);
-  color: #e8f4ee;
-  font-size: 0.82rem;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 0.86rem;
 }
 .login-card button {
-  margin-top: 4px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(99, 179, 237, 0.4);
-  background: rgba(99, 179, 237, 0.12);
-  color: #e8f4ee;
+  margin-top: 6px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #0a0d12;
   font-weight: 600;
+  letter-spacing: 0.02em;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.login-card button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 .login-card button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .login-error {
-  padding: 8px 10px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  background: rgba(239, 68, 68, 0.08);
+  padding: 10px 12px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
   border-radius: 8px;
-  color: #ff6b6b;
-  font-size: 0.75rem;
+  color: var(--danger);
+  font-size: 0.78rem;
 }
