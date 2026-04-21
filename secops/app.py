@@ -72,47 +72,51 @@ async def lifespan(_: FastAPI):
     _check_startup_config()
     _run_migrations_if_needed()
     _bootstrap_users_if_needed()
-    try:
-        from secops.db import SessionLocal
-        from secops.services.execution import execution_manager
-        from secops.services.worker_runtime import worker_runtime
+    if settings.enable_background_worker:
+        try:
+            from secops.db import SessionLocal
+            from secops.services.execution import execution_manager
+            from secops.services.worker_runtime import worker_runtime
 
-        scavenged = False
-        for delay in (0.0, 0.1, 0.3):
-            if delay:
-                time.sleep(delay)
-            try:
-                with SessionLocal() as db:
-                    execution_manager.workflow_engine.scavenge_stale_runtime(db)
-                    db.commit()
-                scavenged = True
-                break
-            except OperationalError as exc:
-                if "database is locked" not in str(exc).lower():
-                    raise
-        if not scavenged:
-            logger.warning("startup stale-runtime scavenger skipped due sqlite lock")
-        worker_runtime.ensure_running(execution_manager)
-    except Exception:  # noqa: BLE001
-        logger.exception("worker_runtime startup failed")
+            scavenged = False
+            for delay in (0.0, 0.1, 0.3):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    with SessionLocal() as db:
+                        execution_manager.workflow_engine.scavenge_stale_runtime(db)
+                        db.commit()
+                    scavenged = True
+                    break
+                except OperationalError as exc:
+                    if "database is locked" not in str(exc).lower():
+                        raise
+            if not scavenged:
+                logger.warning("startup stale-runtime scavenger skipped due sqlite lock")
+            worker_runtime.ensure_running(execution_manager)
+        except Exception:  # noqa: BLE001
+            logger.exception("worker_runtime startup failed")
+    else:
+        logger.info("background worker disabled by configuration")
     try:
         yield
     finally:
-        try:
-            from secops.services.worker_runtime import worker_runtime
-            worker_runtime.stop()
-        except Exception:  # noqa: BLE001
-            logger.exception("worker_runtime shutdown failed")
-        try:
-            from secops.db import SessionLocal
-            from secops.models import WorkerLease
-            with SessionLocal() as db:
-                active = db.query(WorkerLease).filter(WorkerLease.status == "active").all()
-                for lease in active:
-                    lease.status = "released"
-                db.commit()
-        except Exception:  # noqa: BLE001
-            logger.exception("lease release on shutdown failed")
+        if settings.enable_background_worker:
+            try:
+                from secops.services.worker_runtime import worker_runtime
+                worker_runtime.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("worker_runtime shutdown failed")
+            try:
+                from secops.db import SessionLocal
+                from secops.models import WorkerLease
+                with SessionLocal() as db:
+                    active = db.query(WorkerLease).filter(WorkerLease.status == "active").all()
+                    for lease in active:
+                        lease.status = "released"
+                    db.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception("lease release on shutdown failed")
 
 
 def create_app() -> FastAPI:

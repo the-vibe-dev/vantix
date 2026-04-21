@@ -2024,6 +2024,92 @@ function SkillsPanel({
   );
 }
 
+function HighRiskSurfacesPanel({
+  run,
+  onSave,
+}: {
+  run: Run | null;
+  onSave: (payload: { enabled: boolean; label: string }) => Promise<void>;
+}) {
+  const validation = (run?.config?.validation as Record<string, unknown> | undefined) || {};
+  const raw = (validation.high_risk_surfaces as Record<string, unknown> | undefined) || {};
+  const currentEnabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
+  const currentLabel = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : "High Risk Surfaces";
+  const [enabled, setEnabled] = useState(currentEnabled);
+  const [label, setLabel] = useState(currentLabel);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setEnabled(currentEnabled);
+    setLabel(currentLabel);
+  }, [currentEnabled, currentLabel, run?.id]);
+
+  const dirty = enabled !== currentEnabled || label.trim() !== currentLabel;
+
+  async function handleSave() {
+    if (!run) return;
+    setSaving(true);
+    try {
+      await onSave({ enabled, label: label.trim() || "High Risk Surfaces" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel title="High Risk Surfaces" meta={enabled ? "enabled by default" : "disabled for this run"}>
+      {!run ? (
+        <EmptyState text="Select a run to control high-risk validation." />
+      ) : (
+        <>
+          <div
+            style={{
+              padding: "12px 14px",
+              borderRadius: 10,
+              background: "var(--surface-2)",
+              border: "1px solid var(--line)",
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontSize: ".74rem", color: "var(--ink)", lineHeight: 1.55 }}>
+              Controls whether Vantix automatically validates high-impact surfaces such as state mutation, local file read, persistence-adjacent, RCE-adjacent, and availability probes.
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <Btn size="sm" variant={enabled ? "green" : "ghost"} onClick={() => setEnabled((v) => !v)}>
+              {enabled ? "Enabled" : "Disabled"}
+            </Btn>
+            <span style={{ fontSize: ".76rem", color: "var(--ink-dim)" }}>
+              When disabled, those probes are skipped and recorded as skipped validation attempts.
+            </span>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <Label>LLM-facing label</Label>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="High Risk Surfaces"
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line-strong)",
+                borderRadius: 8,
+                color: "var(--ink)",
+                fontSize: ".78rem",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+          <Btn size="sm" onClick={handleSave} disabled={!dirty || saving}>
+            {saving ? "Saving…" : "Save Setting"}
+          </Btn>
+        </>
+      )}
+    </Panel>
+  );
+}
+
 // ─── Notes ─────────────────────────────────────────────────────────────────
 function NotesPanel({
   note,
@@ -3031,6 +3117,18 @@ export default function App() {
       flash(`Apply failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  async function handleSaveHighRiskSurfaces(payload: { enabled: boolean; label: string }) {
+    if (!selectedRun) return;
+    try {
+      const updated = await api.updateValidationConfig(selectedRun.id, payload);
+      setSelectedRun(updated);
+      setRuns((rows) => rows.map((item) => (item.id === updated.id ? updated : item)));
+      await refreshRun(updated.id, { incrementalTerminal: false });
+      flash(`High Risk Surfaces ${payload.enabled ? "enabled" : "disabled"} for this run`);
+    } catch (error) {
+      flash(`Save failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   async function handleSaveNote() {
     if (!selectedRun || !note.trim()) return;
     try {
@@ -3229,6 +3327,7 @@ export default function App() {
           <div className="vx-workspace vx-workspace-split">
             <div className="vx-col">
               <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
+              <HighRiskSurfacesPanel run={selectedRun} onSave={handleSaveHighRiskSurfaces} />
               <SourcePanel sourceStatus={sourceStatus} />
               <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />
             </div>

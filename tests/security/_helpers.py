@@ -16,6 +16,7 @@ def isolated_db_env() -> None:
         path.unlink()
     os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{path}"
     os.environ["SECOPS_DEV_MODE"] = "0"
+    os.environ["SECOPS_ENABLE_BACKGROUND_WORKER"] = "0"
 
 
 def reset_db() -> None:

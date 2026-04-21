@@ -8,7 +8,7 @@ import pytest
 def _restore_settings():
     from secops.config import settings
 
-    fields = ("api_token", "dev_mode", "service_token_enabled")
+    fields = ("api_token", "dev_mode", "service_token_enabled", "enable_background_worker")
     originals = {k: getattr(settings, k) for k in fields}
     yield
     for key, value in originals.items():

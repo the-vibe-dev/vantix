@@ -133,3 +133,26 @@ def test_scope_policy_approval_grant_is_consumed_once() -> None:
         assert second.allowed is False
         assert "denied range" in second.reason
         assert int((run.config_json.get("approval_grants") or {}).get("scope", -1)) == 0
+
+
+def test_validation_config_normalizes_high_risk_surfaces_defaults() -> None:
+    reset_db()
+    manager = ExecutionManager()
+    with SessionLocal() as db:
+        run = _seed_run(db)
+        cfg = manager._validation_config(run)
+        assert cfg["high_risk_surfaces"]["enabled"] is True
+        assert cfg["high_risk_surfaces"]["label"] == "High Risk Surfaces"
+
+        run.config_json = {
+            **(run.config_json or {}),
+            "validation": {
+                "high_risk_surfaces": {
+                    "enabled": False,
+                    "label": "Controlled Validation",
+                }
+            },
+        }
+        cfg = manager._validation_config(run)
+        assert cfg["high_risk_surfaces"]["enabled"] is False
+        assert cfg["high_risk_surfaces"]["label"] == "Controlled Validation"

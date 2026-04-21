@@ -44,6 +44,7 @@ from secops.schemas import (
     OperatorNoteRead,
     RunControlResponse,
     RunCreate,
+    RunValidationConfigUpdate,
     RunGraphRead,
     RunLearningRead,
     RunRead,
@@ -796,6 +797,27 @@ def set_run_provider_route(run_id: str, payload: RunProviderRouteCreate, db: Ses
         config["runtime_route"] = {"runtime": "codex", "provider_id": "", "provider_type": ""}
     run.config_json = config
     SkillApplicationService().apply_to_run(db, run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@router.post("/{run_id}/validation-config", response_model=RunRead)
+def set_run_validation_config(run_id: str, payload: RunValidationConfigUpdate, db: Session = Depends(get_db)) -> WorkspaceRun:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    config = dict(run.config_json or {})
+    validation = dict(config.get("validation") or {})
+    high_risk = dict(validation.get("high_risk_surfaces") or {})
+    if payload.enabled is not None:
+        high_risk["enabled"] = bool(payload.enabled)
+    if payload.label is not None:
+        label = str(payload.label).strip() or "High Risk Surfaces"
+        high_risk["label"] = label[:80]
+    validation["high_risk_surfaces"] = high_risk
+    config["validation"] = validation
+    run.config_json = config
     db.commit()
     db.refresh(run)
     return run

@@ -52,6 +52,7 @@ class Settings:
     enable_write_execution: bool
     enable_codex_execution: bool
     enable_script_execution: bool
+    enable_background_worker: bool
     default_stream_poll_interval: float
     dev_mode: bool
     cors_allow_origins: list[str]
@@ -125,6 +126,7 @@ settings = Settings(
     enable_write_execution=_env_bool("SECOPS_ENABLE_WRITE_EXECUTION", default=False),
     enable_codex_execution=_env_bool("SECOPS_ENABLE_CODEX_EXECUTION", default=False),
     enable_script_execution=_env_bool("SECOPS_ENABLE_SCRIPT_EXECUTION", default=False),
+    enable_background_worker=_env_bool("SECOPS_ENABLE_BACKGROUND_WORKER", default=True),
     default_stream_poll_interval=float(os.getenv("SECOPS_STREAM_POLL_INTERVAL", "0.5")),
     dev_mode=_env_bool("SECOPS_DEV_MODE", default=False),
     cors_allow_origins=_env_list("SECOPS_CORS_ALLOW_ORIGINS", ["http://127.0.0.1:4173", "http://localhost:4173"]),

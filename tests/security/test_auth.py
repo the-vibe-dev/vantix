@@ -13,6 +13,7 @@ TEST_DB_PATH = Path(os.getenv("SECOPS_TEST_DB", str(Path(tempfile.gettempdir()) 
 TEST_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 os.environ.setdefault("SECOPS_DEV_MODE", "0")
+os.environ["SECOPS_ENABLE_BACKGROUND_WORKER"] = "0"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +38,7 @@ def _restore_settings():
         "api_token": settings.api_token,
         "dev_mode": settings.dev_mode,
         "service_token_enabled": settings.service_token_enabled,
+        "enable_background_worker": settings.enable_background_worker,
     }
     yield
     for key, value in originals.items():
@@ -48,11 +50,11 @@ def test_empty_token_with_service_mode_rejects() -> None:
     _set("api_token", "")
     _set("dev_mode", False)
     _set("service_token_enabled", True)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs")
-    assert resp.status_code == 503
-    assert "SECOPS_API_TOKEN" in resp.json()["detail"]
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs")
+        assert resp.status_code == 503
+        assert "SECOPS_API_TOKEN" in resp.json()["detail"]
 
 
 def test_service_token_disabled_rejects_bearer() -> None:
@@ -60,10 +62,10 @@ def test_service_token_disabled_rejects_bearer() -> None:
     _set("api_token", "right-token")
     _set("dev_mode", False)
     _set("service_token_enabled", False)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
-    assert resp.status_code == 401
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
+        assert resp.status_code == 401
 
 
 def test_wrong_token_rejected() -> None:
@@ -71,10 +73,10 @@ def test_wrong_token_rejected() -> None:
     _set("api_token", "the-real-token")
     _set("dev_mode", False)
     _set("service_token_enabled", True)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer wrong"})
-    assert resp.status_code == 401
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
 
 
 def test_correct_token_accepted() -> None:
@@ -82,20 +84,20 @@ def test_correct_token_accepted() -> None:
     _set("api_token", "right-token")
     _set("dev_mode", False)
     _set("service_token_enabled", True)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
-    assert resp.status_code == 200
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs", headers={"Authorization": "Bearer right-token"})
+        assert resp.status_code == 200
 
 
 def test_dev_mode_allows_no_token() -> None:
     _reset_db()
     _set("api_token", "")
     _set("dev_mode", True)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs")
-    assert resp.status_code == 200
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs")
+        assert resp.status_code == 200
 
 
 def test_missing_credentials_rejected() -> None:
@@ -103,7 +105,7 @@ def test_missing_credentials_rejected() -> None:
     _set("api_token", "prod-token")
     _set("dev_mode", False)
     _set("service_token_enabled", True)
-    client = TestClient(create_app())
-
-    resp = client.get("/api/v1/runs")
-    assert resp.status_code == 401
+    _set("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        resp = client.get("/api/v1/runs")
+        assert resp.status_code == 401

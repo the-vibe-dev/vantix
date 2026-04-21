@@ -42,6 +42,11 @@ class RunCreate(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunValidationConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    label: str | None = None
+
+
 class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

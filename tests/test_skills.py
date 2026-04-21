@@ -1,4 +1,8 @@
+import os
+
 from fastapi.testclient import TestClient
+
+os.environ["SECOPS_ENABLE_BACKGROUND_WORKER"] = "0"
 
 from secops.app import create_app
 from secops.services.skills import SkillRegistry
@@ -17,8 +21,8 @@ def test_skill_registry_loads_restricted_packs() -> None:
 
 
 def test_skill_catalog_endpoint() -> None:
-    client = TestClient(create_app())
-    response = client.get("/api/v1/skills")
-    assert response.status_code == 200
-    payload = response.json()
-    assert any(item["id"] == "scope_guard" for item in payload)
+    with TestClient(create_app()) as client:
+        response = client.get("/api/v1/skills")
+        assert response.status_code == 200
+        payload = response.json()
+        assert any(item["id"] == "scope_guard" for item in payload)

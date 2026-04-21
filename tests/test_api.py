@@ -4,12 +4,14 @@ import tempfile
 from pathlib import Path
 from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 TEST_DB_PATH = Path(os.getenv("SECOPS_TEST_DB", str(Path(tempfile.gettempdir()) / f"secops_test_{os.getpid()}.db")))
 TEST_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 os.environ["SECOPS_DATABASE_URL"] = f"sqlite+pysqlite:///{TEST_DB_PATH}"
 os.environ["SECOPS_RUNTIME_ROOT"] = str(Path(tempfile.gettempdir()) / f"secops_api_runtime_{os.getpid()}")
+os.environ["SECOPS_ENABLE_BACKGROUND_WORKER"] = "0"
 
 from secops.app import create_app
 from secops.config import settings
@@ -22,18 +24,22 @@ def reset_db() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def test_modes_endpoint() -> None:
+@pytest.fixture
+def client() -> TestClient:
+    with TestClient(create_app()) as test_client:
+        yield test_client
+
+
+def test_modes_endpoint(client: TestClient) -> None:
     reset_db()
-    client = TestClient(create_app())
     response = client.get("/api/v1/modes")
     assert response.status_code == 200
     payload = response.json()
     assert any(item["id"] == "ctf" for item in payload)
 
 
-def test_workflow_state_handles_naive_sqlite_datetimes() -> None:
+def test_workflow_state_handles_naive_sqlite_datetimes(client: TestClient) -> None:
     reset_db()
-    client = TestClient(create_app())
     with SessionLocal() as db:
         engagement = Engagement(name="workflow-state", mode="pentest", target="10.10.10.10", tags=[])
         db.add(engagement)
@@ -99,9 +105,8 @@ def test_workflow_state_handles_naive_sqlite_datetimes() -> None:
     assert payload["metrics"]["approval_latency_seconds_latest"] >= 0.0
 
 
-def test_create_engagement_and_run() -> None:
+def test_create_engagement_and_run(client: TestClient) -> None:
     reset_db()
-    client = TestClient(create_app())
 
     engagement = client.post(
         "/api/v1/engagements",
@@ -138,294 +143,337 @@ def test_create_engagement_and_run() -> None:
     assert "Learning Digest" in context.json()["assembled_prompt"] or "Learning Index" in context.json()["assembled_prompt"]
 
 
+def test_update_run_validation_config(client: TestClient) -> None:
+    reset_db()
+    engagement = client.post(
+        "/api/v1/engagements",
+        json={
+            "name": "Validation Config",
+            "mode": "pentest",
+            "target": "10.10.10.10",
+            "tags": ["pentest"],
+        },
+    )
+    assert engagement.status_code == 200
+    engagement_id = engagement.json()["id"]
+
+    run = client.post(
+        "/api/v1/runs",
+        json={
+            "engagement_id": engagement_id,
+            "objective": "Control high risk surfaces",
+            "target": "10.10.10.10",
+        },
+    )
+    assert run.status_code == 200
+    run_id = run.json()["id"]
+
+    updated = client.post(
+        f"/api/v1/runs/{run_id}/validation-config",
+        json={"enabled": False, "label": "High Risk Surfaces"},
+    )
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["config"]["validation"]["high_risk_surfaces"]["enabled"] is False
+    assert payload["config"]["validation"]["high_risk_surfaces"]["label"] == "High Risk Surfaces"
+
+
 def test_start_run_creates_live_state_and_approval_when_codex_disabled() -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     old_script = settings.enable_script_execution
+    old_worker = settings.enable_background_worker
     object.__setattr__(settings, "enable_codex_execution", False)
     object.__setattr__(settings, "enable_script_execution", False)
-    client = TestClient(create_app())
+    object.__setattr__(settings, "enable_background_worker", True)
 
     try:
-        engagement = client.post(
-            "/api/v1/engagements",
-            json={
-                "name": "Live Run",
-                "mode": "ctf",
-                "target": "10.10.10.10",
-                "tags": ["ctf"],
-                "metadata": {"scope": {"allowed": ["10.10.10.10"], "allow_private": True}},
-            },
-        )
-        engagement_id = engagement.json()["id"]
-        run = client.post(
-            "/api/v1/runs",
-            json={"engagement_id": engagement_id, "objective": "Test live execution wiring", "target": "10.10.10.10"},
-        )
-        run_id = run.json()["id"]
+        with TestClient(create_app()) as client:
+            engagement = client.post(
+                "/api/v1/engagements",
+                json={
+                    "name": "Live Run",
+                    "mode": "ctf",
+                    "target": "10.10.10.10",
+                    "tags": ["ctf"],
+                    "metadata": {"scope": {"allowed": ["10.10.10.10"], "allow_private": True}},
+                },
+            )
+            engagement_id = engagement.json()["id"]
+            run = client.post(
+                "/api/v1/runs",
+                json={"engagement_id": engagement_id, "objective": "Test live execution wiring", "target": "10.10.10.10"},
+            )
+            run_id = run.json()["id"]
 
-        started = client.post(f"/api/v1/runs/{run_id}/start")
-        assert started.status_code == 200
+            started = client.post(f"/api/v1/runs/{run_id}/start")
+            assert started.status_code == 200
 
-        terminal = {"content": ""}
-        status = ""
-        approvals = []
-        for _ in range(50):
-            time.sleep(0.2)
-            graph = client.get(f"/api/v1/runs/{run_id}/graph")
-            assert graph.status_code == 200
-            graph_payload = graph.json()
-            approvals = graph_payload["approvals"]
-            status = graph_payload["status"]
-            terminal = client.get(f"/api/v1/runs/{run_id}/terminal").json()
-            if approvals and status in {"blocked", "cancelled", "completed", "failed"}:
-                break
+            terminal = {"content": ""}
+            status = ""
+            approvals = []
+            for _ in range(50):
+                time.sleep(0.2)
+                graph = client.get(f"/api/v1/runs/{run_id}/graph")
+                assert graph.status_code == 200
+                graph_payload = graph.json()
+                approvals = graph_payload["approvals"]
+                status = graph_payload["status"]
+                terminal = client.get(f"/api/v1/runs/{run_id}/terminal").json()
+                if approvals and status in {"blocked", "cancelled", "completed", "failed"}:
+                    break
 
-        assert approvals
-        assert status == "blocked"
-        assert (
-            "disabled" in approvals[0]["reason"]
-            or "codex" in approvals[0]["title"].lower()
-            or "recon" in approvals[0]["reason"]
-        )
-        workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
-        assert workflow_state.status_code == 200
-        workflow_payload = workflow_state.json()
-        assert workflow_payload["run_id"] == run_id
-        assert "metrics" in workflow_payload
-        assert isinstance(workflow_payload["phases"], list)
-        events = client.get(f"/api/v1/runs/{run_id}/events")
-        assert events.status_code == 200
-        assert any(event["event_type"] == "policy_decision" for event in events.json())
+            assert approvals
+            assert status == "blocked"
+            assert (
+                "disabled" in approvals[0]["reason"]
+                or "codex" in approvals[0]["title"].lower()
+                or "recon" in approvals[0]["reason"]
+            )
+            workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
+            assert workflow_state.status_code == 200
+            workflow_payload = workflow_state.json()
+            assert workflow_payload["run_id"] == run_id
+            assert "metrics" in workflow_payload
+            assert isinstance(workflow_payload["phases"], list)
+            events = client.get(f"/api/v1/runs/{run_id}/events")
+            assert events.status_code == 200
+            assert any(event["event_type"] == "policy_decision" for event in events.json())
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)
+        object.__setattr__(settings, "enable_background_worker", old_worker)
 
 
 def test_vantix_chat_creates_run_scheduler_state_and_vectors() -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     old_script = settings.enable_script_execution
+    old_worker = settings.enable_background_worker
     object.__setattr__(settings, "enable_codex_execution", False)
     object.__setattr__(settings, "enable_script_execution", False)
-    client = TestClient(create_app())
+    object.__setattr__(settings, "enable_background_worker", True)
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Full test of 10.10.10.10", "mode": "pentest"})
-        assert response.status_code == 200
-        payload = response.json()
-        run_id = payload["run"]["id"]
-        assert payload["run"]["target"] == "10.10.10.10"
-        assert payload["started"] is True
+        with TestClient(create_app()) as client:
+            response = client.post("/api/v1/chat", json={"message": "Full test of 10.10.10.10", "mode": "pentest"})
+            assert response.status_code == 200
+            payload = response.json()
+            run_id = payload["run"]["id"]
+            assert payload["run"]["target"] == "10.10.10.10"
+            assert payload["started"] is True
 
-        messages = client.get(f"/api/v1/runs/{run_id}/messages")
-        assert messages.status_code == 200
-        assert [item["role"] for item in messages.json()] == ["user", "orchestrator"]
+            messages = client.get(f"/api/v1/runs/{run_id}/messages")
+            assert messages.status_code == 200
+            assert [item["role"] for item in messages.json()] == ["user", "orchestrator"]
 
-        graph = client.get(f"/api/v1/runs/{run_id}/graph")
-        assert graph.status_code == 200
-        graph_payload = graph.json()
-        assert graph_payload["phase"]["current"] in {"knowledge-load", "research", "recon", "planning"}
-        task_kinds = [task["kind"] for task in graph_payload["tasks"]]
-        assert "vantix-recon" in task_kinds
-        assert "flow-initialization" in task_kinds
-        assert {agent["role"] for agent in graph_payload["agents"]} == {"orchestrator", "recon"}
+            graph = client.get(f"/api/v1/runs/{run_id}/graph")
+            assert graph.status_code == 200
+            graph_payload = graph.json()
+            assert graph_payload["phase"]["current"] in {"knowledge-load", "research", "recon", "planning"}
+            task_kinds = [task["kind"] for task in graph_payload["tasks"]]
+            assert "vantix-recon" in task_kinds
+            assert "flow-initialization" in task_kinds
+            assert {agent["role"] for agent in graph_payload["agents"]} == {"orchestrator", "recon"}
 
-        phase = client.get(f"/api/v1/runs/{run_id}/phase")
-        assert phase.status_code == 200
-        assert phase.json()["current"] in {"knowledge-load", "research", "recon", "planning"}
+            phase = client.get(f"/api/v1/runs/{run_id}/phase")
+            assert phase.status_code == 200
+            assert phase.json()["current"] in {"knowledge-load", "research", "recon", "planning"}
 
-        vectors = client.get(f"/api/v1/runs/{run_id}/vectors")
-        assert vectors.status_code == 200
-        assert isinstance(vectors.json(), list)
+            vectors = client.get(f"/api/v1/runs/{run_id}/vectors")
+            assert vectors.status_code == 200
+            assert isinstance(vectors.json(), list)
 
-        skills = client.get(f"/api/v1/runs/{run_id}/skills")
-        assert skills.status_code == 200
-        skill_payload = skills.json()
-        assert skill_payload
-        assert any(item["agent_role"] == "orchestrator" for item in skill_payload)
-        assert any(skill["id"] == "scope_guard" for item in skill_payload for skill in item["skills"])
-        assert any(Path(item["prompt_path"]).exists() for item in skill_payload)
+            skills = client.get(f"/api/v1/runs/{run_id}/skills")
+            assert skills.status_code == 200
+            skill_payload = skills.json()
+            assert skill_payload
+            assert any(item["agent_role"] == "orchestrator" for item in skill_payload)
+            assert any(skill["id"] == "scope_guard" for item in skill_payload for skill in item["skills"])
+            assert any(Path(item["prompt_path"]).exists() for item in skill_payload)
 
-        source_status = client.get(f"/api/v1/runs/{run_id}/source-status")
-        assert source_status.status_code == 200
-        assert source_status.json()["source_input"]["type"] == "none"
+            source_status = client.get(f"/api/v1/runs/{run_id}/source-status")
+            assert source_status.status_code == 200
+            assert source_status.json()["source_input"]["type"] == "none"
 
-        handoff = client.get(f"/api/v1/runs/{run_id}/handoff")
-        assert handoff.status_code == 200
-        handoff_payload = handoff.json()
-        assert handoff_payload["target"] == "10.10.10.10"
-        assert handoff_payload["next_actions"]
+            handoff = client.get(f"/api/v1/runs/{run_id}/handoff")
+            assert handoff.status_code == 200
+            handoff_payload = handoff.json()
+            assert handoff_payload["target"] == "10.10.10.10"
+            assert handoff_payload["next_actions"]
 
-        chain = client.post(
-            f"/api/v1/runs/{run_id}/attack-chains",
-            json={
-                "name": "Recon to validated finding",
-                "score": 72,
-                "steps": [{"phase": "recon"}, {"phase": "validate"}],
-                "mitre_ids": ["T1595"],
-                "notes": "test chain",
-            },
-        )
-        assert chain.status_code == 200
-        assert chain.json()["score"] == 72
-        chains = client.get(f"/api/v1/runs/{run_id}/attack-chains")
-        assert chains.status_code == 200
-        assert any(item["name"] == "Recon to validated finding" for item in chains.json())
-        assert "provenance" in chains.json()[0]
+            chain = client.post(
+                f"/api/v1/runs/{run_id}/attack-chains",
+                json={
+                    "name": "Recon to validated finding",
+                    "score": 72,
+                    "steps": [{"phase": "recon"}, {"phase": "validate"}],
+                    "mitre_ids": ["T1595"],
+                    "notes": "test chain",
+                },
+            )
+            assert chain.status_code == 200
+            assert chain.json()["score"] == 72
+            chains = client.get(f"/api/v1/runs/{run_id}/attack-chains")
+            assert chains.status_code == 200
+            assert any(item["name"] == "Recon to validated finding" for item in chains.json())
+            assert "provenance" in chains.json()[0]
 
-        planning = client.get(f"/api/v1/runs/{run_id}/planning-bundle")
-        assert planning.status_code == 200
-        planning_payload = planning.json()
-        assert planning_payload["run_id"] == run_id
-        assert "best_vectors" in planning_payload
-        assert "missing_evidence" in planning_payload
+            planning = client.get(f"/api/v1/runs/{run_id}/planning-bundle")
+            assert planning.status_code == 200
+            planning_payload = planning.json()
+            assert planning_payload["run_id"] == run_id
+            assert "best_vectors" in planning_payload
+            assert "missing_evidence" in planning_payload
 
-        created = client.post(
-            f"/api/v1/runs/{run_id}/vectors",
-            json={"title": "Manual validation path", "summary": "operator supplied", "confidence": 0.9},
-        )
-        assert created.status_code == 200
-        selected = client.post(f"/api/v1/runs/{run_id}/vectors/{created.json()['id']}/select")
-        assert selected.status_code == 200
-        assert selected.json()["status"] == "planned"
+            created = client.post(
+                f"/api/v1/runs/{run_id}/vectors",
+                json={"title": "Manual validation path", "summary": "operator supplied", "confidence": 0.9},
+            )
+            assert created.status_code == 200
+            selected = client.post(f"/api/v1/runs/{run_id}/vectors/{created.json()['id']}/select")
+            assert selected.status_code == 200
+            assert selected.json()["status"] == "planned"
 
-        promoted = client.post(
-            f"/api/v1/runs/{run_id}/findings/promote",
-            json={"source_kind": "vector", "source_id": created.json()["id"], "title": "Manual vector finding"},
-        )
-        assert promoted.status_code == 200
-        assert promoted.json()["title"] == "Manual vector finding"
+            promoted = client.post(
+                f"/api/v1/runs/{run_id}/findings/promote",
+                json={"source_kind": "vector", "source_id": created.json()["id"], "title": "Manual vector finding"},
+            )
+            assert promoted.status_code == 200
+            assert promoted.json()["title"] == "Manual vector finding"
 
-        chain_promoted = client.post(
-            f"/api/v1/runs/{run_id}/findings/promote",
-            json={"source_kind": "attack_chain", "source_id": chain.json()["id"]},
-        )
-        assert chain_promoted.status_code == 200
-        assert chain_promoted.json()["severity"] in {"medium", "high", "critical", "low"}
+            chain_promoted = client.post(
+                f"/api/v1/runs/{run_id}/findings/promote",
+                json={"source_kind": "attack_chain", "source_id": chain.json()["id"]},
+            )
+            assert chain_promoted.status_code == 200
+            assert chain_promoted.json()["severity"] in {"medium", "high", "critical", "low"}
 
-        findings = client.get(f"/api/v1/runs/{run_id}/findings")
-        assert findings.status_code == 200
-        assert len(findings.json()) >= 2
+            findings = client.get(f"/api/v1/runs/{run_id}/findings")
+            assert findings.status_code == 200
+            assert len(findings.json()) >= 2
 
-        results = client.get(f"/api/v1/runs/{run_id}/results")
-        assert results.status_code == 200
-        assert results.json()["run_id"] == run_id
-        payload = results.json()
-        assert "comprehensive_report_path" in payload
-        assert "comprehensive_report_json_path" in payload
-        assert "artifact_index_path" in payload
-        assert "timeline_csv_path" in payload
+            results = client.get(f"/api/v1/runs/{run_id}/results")
+            assert results.status_code == 200
+            assert results.json()["run_id"] == run_id
+            payload = results.json()
+            assert "comprehensive_report_path" in payload
+            assert "comprehensive_report_json_path" in payload
+            assert "artifact_index_path" in payload
+            assert "timeline_csv_path" in payload
 
-        events = client.get(f"/api/v1/runs/{run_id}/events")
-        assert events.status_code == 200
-        event_types = {item["event_type"] for item in events.json()}
-        assert "vector_generated" in event_types
-        assert "attack_chain_generated" in event_types
-        assert "finding_promoted" in event_types
+            events = client.get(f"/api/v1/runs/{run_id}/events")
+            assert events.status_code == 200
+            event_types = {item["event_type"] for item in events.json()}
+            assert "vector_generated" in event_types
+            assert "attack_chain_generated" in event_types
+            assert "finding_promoted" in event_types
 
-        workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
-        assert workflow_state.status_code == 200
-        metrics = workflow_state.json()["metrics"]
-        assert "approval_pending_count" in metrics
-        assert "phase_durations_seconds" in metrics
-        assert "current_phase_duration_seconds" in metrics
+            workflow_state = client.get(f"/api/v1/runs/{run_id}/workflow-state")
+            assert workflow_state.status_code == 200
+            metrics = workflow_state.json()["metrics"]
+            assert "approval_pending_count" in metrics
+            assert "phase_durations_seconds" in metrics
+            assert "current_phase_duration_seconds" in metrics
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)
+        object.__setattr__(settings, "enable_background_worker", old_worker)
 
 
 def test_vantix_quick_scan_starts_recon_only_and_approval_resumes() -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     old_script = settings.enable_script_execution
+    old_worker = settings.enable_background_worker
     object.__setattr__(settings, "enable_codex_execution", False)
     object.__setattr__(settings, "enable_script_execution", True)
-    client = TestClient(create_app())
+    object.__setattr__(settings, "enable_background_worker", True)
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Run a quick scan on 10.10.10.10", "mode": "pentest"})
-        assert response.status_code == 200
-        payload = response.json()
-        run_id = payload["run"]["id"]
-        assert payload["run"]["config"]["scan_profile"] == "quick"
-        messages = client.get(f"/api/v1/runs/{run_id}/messages")
-        assert messages.status_code == 200
-        assert "Recon-only quick scan" in messages.json()[-1]["content"]
+        with TestClient(create_app()) as client:
+            response = client.post("/api/v1/chat", json={"message": "Run a quick scan on 10.10.10.10", "mode": "pentest"})
+            assert response.status_code == 200
+            payload = response.json()
+            run_id = payload["run"]["id"]
+            assert payload["run"]["config"]["scan_profile"] == "quick"
+            messages = client.get(f"/api/v1/runs/{run_id}/messages")
+            assert messages.status_code == 200
+            assert "Recon-only quick scan" in messages.json()[-1]["content"]
 
-        approvals = []
-        for _ in range(80):
-            time.sleep(0.2)
-            graph = client.get(f"/api/v1/runs/{run_id}/graph")
-            assert graph.status_code == 200
-            gp = graph.json()
-            approvals = gp["approvals"]
-            if any(item["reason"] == "recon_high_noise-policy" and item["status"] == "pending" for item in approvals):
-                break
-        recon_gate = next(item for item in approvals if item["reason"] == "recon_high_noise-policy")
-        approved = client.post(f"/api/v1/approvals/{recon_gate['id']}/approve", json={"note": "continue"})
-        assert approved.status_code == 200
+            approvals = []
+            for _ in range(80):
+                time.sleep(0.2)
+                graph = client.get(f"/api/v1/runs/{run_id}/graph")
+                assert graph.status_code == 200
+                gp = graph.json()
+                approvals = gp["approvals"]
+                if any(item["reason"] == "recon_high_noise-policy" and item["status"] == "pending" for item in approvals):
+                    break
+            recon_gate = next(item for item in approvals if item["reason"] == "recon_high_noise-policy")
+            approved = client.post(f"/api/v1/approvals/{recon_gate['id']}/approve", json={"note": "continue"})
+            assert approved.status_code == 200
 
-        quick_gate_id = ""
-        for _ in range(120):
-            time.sleep(0.2)
-            graph = client.get(f"/api/v1/runs/{run_id}")
-            assert graph.status_code == 200
-            run_payload = graph.json()
-            approvals = client.get(f"/api/v1/runs/{run_id}/approvals").json()
-            recon_pending = [item for item in approvals if item["reason"] == "recon_high_noise-policy" and item["status"] == "pending"]
-            if recon_pending:
-                raise AssertionError("recon_high_noise-policy approval re-prompted after approval")
-            quick_pending = [item for item in approvals if item["reason"] == "quick-scan-gate" and item["status"] == "pending"]
-            if quick_pending:
-                quick_gate_id = quick_pending[0]["id"]
-                break
-            if run_payload["status"] in {"blocked", "failed", "cancelled"}:
-                # keep polling while workflow moves to quick scan gate
-                pass
-        assert quick_gate_id
-        approved_quick = client.post(f"/api/v1/approvals/{quick_gate_id}/approve", json={"note": "continue to full flow"})
-        assert approved_quick.status_code == 200
+            quick_gate_id = ""
+            for _ in range(120):
+                time.sleep(0.2)
+                graph = client.get(f"/api/v1/runs/{run_id}")
+                assert graph.status_code == 200
+                run_payload = graph.json()
+                approvals = client.get(f"/api/v1/runs/{run_id}/approvals").json()
+                recon_pending = [item for item in approvals if item["reason"] == "recon_high_noise-policy" and item["status"] == "pending"]
+                if recon_pending:
+                    raise AssertionError("recon_high_noise-policy approval re-prompted after approval")
+                quick_pending = [item for item in approvals if item["reason"] == "quick-scan-gate" and item["status"] == "pending"]
+                if quick_pending:
+                    quick_gate_id = quick_pending[0]["id"]
+                    break
+                if run_payload["status"] in {"blocked", "failed", "cancelled"}:
+                    # keep polling while workflow moves to quick scan gate
+                    pass
+            assert quick_gate_id
+            approved_quick = client.post(f"/api/v1/approvals/{quick_gate_id}/approve", json={"note": "continue to full flow"})
+            assert approved_quick.status_code == 200
 
-        for _ in range(80):
-            time.sleep(0.2)
-            run_payload = client.get(f"/api/v1/runs/{run_id}").json()
-            if run_payload["config"].get("scan_profile") == "full":
-                break
-        graph_after_quick = client.get(f"/api/v1/runs/{run_id}/graph")
-        assert graph_after_quick.status_code == 200
-        roles = {agent["role"] for agent in graph_after_quick.json()["agents"]}
-        assert roles == {"orchestrator", "recon"}
+            for _ in range(80):
+                time.sleep(0.2)
+                run_payload = client.get(f"/api/v1/runs/{run_id}").json()
+                if run_payload["config"].get("scan_profile") == "full":
+                    break
+            graph_after_quick = client.get(f"/api/v1/runs/{run_id}/graph")
+            assert graph_after_quick.status_code == 200
+            roles = {agent["role"] for agent in graph_after_quick.json()["agents"]}
+            assert roles == {"orchestrator", "recon"}
 
-        skills = client.get(f"/api/v1/runs/{run_id}/skills")
-        assert skills.status_code == 200
-        payload = skills.json()
-        skills_by_role = {item["agent_role"]: item["skills"] for item in payload}
-        assert len(skills_by_role.get("orchestrator", [])) > 0
-        assert "knowledge_base" not in skills_by_role
-        assert "researcher" not in skills_by_role
+            skills = client.get(f"/api/v1/runs/{run_id}/skills")
+            assert skills.status_code == 200
+            payload = skills.json()
+            skills_by_role = {item["agent_role"]: item["skills"] for item in payload}
+            assert len(skills_by_role.get("orchestrator", [])) > 0
+            assert "knowledge_base" not in skills_by_role
+            assert "researcher" not in skills_by_role
 
-        terminal = client.get(f"/api/v1/runs/{run_id}/terminal")
-        assert terminal.status_code == 200
-        content = terminal.json()["content"]
-        assert "[recon] starting:" in content
-        assert "[recon] blocked by policy:" in content
+            terminal = client.get(f"/api/v1/runs/{run_id}/terminal")
+            assert terminal.status_code == 200
+            content = terminal.json()["content"]
+            assert "[recon] starting:" in content
+            assert "[recon] blocked by policy:" in content
 
-        events = client.get(f"/api/v1/runs/{run_id}/events")
-        assert events.status_code == 200
-        event_types = {item["event_type"] for item in events.json()}
-        assert "approval_requested" in event_types
-        assert "approval_resolved" in event_types
+            events = client.get(f"/api/v1/runs/{run_id}/events")
+            assert events.status_code == 200
+            event_types = {item["event_type"] for item in events.json()}
+            assert "approval_requested" in event_types
+            assert "approval_resolved" in event_types
     finally:
         object.__setattr__(settings, "enable_codex_execution", old_codex)
         object.__setattr__(settings, "enable_script_execution", old_script)
+        object.__setattr__(settings, "enable_background_worker", old_worker)
 
 
-def test_vantix_chat_requires_target_for_new_run_and_appends_existing_run() -> None:
+def test_vantix_chat_requires_target_for_new_run_and_appends_existing_run(client: TestClient) -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     object.__setattr__(settings, "enable_codex_execution", False)
-    client = TestClient(create_app())
 
     try:
         rejected = client.post("/api/v1/chat", json={"message": "start a full test"})
@@ -447,11 +495,10 @@ def test_vantix_chat_requires_target_for_new_run_and_appends_existing_run() -> N
         object.__setattr__(settings, "enable_codex_execution", old_codex)
 
 
-def test_vantix_chat_with_run_id_can_start_new_engagement_when_requested() -> None:
+def test_vantix_chat_with_run_id_can_start_new_engagement_when_requested(client: TestClient) -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     object.__setattr__(settings, "enable_codex_execution", False)
-    client = TestClient(create_app())
 
     try:
         first = client.post("/api/v1/chat", json={"message": "Run a quick scan on 192.168.1.95", "mode": "pentest"})
@@ -481,11 +528,10 @@ def test_vantix_chat_with_run_id_can_start_new_engagement_when_requested() -> No
         object.__setattr__(settings, "enable_codex_execution", old_codex)
 
 
-def test_vantix_chat_with_terminal_run_and_new_target_starts_new_without_strict_phrase() -> None:
+def test_vantix_chat_with_terminal_run_and_new_target_starts_new_without_strict_phrase(client: TestClient) -> None:
     reset_db()
     old_codex = settings.enable_codex_execution
     object.__setattr__(settings, "enable_codex_execution", False)
-    client = TestClient(create_app())
 
     try:
         first = client.post("/api/v1/chat", json={"message": "Run recon on 192.168.1.95", "mode": "pentest"})
@@ -506,10 +552,9 @@ def test_vantix_chat_with_terminal_run_and_new_target_starts_new_without_strict_
         object.__setattr__(settings, "enable_codex_execution", old_codex)
 
 
-def test_vantix_system_status_and_provider_secret_handling() -> None:
+def test_vantix_system_status_and_provider_secret_handling(client: TestClient) -> None:
     reset_db()
     old_secret = settings.secret_key
-    client = TestClient(create_app())
 
     try:
         status = client.get("/api/v1/system/status")
@@ -547,9 +592,8 @@ def test_vantix_system_status_and_provider_secret_handling() -> None:
         object.__setattr__(settings, "secret_key", old_secret)
 
 
-def test_skill_pack_crud_and_reload() -> None:
+def test_skill_pack_crud_and_reload(client: TestClient) -> None:
     reset_db()
-    client = TestClient(create_app())
 
     created = client.post(
         "/api/v1/skills",

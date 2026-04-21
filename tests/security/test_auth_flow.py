@@ -23,7 +23,9 @@ def client() -> TestClient:
     reset_db()
     set_setting("dev_mode", False)
     set_setting("service_token_enabled", False)
-    return TestClient(create_app())
+    set_setting("enable_background_worker", False)
+    with TestClient(create_app()) as client:
+        yield client
 
 
 def test_login_happy_path_sets_cookies(client: TestClient) -> None:

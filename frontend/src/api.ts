@@ -327,6 +327,11 @@ export type SourceInput = {
   upload?: { staged_upload_id: string };
 };
 
+export type ValidationConfigUpdate = {
+  enabled?: boolean;
+  label?: string;
+};
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -517,4 +522,6 @@ export const api = {
   testProvider: (providerId: string) => request<Record<string, unknown>>(`/api/v1/providers/${providerId}/test`, { method: "POST" }),
   routeRunProvider: (runId: string, provider_id: string) =>
     request<Run>(`/api/v1/runs/${runId}/provider-route`, { method: "POST", body: JSON.stringify({ provider_id }) }),
+  updateValidationConfig: (runId: string, payload: ValidationConfigUpdate) =>
+    request<Run>(`/api/v1/runs/${runId}/validation-config`, { method: "POST", body: JSON.stringify(payload) }),
 };
