@@ -147,14 +147,14 @@ function StatusDot({ status, size = 8 }: { status?: string; size?: number }) {
 
 function ConfBar({ value, max = 1 }: { value: number; max?: number }) {
   const pct = Math.round(Math.min(value / max, 1) * 100);
-  const color = pct >= 80 ? "#19c37d" : pct >= 50 ? "#f4b860" : "#ef4444";
+  const color = pct >= 80 ? "var(--ok)" : pct >= 50 ? "var(--warn)" : "var(--danger)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div
         style={{
           flex: 1,
           height: 3,
-          background: "rgba(255,255,255,.07)",
+          background: "var(--surface-3)",
           borderRadius: 99,
           overflow: "hidden",
         }}
@@ -166,7 +166,7 @@ function ConfBar({ value, max = 1 }: { value: number; max?: number }) {
       <span
         style={{
           fontSize: ".7rem",
-          color: "#7a9e92",
+          color: "var(--ink-dim)",
           minWidth: 28,
           textAlign: "right",
           fontFamily: "var(--mono)",
@@ -187,7 +187,7 @@ function EmptyState({ icon = "◌", text }: { icon?: string; text: string }) {
         alignItems: "center",
         gap: 8,
         padding: "28px 0",
-        color: "#7a9e92",
+        color: "var(--ink-dim)",
       }}
     >
       <span style={{ fontSize: "1.4rem", opacity: 0.3 }}>{icon}</span>
@@ -202,8 +202,8 @@ function Spinner() {
       style={{
         width: 16,
         height: 16,
-        border: "2px solid rgba(25,195,125,.2)",
-        borderTopColor: "#19c37d",
+        border: "2px solid var(--ok)",
+        borderTopColor: "var(--ok)",
         borderRadius: "50%",
         animation: "vx-spin .7s linear infinite",
       }}
@@ -294,6 +294,7 @@ function Panel({
   children,
   style,
   loading = false,
+  scroll = false,
 }: {
   title: string;
   meta?: ReactNode;
@@ -301,7 +302,9 @@ function Panel({
   children: ReactNode;
   style?: CSSProperties;
   loading?: boolean;
+  scroll?: boolean;
 }) {
+  const body = scroll ? <div className="vx-panel-scroll">{children}</div> : children;
   return (
     <article className="vx-panel" style={style}>
       <div
@@ -311,6 +314,7 @@ function Panel({
           justifyContent: "space-between",
           gap: 12,
           marginBottom: 14,
+          flexShrink: 0,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -320,19 +324,19 @@ function Panel({
               fontWeight: 700,
               letterSpacing: ".09em",
               textTransform: "uppercase",
-              color: "#e8f4ee",
+              color: "var(--ink)",
             }}
           >
             {title}
           </span>
-          {meta && <span style={{ fontSize: ".72rem", color: "#7a9e92" }}>{meta}</span>}
+          {meta && <span style={{ fontSize: ".72rem", color: "var(--ink-dim)" }}>{meta}</span>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {loading && <Spinner />}
           {action}
         </div>
       </div>
-      {children}
+      {body}
     </article>
   );
 }
@@ -614,7 +618,7 @@ function ExecSummary({
       style={{
         gridColumn: "span 4",
         marginBottom: 0,
-        background: "linear-gradient(135deg,rgba(11,20,22,.95),rgba(14,22,18,.95))",
+        background: "var(--surface)",
       }}
     >
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
@@ -625,7 +629,7 @@ function ExecSummary({
               fontWeight: 700,
               letterSpacing: ".1em",
               textTransform: "uppercase",
-              color: "#7a9e92",
+              color: "var(--ink-dim)",
               marginBottom: 10,
             }}
           >
@@ -671,13 +675,13 @@ function ExecSummary({
               </div>
             )}
             <div>
-              <div style={{ fontSize: ".88rem", fontWeight: 700, color: "#e8f4ee", marginBottom: 2 }}>
+              <div style={{ fontSize: ".88rem", fontWeight: 700, color: "var(--ink)", marginBottom: 2 }}>
                 {risk?.level || "Pending"} Risk
               </div>
-              <div style={{ fontSize: ".74rem", color: "#7a9e92" }}>
+              <div style={{ fontSize: ".74rem", color: "var(--ink-dim)" }}>
                 {phaseLabels[currentDisplay] || "Initializing"}
               </div>
-              <div style={{ fontSize: ".72rem", color: "#7a9e92", marginTop: 2 }}>{run.target}</div>
+              <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", marginTop: 2 }}>{run.target}</div>
             </div>
           </div>
           {pendingApprovals.length > 0 && (
@@ -685,10 +689,10 @@ function ExecSummary({
               style={{
                 padding: "8px 10px",
                 borderRadius: 9,
-                background: "rgba(249,115,22,.08)",
-                border: "1px solid rgba(249,115,22,.2)",
+                background: "var(--warn-soft)",
+                border: "1px solid var(--warn)",
                 fontSize: ".73rem",
-                color: "#f97316",
+                color: "var(--warn)",
               }}
             >
               ⚠ {pendingApprovals.length} action{pendingApprovals.length > 1 ? "s" : ""} awaiting your approval
@@ -702,7 +706,7 @@ function ExecSummary({
               fontWeight: 700,
               letterSpacing: ".1em",
               textTransform: "uppercase",
-              color: "#7a9e92",
+              color: "var(--ink-dim)",
               marginBottom: 10,
             }}
           >
@@ -715,12 +719,12 @@ function ExecSummary({
                   <SevBadge severity={f.severity} />
                   <div>
                     <div
-                      style={{ fontSize: ".76rem", fontWeight: 600, color: "#e8f4ee", lineHeight: 1.3 }}
+                      style={{ fontSize: ".76rem", fontWeight: 600, color: "var(--ink)", lineHeight: 1.3 }}
                     >
                       {f.title}
                     </div>
                     <div
-                      style={{ fontSize: ".71rem", color: "#7a9e92", lineHeight: 1.4, marginTop: 2 }}
+                      style={{ fontSize: ".71rem", color: "var(--ink-dim)", lineHeight: 1.4, marginTop: 2 }}
                     >
                       {(f.summary || "").slice(0, 90)}
                       {(f.summary || "").length > 90 ? "…" : ""}
@@ -730,7 +734,7 @@ function ExecSummary({
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: ".78rem", color: "#7a9e92", padding: "8px 0" }}>
+            <div style={{ fontSize: ".78rem", color: "var(--ink-dim)", padding: "8px 0" }}>
               No confirmed findings yet — scan in progress.
             </div>
           )}
@@ -742,7 +746,7 @@ function ExecSummary({
               fontWeight: 700,
               letterSpacing: ".1em",
               textTransform: "uppercase",
-              color: "#7a9e92",
+              color: "var(--ink-dim)",
               marginBottom: 10,
             }}
           >
@@ -751,32 +755,32 @@ function ExecSummary({
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
             {pendingApprovals.length > 0 && (
               <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "#f97316", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "#e8f4ee" }}>
+                <span style={{ color: "var(--warn)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
+                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
                   Review and approve exploitation actions in the{" "}
-                  <strong style={{ color: "#f4b860" }}>Config</strong> tab
+                  <strong style={{ color: "var(--warn)" }}>Config</strong> tab
                 </span>
               </div>
             )}
             {criticals.length > 0 && (
               <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "#ef4444", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "#e8f4ee" }}>
+                <span style={{ color: "var(--danger)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
+                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
                   Patch {criticals.length} critical vulnerability{criticals.length > 1 ? "s" : ""} immediately
                 </span>
               </div>
             )}
             {highs.length > 0 && (
               <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <span style={{ color: "#f97316", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-                <span style={{ fontSize: ".76rem", color: "#e8f4ee" }}>
+                <span style={{ color: "var(--warn)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
+                <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
                   Schedule remediation for {highs.length} high-severity issue{highs.length > 1 ? "s" : ""} within 14 days
                 </span>
               </div>
             )}
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-              <span style={{ color: "#19c37d", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
-              <span style={{ fontSize: ".76rem", color: "#e8f4ee" }}>
+              <span style={{ color: "var(--ok)", fontSize: ".8rem", flexShrink: 0, marginTop: 1 }}>→</span>
+              <span style={{ fontSize: ".76rem", color: "var(--ink)" }}>
                 Full report will be available once the engagement completes
               </span>
             </div>
@@ -794,12 +798,14 @@ function ChatPanel({
   setChatText,
   onSend,
   loading,
+  style,
 }: {
   messages: RunMessage[];
   chatText: string;
   setChatText: (v: string) => void;
   onSend: (e: FormEvent) => void;
   loading: boolean;
+  style?: CSSProperties;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -816,7 +822,7 @@ function ChatPanel({
       title="Mission Chat"
       meta="Guides and replans the engagement"
       loading={loading}
-      style={{ minHeight: 360 }}
+      style={style}
     >
       <div
         ref={scrollRef}
@@ -826,7 +832,7 @@ function ChatPanel({
           display: "flex",
           flexDirection: "column",
           gap: 10,
-          minHeight: 200,
+          minHeight: 0,
           paddingRight: 4,
         }}
       >
@@ -910,7 +916,7 @@ function ChatPanel({
 }
 
 // ─── Terminal ───────────────────────────────────────────────────────────────
-function TerminalPanel({ lines }: { lines: string[] }) {
+function TerminalPanel({ lines, style }: { lines: string[]; style?: CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
@@ -925,12 +931,12 @@ function TerminalPanel({ lines }: { lines: string[] }) {
     return "var(--ink-dim)";
   };
   return (
-    <Panel title="Live Activity" meta="Technical execution output" style={{ minHeight: 260 }}>
+    <Panel title="Live Activity" meta="Technical execution output" style={style}>
       <div
         ref={ref}
         style={{
           flex: 1,
-          minHeight: 200,
+          minHeight: 0,
           fontFamily: "var(--mono)",
           fontSize: ".76rem",
           lineHeight: 1.65,
@@ -1007,12 +1013,12 @@ function AgentsPanel({
           const status =
             rawStatus === "pending" && !activeRoles.has(role) ? "standby" : rawStatus;
           const sc: Record<string, string> = {
-            running: "#f4b860",
-            completed: "#19c37d",
-            failed: "#ef4444",
-            blocked: "#ef4444",
-            pending: "#7a9e92",
-            standby: "#4e6b63",
+            running: "var(--warn)",
+            completed: "var(--ok)",
+            failed: "var(--danger)",
+            blocked: "var(--danger)",
+            pending: "var(--ink-dim)",
+            standby: "var(--ink-dim)",
           };
           return (
             <div
@@ -1023,8 +1029,8 @@ function AgentsPanel({
                 gap: 9,
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: `1px solid rgba(140,185,165,${status === "running" ? 0.22 : status === "standby" ? 0.08 : 0.1})`,
+                background: "var(--surface-2)",
+                border: `1px solid ${status === "running" ? "var(--line-strong)" : "var(--line)"}`,
               }}
             >
               <StatusDot status={status === "standby" ? "idle" : status} size={7} />
@@ -1033,7 +1039,7 @@ function AgentsPanel({
                   style={{
                     fontSize: ".73rem",
                     fontWeight: 600,
-                    color: "#e8f4ee",
+                    color: "var(--ink)",
                     textTransform: "capitalize",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -1042,7 +1048,7 @@ function AgentsPanel({
                 >
                   {role.replace(/_/g, " ")}
                 </div>
-                <div style={{ fontSize: ".67rem", color: sc[status] || "#7a9e92", marginTop: 1 }}>
+                <div style={{ fontSize: ".67rem", color: sc[status] || "var(--ink-dim)", marginTop: 1 }}>
                   {status}
                 </div>
               </div>
@@ -1081,23 +1087,23 @@ function ControlCenterPanel({
           style={{
             padding: "10px 12px",
             borderRadius: 10,
-            background: "rgba(255,255,255,.025)",
-            border: "1px solid rgba(140,185,165,.1)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line)",
           }}
         >
-          <div style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
+          <div style={{ fontSize: ".67rem", color: "var(--ink-dim)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
             Active Workflow
           </div>
-          <div style={{ fontSize: ".8rem", color: "#e8f4ee", fontWeight: 600 }}>
+          <div style={{ fontSize: ".8rem", color: "var(--ink)", fontWeight: 600 }}>
             {workflowState?.workflow?.current_phase || "n/a"}
           </div>
-          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginTop: 4 }}>
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", marginTop: 4 }}>
             claim age {metricNumber(workflowState, "current_claim_age_seconds").toFixed(1)}s
           </div>
-          <div style={{ fontSize: ".72rem", color: "#7a9e92" }}>
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)" }}>
             phase age {metricNumber(workflowState, "current_phase_duration_seconds").toFixed(1)}s
           </div>
-          <div style={{ fontSize: ".72rem", color: "#7a9e92" }}>
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)" }}>
             latest heartbeat {(workflowState?.metrics?.latest_heartbeat_at as string) || "n/a"}
           </div>
         </div>
@@ -1105,23 +1111,23 @@ function ControlCenterPanel({
           style={{
             padding: "10px 12px",
             borderRadius: 10,
-            background: "rgba(255,255,255,.025)",
-            border: "1px solid rgba(140,185,165,.1)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line)",
           }}
         >
-          <div style={{ fontSize: ".67rem", color: "#7a9e92", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
+          <div style={{ fontSize: ".67rem", color: "var(--ink-dim)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
             Governance
           </div>
-          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 4 }}>
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", marginBottom: 4 }}>
             resolved approvals {metricNumber(workflowState, "approval_resolved_count")}
           </div>
-          <div style={{ fontSize: ".72rem", color: "#7a9e92", marginBottom: 4 }}>
+          <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", marginBottom: 4 }}>
             avg approval latency {metricNumber(workflowState, "approval_latency_seconds_avg").toFixed(1)}s
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {blockedClasses.length ? blockedClasses.map((item) => (
               <Badge key={item} variant="amber">{item}</Badge>
-            )) : <span style={{ fontSize: ".72rem", color: "#7a9e92" }}>No blockers classified</span>}
+            )) : <span style={{ fontSize: ".72rem", color: "var(--ink-dim)" }}>No blockers classified</span>}
           </div>
         </div>
       </div>
@@ -1133,18 +1139,18 @@ function ControlCenterPanel({
               style={{
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.02)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
                 display: "grid",
                 gridTemplateColumns: "minmax(0,1fr) auto",
                 gap: 8,
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: ".74rem", color: "#e8f4ee", fontWeight: 600, fontFamily: "var(--mono)" }}>
+                <div style={{ fontSize: ".74rem", color: "var(--ink)", fontWeight: 600, fontFamily: "var(--mono)" }}>
                   {worker.worker_id}
                 </div>
-                <div style={{ fontSize: ".7rem", color: "#7a9e92", marginTop: 2 }}>
+                <div style={{ fontSize: ".7rem", color: "var(--ink-dim)", marginTop: 2 }}>
                   {worker.current_phase || "idle"} · {worker.current_run_id || "no-run"}
                 </div>
               </div>
@@ -1190,8 +1196,8 @@ function TimelinePanel({ events }: { events: EventRecord[] }) {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between", marginBottom: 4 }}>
@@ -1199,13 +1205,13 @@ function TimelinePanel({ events }: { events: EventRecord[] }) {
                   <Badge variant={eventBadgeVariant(event.event_type)}>
                     {EVENT_LABELS[event.event_type] || event.event_type.replace(/_/g, " ")}
                   </Badge>
-                  <span style={{ fontSize: ".76rem", color: "#e8f4ee", fontWeight: 600 }}>{event.message}</span>
+                  <span style={{ fontSize: ".76rem", color: "var(--ink)", fontWeight: 600 }}>{event.message}</span>
                 </div>
-                <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "#7a9e92" }}>
+                <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "var(--ink-dim)" }}>
                   #{event.sequence}
                 </span>
               </div>
-              <div style={{ fontSize: ".69rem", color: "#7a9e92", display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontSize: ".69rem", color: "var(--ink-dim)", display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <span>{new Date(event.created_at).toLocaleString()}</span>
                 {typeof event.payload?.phase_name === "string" && <span>phase {String(event.payload.phase_name)}</span>}
                 {typeof event.payload?.role === "string" && <span>role {String(event.payload.role)}</span>}
@@ -1236,7 +1242,7 @@ function SourcePanel({ sourceStatus }: { sourceStatus: SourceStatus | null }) {
         <Badge variant={sourceType === "none" ? "default" : "blue"}>{sourceType}</Badge>
         <Badge variant={status === "ready" ? "ok" : status === "failed" ? "danger" : "default"}>{status}</Badge>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: ".73rem", color: "#7a9e92" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: ".73rem", color: "var(--ink-dim)" }}>
         {url ? <div>GitHub: {url}</div> : null}
         {localPath ? <div>Local path: {localPath}</div> : null}
         {uploadId ? <div>Upload: {uploadId}</div> : null}
@@ -1274,11 +1280,11 @@ function PhasePanel({ phase }: { phase: RunPhase | null }) {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  background: done ? "rgba(25,195,125,.18)" : active ? "rgba(244,184,96,.18)" : "rgba(255,255,255,.04)",
-                  border: `1px solid ${done ? "rgba(25,195,125,.5)" : active ? "rgba(244,184,96,.6)" : "rgba(140,185,165,.12)"}`,
+                  background: done ? "var(--ok-soft)" : active ? "var(--warn-soft)" : "var(--surface-2)",
+                  border: `1px solid ${done ? "var(--ok)" : active ? "var(--warn)" : "var(--line)"}`,
                   fontSize: ".62rem",
                   fontWeight: 700,
-                  color: done ? "#19c37d" : active ? "#f4b860" : "rgba(122,158,146,.4)",
+                  color: done ? "var(--ok)" : active ? "var(--warn)" : "var(--ink-dim)",
                 }}
               >
                 {done ? "✓" : active ? "●" : i + 1}
@@ -1287,7 +1293,7 @@ function PhasePanel({ phase }: { phase: RunPhase | null }) {
                 style={{
                   fontSize: ".75rem",
                   fontWeight: active ? 700 : 500,
-                  color: done ? "#19c37d" : active ? "#f4b860" : "rgba(122,158,146,.5)",
+                  color: done ? "var(--ok)" : active ? "var(--warn)" : "var(--ink-dim)",
                   textTransform: "capitalize",
                   flex: 1,
                 }}
@@ -1305,10 +1311,10 @@ function PhasePanel({ phase }: { phase: RunPhase | null }) {
             marginTop: 12,
             padding: "8px 10px",
             borderRadius: 8,
-            background: "rgba(244,184,96,.07)",
-            border: "1px solid rgba(244,184,96,.15)",
+            background: "var(--warn-soft)",
+            border: "1px solid var(--warn)",
             fontSize: ".72rem",
-            color: "#f4b860",
+            color: "var(--warn)",
           }}
         >
           {phase.reason}
@@ -1344,8 +1350,8 @@ function VectorsPanel({
                 style={{
                   padding: "12px 14px",
                   borderRadius: 12,
-                  background: "rgba(255,255,255,.025)",
-                  border: "1px solid rgba(140,185,165,.13)",
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--line)",
                   transition: "border-color .2s",
                 }}
               >
@@ -1360,11 +1366,11 @@ function VectorsPanel({
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <SevBadge severity={v.severity} />
-                    <span style={{ fontSize: ".82rem", fontWeight: 600, color: "#e8f4ee" }}>{v.title}</span>
+                    <span style={{ fontSize: ".82rem", fontWeight: 600, color: "var(--ink)" }}>{v.title}</span>
                   </div>
                   <Badge variant={v.status === "selected" ? "ok" : "default"}>{v.status}</Badge>
                 </div>
-                <p style={{ margin: "0 0 6px", fontSize: ".78rem", color: "#7a9e92", lineHeight: 1.5 }}>
+                <p style={{ margin: "0 0 6px", fontSize: ".78rem", color: "var(--ink-dim)", lineHeight: 1.5 }}>
                   {v.summary}
                 </p>
                 {businessImpact && (
@@ -1372,10 +1378,10 @@ function VectorsPanel({
                     style={{
                       padding: "7px 10px",
                       borderRadius: 8,
-                      background: "rgba(249,115,22,.06)",
-                      border: "1px solid rgba(249,115,22,.15)",
+                      background: "var(--warn-soft)",
+                      border: "1px solid var(--warn)",
                       fontSize: ".72rem",
-                      color: "#f4b860",
+                      color: "var(--warn)",
                       lineHeight: 1.4,
                       marginBottom: 8,
                     }}
@@ -1385,11 +1391,11 @@ function VectorsPanel({
                   </div>
                 )}
                 <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: ".67rem", color: "#7a9e92", marginBottom: 4 }}>Confidence</div>
+                  <div style={{ fontSize: ".67rem", color: "var(--ink-dim)", marginBottom: 4 }}>Confidence</div>
                   <ConfBar value={v.confidence} />
                 </div>
                 {v.next_action && (
-                  <div style={{ fontSize: ".72rem", color: "#63b3ed", marginBottom: 10 }}>
+                  <div style={{ fontSize: ".72rem", color: "var(--info)", marginBottom: 10 }}>
                     → {v.next_action}
                   </div>
                 )}
@@ -1426,18 +1432,18 @@ function CvePanel({ facts }: { facts: Fact[] }) {
               style={{
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span
-                  style={{ fontFamily: "var(--mono)", fontSize: ".75rem", color: "#f4b860", fontWeight: 600 }}
+                  style={{ fontFamily: "var(--mono)", fontSize: ".75rem", color: "var(--warn)", fontWeight: 600 }}
                 >
                   {f.value}
                 </span>
                 <Badge variant="default">{f.kind}</Badge>
-                <span style={{ fontSize: ".68rem", color: "#7a9e92" }}>
+                <span style={{ fontSize: ".68rem", color: "var(--ink-dim)" }}>
                   {Math.round(f.confidence * 100)}% match
                 </span>
               </div>
@@ -1471,8 +1477,8 @@ function MemoryPanel({ hits }: { hits: Array<Record<string, unknown>> }) {
               style={{
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
               }}
             >
               <div
@@ -1484,14 +1490,14 @@ function MemoryPanel({ hits }: { hits: Array<Record<string, unknown>> }) {
                   marginBottom: 4,
                 }}
               >
-                <span style={{ fontSize: ".75rem", fontWeight: 600, color: "#e8f4ee" }}>
+                <span style={{ fontSize: ".75rem", fontWeight: 600, color: "var(--ink)" }}>
                   {String(h.title ?? "Memory hit")}
                 </span>
                 {h.rank !== undefined && h.rank !== null && (
                   <Badge variant="default">rank {String(h.rank)}</Badge>
                 )}
               </div>
-              <p style={{ margin: 0, fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.45 }}>
+              <p style={{ margin: 0, fontSize: ".73rem", color: "var(--ink-dim)", lineHeight: 1.45 }}>
                 {String(h.summary_short ?? h.summary ?? "")}
               </p>
             </div>
@@ -1523,15 +1529,15 @@ function ChainsPanel({
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
               }}
             >
               <div
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}
               >
-                <span style={{ fontSize: ".78rem", fontWeight: 600, color: "#f4b860" }}>{c.name}</span>
-                <span style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92" }}>
+                <span style={{ fontSize: ".78rem", fontWeight: 600, color: "var(--warn)" }}>{c.name}</span>
+                <span style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "var(--ink-dim)" }}>
                   score {c.score?.toFixed(2)}
                 </span>
               </div>
@@ -1544,7 +1550,7 @@ function ChainsPanel({
                   ))}
                 </div>
               )}
-              <p style={{ margin: "0 0 8px", fontSize: ".72rem", color: "#7a9e92" }}>{c.notes}</p>
+              <p style={{ margin: "0 0 8px", fontSize: ".72rem", color: "var(--ink-dim)" }}>{c.notes}</p>
               {selectedRunId && (
                 <Btn size="xs" variant="amber" onClick={() => onPromote(c)}>
                   Promote Finding
@@ -1595,7 +1601,7 @@ function BrowserPanel({
           <Badge variant="ok">screenshots: {state.screenshots.length}</Badge>
           <Badge variant="default">signals: {jsSignals.length}</Badge>
         </div>
-        <div style={{ fontSize: ".72rem", color: "#7a9e92", lineHeight: 1.45 }}>
+        <div style={{ fontSize: ".72rem", color: "var(--ink-dim)", lineHeight: 1.45 }}>
           <div>Entry: {state.entry_url || "(none)"}</div>
           <div>Current: {state.current_url || "(none)"}</div>
           {!!Object.keys(sessionSummary).length && (
@@ -1608,7 +1614,7 @@ function BrowserPanel({
         {state.blocked_actions.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {state.blocked_actions.slice(0, 4).map((line, i) => (
-              <div key={i} style={{ fontSize: ".7rem", color: "#f4b860" }}>
+              <div key={i} style={{ fontSize: ".7rem", color: "var(--warn)" }}>
                 {line}
               </div>
             ))}
@@ -1618,7 +1624,7 @@ function BrowserPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Auth State</Label>
             {authTransitions.slice(0, 4).map((item, idx) => (
-              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+              <div key={idx} style={{ fontSize: ".69rem", color: "var(--ink-soft)", lineHeight: 1.45 }}>
                 {String(item.stage || "state")} · {String(item.status || "observed")}
                 {item.url ? ` · ${String(item.url)}` : ""}
               </div>
@@ -1629,7 +1635,7 @@ function BrowserPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>State Deltas</Label>
             {domDiffs.slice(0, 3).map((item, idx) => (
-              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+              <div key={idx} style={{ fontSize: ".69rem", color: "var(--ink-soft)", lineHeight: 1.45 }}>
                 {String(item.stage || "navigation")} · forms {String(item.form_delta ?? 0)} · links {String(item.link_delta ?? 0)} · cookies{" "}
                 {String(item.cookie_delta ?? 0)}
               </div>
@@ -1640,7 +1646,7 @@ function BrowserPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Observed Endpoints</Label>
             {endpoints.slice(0, 5).map((item, idx) => (
-              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", fontFamily: "var(--mono)" }}>
+              <div key={idx} style={{ fontSize: ".69rem", color: "var(--ink-soft)", fontFamily: "var(--mono)" }}>
                 {String(item.endpoint || "")} ({String(item.count || "0")})
               </div>
             ))}
@@ -1650,7 +1656,7 @@ function BrowserPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Route Hints</Label>
             {routeHints.slice(0, 4).map((item, idx) => (
-              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", fontFamily: "var(--mono)" }}>
+              <div key={idx} style={{ fontSize: ".69rem", color: "var(--ink-soft)", fontFamily: "var(--mono)" }}>
                 {String(item.hint || "")}
               </div>
             ))}
@@ -1660,7 +1666,7 @@ function BrowserPanel({
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Label>Client Signals</Label>
             {jsSignals.slice(0, 4).map((item, idx) => (
-              <div key={idx} style={{ fontSize: ".69rem", color: "#a6c3b7", lineHeight: 1.45 }}>
+              <div key={idx} style={{ fontSize: ".69rem", color: "var(--ink-soft)", lineHeight: 1.45 }}>
                 {String(item.kind || "signal")} · {String(item.signal || "")}
               </div>
             ))}
@@ -1702,10 +1708,10 @@ function ResultsPanel({
               style={{
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(25,195,125,.07)",
-                border: "1px solid rgba(25,195,125,.2)",
+                background: "var(--ok-soft)",
+                border: "1px solid var(--ok)",
                 fontSize: ".74rem",
-                color: "#e8f4ee",
+                color: "var(--ink)",
                 lineHeight: 1.5,
               }}
             >
@@ -1723,15 +1729,15 @@ function ResultsPanel({
                     style={{
                       padding: "9px 11px",
                       borderRadius: 10,
-                      background: "rgba(255,255,255,.025)",
-                      border: "1px solid rgba(140,185,165,.1)",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--line)",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
                       <SevBadge severity={f.severity} />
-                      <span style={{ fontSize: ".76rem", fontWeight: 600, color: "#e8f4ee" }}>{f.title}</span>
+                      <span style={{ fontSize: ".76rem", fontWeight: 600, color: "var(--ink)" }}>{f.title}</span>
                     </div>
-                    <p style={{ margin: 0, fontSize: ".72rem", color: "#7a9e92" }}>{f.summary}</p>
+                    <p style={{ margin: 0, fontSize: ".72rem", color: "var(--ink-dim)" }}>{f.summary}</p>
                   </div>
                 ))
               ) : (
@@ -1748,8 +1754,8 @@ function ResultsPanel({
                   style={{
                     padding: "9px 11px",
                     borderRadius: 10,
-                    background: "rgba(255,255,255,.025)",
-                    border: "1px solid rgba(140,185,165,.1)",
+                    background: "var(--surface-2)",
+                    border: "1px solid var(--line)",
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
@@ -1760,7 +1766,7 @@ function ResultsPanel({
                     style={{
                       fontFamily: "var(--mono)",
                       fontSize: ".7rem",
-                      color: "#7a9e92",
+                      color: "var(--ink-dim)",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -1783,10 +1789,10 @@ function ResultsPanel({
                   marginTop: 10,
                   padding: "9px 11px",
                   borderRadius: 10,
-                  background: "rgba(244,184,96,.05)",
-                  border: "1px solid rgba(244,184,96,.15)",
+                  background: "var(--warn-soft)",
+                  border: "1px solid var(--warn)",
                   fontSize: ".73rem",
-                  color: "#7a9e92",
+                  color: "var(--ink-dim)",
                 }}
               >
                 Report will be generated automatically when the engagement completes.
@@ -1798,15 +1804,15 @@ function ResultsPanel({
                   marginTop: 10,
                   padding: "9px 11px",
                   borderRadius: 10,
-                  background: "rgba(25,195,125,.07)",
-                  border: "1px solid rgba(25,195,125,.2)",
+                  background: "var(--ok-soft)",
+                  border: "1px solid var(--ok)",
                 }}
               >
-                <div style={{ fontSize: ".68rem", color: "#19c37d", fontWeight: 600, marginBottom: 2 }}>
+                <div style={{ fontSize: ".68rem", color: "var(--ok)", fontWeight: 600, marginBottom: 2 }}>
                   Report Ready
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "#7a9e92", flex: 1 }}>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: ".7rem", color: "var(--ink-dim)", flex: 1 }}>
                     {results.report_path}
                   </div>
                   {selectedRunId && (
@@ -1871,19 +1877,19 @@ function ReplayPanel({ replay }: { replay: ReplayState | null }) {
                 style={{
                   padding: "9px 11px",
                   borderRadius: 10,
-                  background: "rgba(255,255,255,.025)",
-                  border: "1px solid rgba(140,185,165,.1)",
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--line)",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
-                  <span style={{ fontSize: ".76rem", color: "#e8f4ee", fontWeight: 600 }}>
+                  <span style={{ fontSize: ".76rem", color: "var(--ink)", fontWeight: 600 }}>
                     {String(entry.phase || "unknown")}
                   </span>
-                  <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "#7a9e92" }}>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: ".68rem", color: "var(--ink-dim)" }}>
                     {String(entry.at || "")}
                   </span>
                 </div>
-                <div style={{ fontSize: ".71rem", color: "#7a9e92", marginTop: 4 }}>
+                <div style={{ fontSize: ".71rem", color: "var(--ink-dim)", marginTop: 4 }}>
                   {String(entry.reason || "n/a")}
                 </div>
               </div>
@@ -1923,17 +1929,17 @@ function ApprovalsPanel({
               style={{
                 padding: "12px 14px",
                 borderRadius: 12,
-                background: "rgba(249,115,22,.05)",
-                border: `1px solid ${a.status === "pending" ? "rgba(249,115,22,.2)" : "rgba(140,185,165,.12)"}`,
+                background: "var(--warn-soft)",
+                border: `1px solid ${a.status === "pending" ? "var(--warn)" : "var(--line)"}`,
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                 <Badge variant={a.status === "pending" ? "warn" : a.status === "approved" ? "ok" : "danger"}>
                   {a.status}
                 </Badge>
-                <span style={{ fontSize: ".8rem", fontWeight: 600, color: "#e8f4ee" }}>{a.title}</span>
+                <span style={{ fontSize: ".8rem", fontWeight: 600, color: "var(--ink)" }}>{a.title}</span>
               </div>
-              <p style={{ margin: "0 0 10px", fontSize: ".76rem", color: "#7a9e92", lineHeight: 1.5 }}>
+              <p style={{ margin: "0 0 10px", fontSize: ".76rem", color: "var(--ink-dim)", lineHeight: 1.5 }}>
                 {a.detail}
               </p>
               {a.status === "pending" && (
@@ -1987,15 +1993,15 @@ function SkillsPanel({
               style={{
                 padding: "9px 11px",
                 borderRadius: 10,
-                background: "rgba(255,255,255,.025)",
-                border: "1px solid rgba(140,185,165,.1)",
+                background: "var(--surface-2)",
+                border: "1px solid var(--line)",
               }}
             >
               <div
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}
               >
                 <span
-                  style={{ fontSize: ".75rem", fontWeight: 600, color: "#e8f4ee", textTransform: "capitalize" }}
+                  style={{ fontSize: ".75rem", fontWeight: 600, color: "var(--ink)", textTransform: "capitalize" }}
                 >
                   {a.agent_role.replace(/_/g, " ")}
                 </span>
@@ -2046,10 +2052,10 @@ function NotesPanel({
           minHeight: 80,
           resize: "vertical",
           padding: "10px 12px",
-          background: "rgba(6,12,12,.9)",
-          border: "1px solid rgba(140,185,165,.18)",
+          background: "var(--surface-2)",
+          border: "1px solid var(--line-strong)",
           borderRadius: 10,
-          color: "#e8f4ee",
+          color: "var(--ink)",
           fontSize: ".78rem",
           lineHeight: 1.5,
           marginBottom: 8,
@@ -2063,10 +2069,10 @@ function NotesPanel({
           onChange={(e) => setClassification(e.target.value as "unrestricted" | "internal" | "sensitive")}
           style={{
             padding: "6px 10px",
-            background: "rgba(6,12,12,.9)",
-            border: "1px solid rgba(140,185,165,.18)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line-strong)",
             borderRadius: 8,
-            color: "#e8f4ee",
+            color: "var(--ink)",
             fontSize: ".76rem",
           }}
         >
@@ -2080,11 +2086,11 @@ function NotesPanel({
           style={{
             padding: "8px 10px",
             marginBottom: 8,
-            border: "1px solid rgba(249,115,22,.35)",
-            background: "rgba(249,115,22,.08)",
+            border: "1px solid var(--warn)",
+            background: "var(--warn-soft)",
             borderRadius: 8,
             fontSize: ".72rem",
-            color: "#f4b860",
+            color: "var(--warn)",
           }}
         >
           This note is marked <strong>{classification}</strong>. Do not paste secrets or PII — content is persisted server-side.
@@ -2117,7 +2123,7 @@ function AccountPanel({
         <div>
           <Label>Signed in as</Label>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: ".82rem", color: "#e8f4ee", fontWeight: 600 }}>{user.username}</span>
+            <span style={{ fontSize: ".82rem", color: "var(--ink)", fontWeight: 600 }}>{user.username}</span>
             <Badge variant={user.role === "admin" ? "amber" : user.role === "operator" ? "blue" : "default"}>
               {user.role}
             </Badge>
@@ -2136,15 +2142,15 @@ function AccountPanel({
           style={{
             padding: "12px 14px",
             borderRadius: 12,
-            background: "rgba(255,255,255,.02)",
-            border: "1px solid rgba(140,185,165,.1)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line)",
           }}
         >
-          <div style={{ fontSize: ".74rem", fontWeight: 600, color: "#e8f4ee", marginBottom: 8 }}>Session</div>
-          <p style={{ margin: "0 0 8px", fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
+          <div style={{ fontSize: ".74rem", fontWeight: 600, color: "var(--ink)", marginBottom: 8 }}>Session</div>
+          <p style={{ margin: "0 0 8px", fontSize: ".73rem", color: "var(--ink-dim)", lineHeight: 1.55 }}>
             Authentication uses an httpOnly session cookie. Mutating requests carry an X-CSRF-Token header.
           </p>
-          <p style={{ margin: 0, fontSize: ".73rem", color: "#7a9e92", lineHeight: 1.55 }}>
+          <p style={{ margin: 0, fontSize: ".73rem", color: "var(--ink-dim)", lineHeight: 1.55 }}>
             Role determines which actions are visible. Ask an admin to change your role.
           </p>
         </div>
@@ -2177,8 +2183,8 @@ function PendingApprovalsBanner({
             alignItems: "center",
             padding: "13px 18px",
             borderRadius: 14,
-            background: "linear-gradient(135deg,rgba(249,115,22,.1),rgba(239,68,68,.07))",
-            border: "1px solid rgba(249,115,22,.35)",
+            background: "var(--warn-soft)",
+            border: "1px solid var(--warn)",
             animation: "vx-fadein .2s ease",
           }}
         >
@@ -2188,10 +2194,10 @@ function PendingApprovalsBanner({
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: "#f97316",
+                background: "var(--warn)",
                 flexShrink: 0,
                 animation: "vx-pulse 1.8s ease-in-out infinite",
-                boxShadow: "0 0 0 4px rgba(249,115,22,.2)",
+                boxShadow: "0 0 0 4px var(--warn)",
               }}
             />
             <div style={{ minWidth: 0 }}>
@@ -2201,7 +2207,7 @@ function PendingApprovalsBanner({
                   style={{
                     fontSize: ".82rem",
                     fontWeight: 600,
-                    color: "#e8f4ee",
+                    color: "var(--ink)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -2213,7 +2219,7 @@ function PendingApprovalsBanner({
               <div
                 style={{
                   fontSize: ".74rem",
-                  color: "#7a9e92",
+                  color: "var(--ink-dim)",
                   lineHeight: 1.4,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -2405,7 +2411,7 @@ function Sidebar({
                         fontFamily: "var(--mono)",
                         fontSize: ".72rem",
                         fontWeight: 600,
-                        color: "#e8f4ee",
+                        color: "var(--ink)",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
@@ -2417,13 +2423,13 @@ function Sidebar({
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <StatusDot status={run.status} size={6} />
-                    <span style={{ fontSize: ".68rem", color: "#7a9e92" }}>{run.mode}</span>
+                    <span style={{ fontSize: ".68rem", color: "var(--ink-dim)" }}>{run.mode}</span>
                   </div>
                   <div
                     style={{
                       fontFamily: "var(--mono)",
                       fontSize: ".66rem",
-                      color: "#7a9e92",
+                      color: "var(--ink-dim)",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -3158,16 +3164,27 @@ export default function App() {
 
         {tab === "overview" && (
           <div className="vx-workspace vx-workspace-split">
-            <div className="vx-col">
+            <div className="vx-col" style={{ overflow: "hidden" }}>
               <ExecSummary run={selectedRun} findings={findings} phase={phase} approvals={approvals} />
-              <ChatPanel
-                messages={messages}
-                chatText={chatText}
-                setChatText={setChatText}
-                onSend={handleSend}
-                loading={chatLoading}
-              />
-              <TerminalPanel lines={termLines} />
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                  flex: "1 1 auto",
+                  minHeight: 0,
+                }}
+              >
+                <ChatPanel
+                  messages={messages}
+                  chatText={chatText}
+                  setChatText={setChatText}
+                  onSend={handleSend}
+                  loading={chatLoading}
+                  style={{ flex: "1 1 0", minHeight: 0 }}
+                />
+                <TerminalPanel lines={termLines} style={{ flex: "1 1 0", minHeight: 0 }} />
+              </div>
             </div>
             <div className="vx-col">
               <PhasePanel phase={phase} />

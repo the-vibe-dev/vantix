@@ -25,9 +25,8 @@ if [[ ! -x "$ROOT_DIR/.venv/bin/python" ]]; then
   python3 -m venv "$ROOT_DIR/.venv"
 fi
 
-"$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null
-"$ROOT_DIR/.venv/bin/python" -m pip install -e "$ROOT_DIR[dev]" >/dev/null
-"$ROOT_DIR/.venv/bin/python" -m pip install "passlib[argon2]" "argon2-cffi" "playwright" >/dev/null
-"$ROOT_DIR/.venv/bin/python" -m playwright install --with-deps chromium >/dev/null || "$ROOT_DIR/.venv/bin/python" -m playwright install chromium >/dev/null || true
+if [[ "${1:-}" == "--check" || "${1:-}" == "--verify" ]]; then
+  exec "$ROOT_DIR/.venv/bin/python" -m secops.updater --repo-root "$ROOT_DIR" "$@"
+fi
 
-exec "$ROOT_DIR/.venv/bin/python" -m secops.updater --repo-root "$ROOT_DIR" "$@"
+exec "$ROOT_DIR/.venv/bin/python" -m secops.updater --repo-root "$ROOT_DIR" --allow-dirty "$@"

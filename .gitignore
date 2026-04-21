@@ -23,6 +23,10 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.so
+*.egg-info/
+*.egg
+dist/
+build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

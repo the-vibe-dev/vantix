@@ -69,6 +69,7 @@ class ReportingService:
                     "reproduction": finding.reproduction,
                     "remediation": finding.remediation,
                     "confidence": finding.confidence,
+                    "validation": self._validation_metadata_from_text(finding.evidence or ""),
                 }
                 for finding in findings
             ],
@@ -200,12 +201,18 @@ class ReportingService:
             for idx, item in enumerate(finding_rows, start=1):
                 clean_evidence = self._strip_artifact_suffix(str(item.get("evidence") or "(not provided)"))
                 inline_artifacts = self._extract_artifact_paths(f"{item.get('evidence') or ''}\n{item.get('reproduction') or ''}")
+                validation_meta = dict(item.get("validation") or self._validation_metadata_from_text(str(item.get("evidence") or "")))
                 md_lines.extend(
                     [
                         f"### {idx}. {item['title']}",
                         f"- Severity: {str(item.get('severity') or 'info').upper()}",
                         f"- Status: {item.get('status') or 'validated'}",
                         f"- Confidence: {float(item.get('confidence') or 0.0):.2f}",
+                        f"- Risk Tags: {validation_meta.get('risk_tags') or 'none'}",
+                        f"- Attempted: {validation_meta.get('attempted') or 'unknown'}",
+                        f"- Impact Bound: {validation_meta.get('impact_bound') or 'not recorded'}",
+                        f"- State Changed: {validation_meta.get('state_changed') or 'unknown'}",
+                        f"- Cleanup Attempted: {validation_meta.get('cleanup_attempted') or 'unknown'}",
                         f"- Vector Explanation: {item.get('summary') or '(not provided)'}",
                         "",
                         "**Proof Of Concept**",
@@ -315,6 +322,8 @@ class ReportingService:
             sev = str(item.get("severity") or "info").lower()
             clean_evidence = self._strip_artifact_suffix(str(item.get("evidence") or "(not provided)"))
             inline_artifacts = self._extract_artifact_paths(f"{item.get('evidence') or ''}\n{item.get('reproduction') or ''}")
+            validation_meta = dict(item.get("validation") or self._validation_metadata_from_text(str(item.get("evidence") or "")))
+            validation_html = self._render_validation_meta_html(validation_meta)
             artifact_blocks = []
             for path in inline_artifacts:
                 artifact_blocks.append(self._render_artifact_html_block(path, kind_hint="evidence"))
@@ -328,6 +337,7 @@ class ReportingService:
                     f"<div class='meta'><span class='badge {esc(sev)}'>{esc(sev.upper())}</span>"
                     f"<span>Status: {esc(item.get('status') or 'validated')}</span>"
                     f"<span>Confidence: {float(item.get('confidence') or 0.0):.2f}</span></div>"
+                    f"{validation_html}"
                     f"<h4>Vector Explanation</h4><p>{esc(item.get('summary') or '(not provided)')}</p>"
                     f"<h4>PoC</h4><pre>{esc(item.get('reproduction') or '(not provided)')}</pre>"
                     f"<h4>Evidence</h4><pre>{esc(clean_evidence)}</pre>"
@@ -355,6 +365,8 @@ class ReportingService:
             ".critical{background:#fee2e2}.high{background:#ffedd5}.medium{background:#fef9c3}.low{background:#dcfce7}.info{background:#e0f2fe}"
             ".finding{border-top:1px solid #e7ecf6;padding-top:14px;margin-top:14px}"
             ".meta{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px 0;font-size:13px}"
+            ".validation{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0 12px 0}"
+            ".validation div{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px;font-size:12px}"
             "pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:12px;overflow:auto;font-size:12px;white-space:pre-wrap}"
             "figure{margin:0 0 14px 0} img{max-width:100%;height:auto;border:1px solid #d9e0ee;border-radius:6px}"
             "figcaption{font-size:12px;color:#475569;margin-top:4px;word-break:break-all}"
@@ -453,7 +465,45 @@ class ReportingService:
 
     def _strip_artifact_suffix(self, text: str) -> str:
         value = str(text or "")
-        return re.sub(r"\s*Artifact:\s*/\S+\s*$", "", value).strip() or value
+        if "Validation Metadata:" in value:
+            value = value.split("Validation Metadata:", 1)[0]
+        cleaned = re.sub(r"\s*Artifact:\s*/\S+", "", value).strip()
+        return cleaned or value.strip()
+
+    def _validation_metadata_from_text(self, text: str) -> dict[str, str]:
+        raw = str(text or "")
+        if "Validation Metadata:" not in raw:
+            return {}
+        metadata: dict[str, str] = {}
+        _, tail = raw.split("Validation Metadata:", 1)
+        for line in tail.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("- ") or ":" not in stripped:
+                continue
+            key, value = stripped[2:].split(":", 1)
+            normalized = re.sub(r"[^a-z0-9]+", "_", key.strip().lower()).strip("_")
+            if normalized:
+                metadata[normalized] = value.strip()
+        return metadata
+
+    def _render_validation_meta_html(self, metadata: dict[str, str]) -> str:
+        if not metadata:
+            return ""
+        labels = [
+            ("risk_tags", "Risk Tags"),
+            ("attempted", "Attempted"),
+            ("impact_bound", "Impact Bound"),
+            ("state_changed", "State Changed"),
+            ("cleanup_attempted", "Cleanup Attempted"),
+            ("why_not_attempted", "Why Not Attempted"),
+        ]
+        blocks = []
+        for key, label in labels:
+            value = str(metadata.get(key) or "").strip()
+            if not value:
+                continue
+            blocks.append(f"<div><strong>{html.escape(label)}</strong><br>{html.escape(value)}</div>")
+        return f"<div class='validation'>{''.join(blocks)}</div>" if blocks else ""
 
     def _build_artifact_index(self, run_id: str, artifacts: list[Artifact]) -> dict[str, Any]:
         return {

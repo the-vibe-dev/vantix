@@ -111,6 +111,36 @@ class Updater:
         if dirty:
             raise UpdateError("preflight", "Working tree has local changes; commit, stash, or remove them before updating", {"dirty": dirty})
 
+    def stash_worktree(self) -> dict[str, Any]:
+        dirty = self.dirty_files()
+        if not dirty:
+            return {"created": False, "dirty": []}
+        marker = f"vantix-updater-auto-{utc_ts()}"
+        proc = self.git("stash", "push", "--include-untracked", "-m", marker)
+        if proc.returncode != 0:
+            raise UpdateError("preflight", "Failed to auto-stash dirty worktree", {"stderr": proc.stderr, "stdout": proc.stdout, "dirty": dirty})
+        top = self.git_value("stash", "list", "--format=%gd:%s", "-n", "1")
+        stash_ref = ""
+        if top:
+            left, _, right = top.partition(":")
+            if marker in right:
+                stash_ref = left.strip()
+        if not stash_ref:
+            raise UpdateError("preflight", "Auto-stash did not create a resolvable stash entry", {"dirty": dirty})
+        return {"created": True, "dirty": dirty, "ref": stash_ref, "marker": marker}
+
+    def restore_stash(self, stash_ref: str) -> None:
+        ref = str(stash_ref or "").strip()
+        if not ref:
+            return
+        proc = self.git("stash", "pop", ref)
+        if proc.returncode != 0:
+            raise UpdateError(
+                "post-update",
+                "Update completed, but restoring stashed changes failed; resolve stash manually",
+                {"stash_ref": ref, "stderr": proc.stderr, "stdout": proc.stdout},
+            )
+
     def acquire_lock(self) -> None:
         try:
             fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -243,19 +273,27 @@ class Updater:
         message = "updates available" if meta["updates_available"] else "already current"
         return UpdateResult(True, "check", meta["current_commit"], meta["target_commit"], meta["updates_available"], message, meta)
 
-    def apply(self, *, no_restart: bool = False) -> UpdateResult:
+    def apply(self, *, no_restart: bool = False, allow_dirty: bool = False) -> UpdateResult:
         self.acquire_lock()
         before_status: dict[str, Any] = {}
         event: dict[str, Any] = {"ts": utc_ts(), "action": "apply", "ok": False}
+        stashed: dict[str, Any] = {"created": False}
         try:
             self.ensure_git_repo()
             self.fetch()
             before = self.metadata()
             event.update({"before": before})
-            self.ensure_clean_tree()
+            if allow_dirty:
+                stashed = self.stash_worktree()
+                if stashed.get("created"):
+                    event["auto_stash"] = stashed
+            else:
+                self.ensure_clean_tree()
             if not before["updates_available"]:
                 result = UpdateResult(True, "noop", before["current_commit"], before["target_commit"], False, "already current", before)
                 event.update(result.as_dict())
+                if stashed.get("created"):
+                    self.restore_stash(str(stashed.get("ref") or ""))
                 self.record(event)
                 return result
             before_status = self.managed_status()
@@ -267,8 +305,12 @@ class Updater:
             self.ensure_frontend()
             verify = self.verify()
             restart = self.restart_services(before_status, no_restart=no_restart)
+            if stashed.get("created"):
+                self.restore_stash(str(stashed.get("ref") or ""))
             after = self.metadata()
             details = {"before": before, "after": after, "verify": verify, "restart": restart, "snapshot": event.get("snapshot")}
+            if stashed.get("created"):
+                details["auto_stash"] = stashed
             result = UpdateResult(True, "updated", before["current_commit"], after["current_commit"], True, "updated successfully", details)
             event.update(result.as_dict())
             self.record(event)
@@ -297,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="apply update; default when no mode is selected")
     parser.add_argument("--verify", action="store_true", help="run post-install verification only")
     parser.add_argument("--no-restart", action="store_true", help="do not restart managed services")
+    parser.add_argument("--allow-dirty", action="store_true", help="auto-stash local changes while applying updates")
     args = parser.parse_args(argv)
     updater = Updater(Path(args.repo_root))
     try:
@@ -305,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.check:
             print_result(updater.check())
         else:
-            print_result(updater.apply(no_restart=args.no_restart))
+            print_result(updater.apply(no_restart=args.no_restart, allow_dirty=args.allow_dirty))
     except UpdateError as exc:
         print(json.dumps({"ok": False, "status": "failed", "failed_step": exc.step, "message": str(exc), "details": exc.details}, indent=2, sort_keys=True), file=sys.stderr)
         return 1
