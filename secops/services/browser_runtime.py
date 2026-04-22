@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -109,6 +110,7 @@ class BrowserObservation:
     dom_summary: dict[str, Any]
     route_hints: list[str]
     js_signals: list[dict[str, Any]]
+    screenshot_path: str = ""
 
 
 @dataclass(slots=True)
@@ -398,6 +400,129 @@ class BrowserRuntimeService:
             cookie["path"] = "/"
         return cookie
 
+    def _session_state_path(self, workspace_root: Path, session_key: str) -> Path:
+        """Filesystem location of the saved storage_state for this session key.
+
+        Key is hashed so an arbitrary role_label can contain path-unsafe chars
+        without affecting the on-disk layout.
+        """
+        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:32]
+        root = workspace_root / ".browser_sessions"
+        root.mkdir(parents=True, exist_ok=True)
+        return root / f"{digest}.json"
+
+    def _perform_login(
+        self,
+        *,
+        page: Any,
+        context: Any,
+        policy: BrowserPolicy,
+        auth_cfg: BrowserAuthConfig,
+        entry_url: str,
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+        """Drive the configured login flow on ``page`` using ``auth_cfg``.
+
+        Returns ``(auth_state, transitions, dom_diffs)``. ``auth_state`` is one
+        of ``success | partial | failed | not_attempted``. This method is
+        side-effectful on ``page``/``context`` but leaves caller in charge of
+        context lifetime and storage_state persistence.
+        """
+        transitions: list[dict[str, Any]] = []
+        dom_diffs: list[dict[str, Any]] = []
+        auth_state = "not_attempted"
+
+        auth_url = _normalize_url(auth_cfg.login_url or entry_url)
+        if not auth_url or not self._is_allowed_url(auth_url, policy):
+            return "failed", transitions, dom_diffs
+
+        try:
+            applied_cookies = 0
+            for item in auth_cfg.session_cookies:
+                cookie = self._normalize_cookie(item, auth_url)
+                if cookie is None:
+                    continue
+                context.add_cookies([cookie])
+                applied_cookies += 1
+            if applied_cookies:
+                transitions.append(
+                    {
+                        "stage": "cookie-import",
+                        "status": "applied",
+                        "cookie_count": applied_cookies,
+                        "role_label": auth_cfg.role_label,
+                    }
+                )
+            page.goto(auth_url, wait_until="domcontentloaded", timeout=15000)
+            pre_html = page.content()
+            pre_auth = self._page_snapshot(page=page, context=context, html=pre_html, depth=0)
+            transitions.append(
+                {
+                    "stage": "pre-auth",
+                    "status": "observed",
+                    "url": pre_auth["url"],
+                    "title": pre_auth["title"],
+                    "storage_summary": pre_auth["storage_summary"],
+                }
+            )
+            if auth_cfg.steps:
+                for step in auth_cfg.steps[:20]:
+                    action = str(step.get("action") or "").strip().lower()
+                    if action == "goto":
+                        goto_url = _normalize_url(self._resolve_auth_value(step.get("url"), auth_cfg))
+                        if goto_url and self._is_allowed_url(goto_url, policy):
+                            page.goto(goto_url, wait_until="domcontentloaded", timeout=15000)
+                    elif action == "fill":
+                        selector = str(step.get("selector") or "").strip()
+                        if selector:
+                            page.fill(selector, self._resolve_auth_value(step.get("value"), auth_cfg))
+                    elif action in {"click", "submit", "press"}:
+                        if not policy.allow_form_submission:
+                            auth_state = "partial"
+                            continue
+                        selector = str(step.get("selector") or "").strip()
+                        if action == "press":
+                            page.press(selector, str(step.get("key") or "Enter"))
+                        elif selector:
+                            page.click(selector)
+                    elif action == "wait":
+                        page.wait_for_timeout(max(0, min(int(step.get("ms") or 800), 10000)))
+            elif auth_cfg.username and auth_cfg.password:
+                page.fill(auth_cfg.username_selector, auth_cfg.username)
+                page.fill(auth_cfg.password_selector, auth_cfg.password)
+                if policy.allow_form_submission:
+                    page.click(auth_cfg.submit_selector)
+                else:
+                    auth_state = "partial"
+            page.wait_for_timeout(1200)
+            post_html = page.content()
+            post_auth = self._page_snapshot(page=page, context=context, html=post_html, depth=0)
+            diff = self._dom_diff(pre_auth, post_auth, "auth-transition")
+            dom_diffs.append(diff)
+            if auth_state != "partial":
+                auth_state = (
+                    "success"
+                    if diff["navigated"]
+                    or diff["auth_like_form_removed"]
+                    or int(post_auth["storage_summary"].get("cookie_count") or 0)
+                    > int(pre_auth["storage_summary"].get("cookie_count") or 0)
+                    else "partial"
+                )
+            transitions.append(
+                {
+                    "stage": "post-auth",
+                    "status": auth_state,
+                    "url": post_auth["url"],
+                    "title": post_auth["title"],
+                    "storage_summary": post_auth["storage_summary"],
+                    "dom_diff": diff,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            auth_state = "failed"
+            transitions.append({"stage": "post-auth", "status": "failed", "detail": str(exc)[:200]})
+
+        return auth_state, transitions, dom_diffs
+
     def _seed_urls(self, entry_url: str, run_config: dict[str, Any]) -> list[str]:
         browser_cfg = dict(run_config.get("browser") or {})
         configured = [str(item).strip() for item in (browser_cfg.get("seed_paths") or []) if str(item).strip()]
@@ -423,7 +548,15 @@ class BrowserRuntimeService:
             seeds.append(normalized)
         return seeds[:40]
 
-    def assess(self, *, run_id: str, workspace_root: Path, target: str, run_config: dict[str, Any]) -> BrowserAssessmentResult:
+    def assess(
+        self,
+        *,
+        run_id: str,
+        workspace_root: Path,
+        target: str,
+        run_config: dict[str, Any],
+        engagement_id: str | None = None,
+    ) -> BrowserAssessmentResult:
         started_at = _utc_now()
         entry_url = _normalize_url((run_config.get("browser") or {}).get("entry_url") or target)
         policy = self._default_policy(run_config, entry_url)
@@ -544,9 +677,31 @@ class BrowserRuntimeService:
                 session_summary={"run_id": run_id, "authenticated": "failed", "blocked_actions": blocked_actions},
             )
 
+        session_scope = engagement_id or run_id
+        session_key = f"{session_scope}|{auth_cfg.role_label or 'default'}"
+        session_state_file = self._session_state_path(workspace_root, session_key)
+        session_state_loaded = False
+        har_path = browser_root / "network.har"
+
         with sync_playwright() as p:  # type: ignore[name-defined]
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(ignore_https_errors=True)
+            context_kwargs: dict[str, Any] = {
+                "ignore_https_errors": True,
+                "record_har_path": str(har_path),
+            }
+            if session_state_file.exists():
+                try:
+                    context_kwargs["storage_state"] = str(session_state_file)
+                    session_state_loaded = True
+                except Exception:  # noqa: BLE001
+                    session_state_loaded = False
+            try:
+                context = browser.new_context(**context_kwargs)
+            except TypeError:
+                # Older Playwright builds that do not understand record_har_path.
+                context_kwargs.pop("record_har_path", None)
+                context = browser.new_context(**context_kwargs)
+                har_path = Path()
             page = context.new_page()
             requests_seen = 0
             queue: list[tuple[str, int, str]] = [(entry_url, 0, "entry")]
@@ -577,96 +732,42 @@ class BrowserRuntimeService:
 
             page.on("request", _record_request)
 
+            if session_state_loaded:
+                auth_transitions.append(
+                    {
+                        "stage": "session-restore",
+                        "status": "applied",
+                        "role_label": auth_cfg.role_label,
+                        "session_key": session_key,
+                        "path": str(session_state_file),
+                    }
+                )
+                auth_state = "restored"
+
             if policy.allow_auth and (auth_cfg.login_url or auth_cfg.steps or auth_cfg.session_cookies):
                 auth_url = _normalize_url(auth_cfg.login_url or entry_url)
-                if auth_url and self._is_allowed_url(auth_url, policy):
-                    try:
-                        applied_cookies = 0
-                        for item in auth_cfg.session_cookies:
-                            cookie = self._normalize_cookie(item, auth_url)
-                            if cookie is None:
-                                continue
-                            context.add_cookies([cookie])
-                            applied_cookies += 1
-                        if applied_cookies:
-                            auth_transitions.append(
-                                {
-                                    "stage": "cookie-import",
-                                    "status": "applied",
-                                    "cookie_count": applied_cookies,
-                                    "role_label": auth_cfg.role_label,
-                                }
-                            )
-                        page.goto(auth_url, wait_until="domcontentloaded", timeout=15000)
-                        pre_html = page.content()
-                        pre_auth = self._page_snapshot(page=page, context=context, html=pre_html, depth=0)
-                        auth_transitions.append(
-                            {
-                                "stage": "pre-auth",
-                                "status": "observed",
-                                "url": pre_auth["url"],
-                                "title": pre_auth["title"],
-                                "storage_summary": pre_auth["storage_summary"],
-                            }
-                        )
-                        if auth_cfg.steps:
-                            for step in auth_cfg.steps[:20]:
-                                action = str(step.get("action") or "").strip().lower()
-                                if action == "goto":
-                                    goto_url = _normalize_url(self._resolve_auth_value(step.get("url"), auth_cfg))
-                                    if goto_url and self._is_allowed_url(goto_url, policy):
-                                        page.goto(goto_url, wait_until="domcontentloaded", timeout=15000)
-                                elif action == "fill":
-                                    selector = str(step.get("selector") or "").strip()
-                                    if selector:
-                                        page.fill(selector, self._resolve_auth_value(step.get("value"), auth_cfg))
-                                elif action in {"click", "submit", "press"}:
-                                    if not policy.allow_form_submission:
-                                        blocked_actions.append("auth-submit-blocked-by-policy")
-                                        auth_state = "partial"
-                                        continue
-                                    selector = str(step.get("selector") or "").strip()
-                                    if action == "press":
-                                        page.press(selector, str(step.get("key") or "Enter"))
-                                    elif selector:
-                                        page.click(selector)
-                                elif action == "wait":
-                                    page.wait_for_timeout(max(0, min(int(step.get("ms") or 800), 10000)))
-                        elif auth_cfg.username and auth_cfg.password:
-                            page.fill(auth_cfg.username_selector, auth_cfg.username)
-                            page.fill(auth_cfg.password_selector, auth_cfg.password)
-                            if policy.allow_form_submission:
-                                page.click(auth_cfg.submit_selector)
-                            else:
-                                blocked_actions.append("auth-submit-blocked-by-policy")
-                                auth_state = "partial"
-                        page.wait_for_timeout(1200)
-                        post_html = page.content()
-                        post_auth = self._page_snapshot(page=page, context=context, html=post_html, depth=0)
-                        diff = self._dom_diff(pre_auth, post_auth, "auth-transition")
-                        dom_diffs.append(diff)
-                        auth_state = auth_state or "not_attempted"
-                        if auth_state != "partial":
-                            auth_state = (
-                                "success"
-                                if diff["navigated"] or diff["auth_like_form_removed"] or int(post_auth["storage_summary"].get("cookie_count") or 0) > int(pre_auth["storage_summary"].get("cookie_count") or 0)
-                                else "partial"
-                            )
-                        auth_transitions.append(
-                            {
-                                "stage": "post-auth",
-                                "status": auth_state,
-                                "url": post_auth["url"],
-                                "title": post_auth["title"],
-                                "storage_summary": post_auth["storage_summary"],
-                                "dom_diff": diff,
-                            }
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        auth_state = "failed"
-                        auth_transitions.append({"stage": "post-auth", "status": "failed", "detail": str(exc)[:200]})
-                else:
+                if not auth_url or not self._is_allowed_url(auth_url, policy):
                     blocked_actions.append("auth-login-url-not-allowed")
+                else:
+                    login_state, login_transitions, login_diffs = self._perform_login(
+                        page=page,
+                        context=context,
+                        policy=policy,
+                        auth_cfg=auth_cfg,
+                        entry_url=entry_url,
+                    )
+                    auth_transitions.extend(login_transitions)
+                    dom_diffs.extend(login_diffs)
+                    if login_state == "partial" and any(
+                        t.get("status") == "partial" for t in login_transitions
+                    ):
+                        blocked_actions.append("auth-submit-blocked-by-policy")
+                    auth_state = login_state
+                    if login_state == "success":
+                        try:
+                            context.storage_state(path=str(session_state_file))
+                        except Exception:  # noqa: BLE001
+                            pass
 
             while queue and len(visited) < policy.max_pages:
                 url, depth, parent = queue.pop(0)
@@ -752,11 +853,26 @@ class BrowserRuntimeService:
                     screen_path = browser_root / f"{len(observations):03d}_{slug}.png"
                     try:
                         page.screenshot(path=str(screen_path), full_page=True)
-                        artifacts.append({"kind": "screenshot", "path": str(screen_path)})
+                        artifacts.append({"kind": "screenshot", "path": str(screen_path), "url": current_url})
+                        obs.screenshot_path = str(screen_path)
                     except Exception:  # noqa: BLE001
                         blocked_actions.append(f"screenshot-failed:{current_url}")
 
+            # Close the context (not the browser) first so Playwright flushes
+            # the HAR file before we stat it.
+            try:
+                context.close()
+            except Exception:  # noqa: BLE001
+                pass
             browser.close()
+            if har_path != Path() and har_path.exists() and har_path.stat().st_size > 0:
+                artifacts.append(
+                    {
+                        "kind": "browser-har",
+                        "path": str(har_path),
+                        "session_key": session_key,
+                    }
+                )
 
         edges: list[dict[str, str]] = []
         for node in route_nodes.values():

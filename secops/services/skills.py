@@ -441,8 +441,52 @@ def attack_chain_from_fact(fact: Fact) -> dict[str, Any]:
     }
 
 
+_SEVERITY_WEIGHTS = {"critical": 40, "high": 28, "medium": 16, "low": 8, "info": 2}
+
+
+def compute_attack_chain_score(
+    *,
+    validated_step_count: int,
+    total_step_count: int,
+    max_severity: str,
+    exploitability: float,
+    blast_radius: float,
+) -> dict[str, Any]:
+    """P2-6 — deterministic 0–100 score for an attack chain.
+
+    Weights (sum = 100):
+      * 35 points — validated-step ratio (validated / total)
+      * 40 points — max severity across steps
+      * 15 points — exploitability (0.0–1.0, operator-estimated)
+      * 10 points — blast radius (0.0–1.0)
+
+    Pure function. Clamped to [0, 100] so Finding.severity derivation is stable
+    even when callers feed sloppy inputs.
+    """
+    total = max(1, int(total_step_count or 0))
+    validated = max(0, min(int(validated_step_count or 0), total))
+    ratio = validated / total
+    severity_key = str(max_severity or "info").strip().lower()
+    severity_points = _SEVERITY_WEIGHTS.get(severity_key, _SEVERITY_WEIGHTS["info"])
+    exploit = max(0.0, min(1.0, float(exploitability or 0.0)))
+    blast = max(0.0, min(1.0, float(blast_radius or 0.0)))
+    raw = (35.0 * ratio) + float(severity_points) + (15.0 * exploit) + (10.0 * blast)
+    score = int(round(max(0.0, min(100.0, raw))))
+    return {
+        "score": score,
+        "components": {
+            "validated_ratio": round(ratio, 3),
+            "validated_step_count": validated,
+            "total_step_count": total,
+            "max_severity": severity_key,
+            "severity_points": severity_points,
+            "exploitability": round(exploit, 3),
+            "blast_radius": round(blast, 3),
+        },
+    }
+
+
 def create_attack_chain_fact(db: Session, run_id: str, payload: dict[str, Any]) -> Fact:
-    score = int(payload.get("score") or 0)
     normalized_steps = []
     for step in list(payload.get("steps") or []):
         row = dict(step)
@@ -453,11 +497,29 @@ def create_attack_chain_fact(db: Session, run_id: str, payload: dict[str, Any]) 
                 "expected_outcome": str(row.get("expected_outcome") or ""),
                 "proof_required": list(row.get("proof_required") or []),
                 "stop_conditions": list(row.get("stop_conditions") or []),
+                "validated": bool(row.get("validated") or False),
+                "severity": str(row.get("severity") or "info").lower(),
             }
         )
+    validated_count = sum(1 for s in normalized_steps if s.get("validated"))
+    max_severity = "info"
+    severity_order = ["info", "low", "medium", "high", "critical"]
+    for s in normalized_steps:
+        sv = s.get("severity") or "info"
+        if severity_order.index(sv) > severity_order.index(max_severity) if sv in severity_order else False:
+            max_severity = sv
+    scoring = compute_attack_chain_score(
+        validated_step_count=validated_count,
+        total_step_count=len(normalized_steps),
+        max_severity=str(payload.get("max_severity") or max_severity),
+        exploitability=float(payload.get("exploitability") or 0.0),
+        blast_radius=float(payload.get("blast_radius") or 0.0),
+    )
+    score = int(payload.get("score") or scoring["score"])
     metadata = {
         "name": payload.get("name", "Attack chain"),
         "score": score,
+        "scoring": scoring,
         "status": payload.get("status", "identified"),
         "steps": normalized_steps,
         "mitre_ids": payload.get("mitre_ids", []),

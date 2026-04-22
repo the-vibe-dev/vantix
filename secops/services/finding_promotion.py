@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -78,7 +79,10 @@ class FindingPromotionService:
             evidence_ids = list(existing.evidence_ids or [])
             if fact.id not in evidence_ids:
                 evidence_ids.append(fact.id)
-                existing.evidence_ids = evidence_ids
+            for artifact_id in self._artifact_ids_from_fact(fact):
+                if artifact_id and artifact_id not in evidence_ids:
+                    evidence_ids.append(artifact_id)
+            existing.evidence_ids = evidence_ids
             self._tag_fact_as_promoted(fact, existing)
             self.events.emit(
                 db,
@@ -96,12 +100,18 @@ class FindingPromotionService:
 
         data = self._finding_payload(fact, payload)
         data["fingerprint"] = fingerprint
-        data["evidence_ids"] = [fact.id]
+        evidence_ids: list[str] = [fact.id]
+        for artifact_id in self._artifact_ids_from_fact(fact):
+            if artifact_id and artifact_id not in evidence_ids:
+                evidence_ids.append(artifact_id)
+        data["evidence_ids"] = evidence_ids
         data["reproduction_script"] = str(
             payload.get("reproduction_script")
             or (fact.metadata_json or {}).get("reproduction_script")
             or ""
         )
+        data["promoted_at"] = datetime.now(timezone.utc)
+        data.setdefault("disposition", "draft")
         finding = Finding(run_id=run.id, **data)
         db.add(finding)
         db.flush()
@@ -147,6 +157,28 @@ class FindingPromotionService:
                 continue
             return candidate
         return None
+
+    def _artifact_ids_from_fact(self, fact: Fact) -> list[str]:
+        """Pull linked evidence artifact IDs out of fact.metadata.
+
+        Recognizes ``evidence_artifact_ids: [...]`` and, for convenience,
+        a scalar ``screenshot_artifact_id`` / ``proof_artifact_id``.
+        """
+        meta = dict(fact.metadata_json or {})
+        ids: list[str] = []
+        raw = meta.get("evidence_artifact_ids")
+        if isinstance(raw, (list, tuple)):
+            for item in raw:
+                text = str(item or "").strip()
+                if text:
+                    ids.append(text)
+        for key in ("screenshot_artifact_id", "proof_artifact_id"):
+            scalar = meta.get(key)
+            if scalar:
+                text = str(scalar).strip()
+                if text and text not in ids:
+                    ids.append(text)
+        return ids
 
     def _tag_fact_as_promoted(self, fact: Fact, finding: Finding) -> None:
         metadata = dict(fact.metadata_json or {})

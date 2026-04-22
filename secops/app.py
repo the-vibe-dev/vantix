@@ -166,6 +166,8 @@ def create_app() -> FastAPI:
     app.include_router(providers.router)
     app.include_router(tools.router)
     app.include_router(sources.router)
+    from secops.routers import metrics as _metrics_router
+    app.include_router(_metrics_router.router)
 
     if settings.enable_cve_mcp:
         from secops.mcp.cve_server import create_cve_mcp

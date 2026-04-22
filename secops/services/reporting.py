@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import html
 import json
 import mimetypes
@@ -70,6 +71,13 @@ class ReportingService:
                     "remediation": finding.remediation,
                     "confidence": finding.confidence,
                     "validation": self._validation_metadata_from_text(finding.evidence or ""),
+                    "fingerprint": finding.fingerprint,
+                    "evidence_ids": list(finding.evidence_ids or []),
+                    "reproduction_script": finding.reproduction_script or "",
+                    "promoted_at": finding.promoted_at.isoformat() if finding.promoted_at else None,
+                    "reviewed_at": finding.reviewed_at.isoformat() if finding.reviewed_at else None,
+                    "reviewer_user_id": finding.reviewer_user_id,
+                    "disposition": finding.disposition,
                 }
                 for finding in findings
             ],
@@ -208,6 +216,10 @@ class ReportingService:
                         f"- Severity: {str(item.get('severity') or 'info').upper()}",
                         f"- Status: {item.get('status') or 'validated'}",
                         f"- Confidence: {float(item.get('confidence') or 0.0):.2f}",
+                        f"- Disposition: {item.get('disposition') or 'draft'}",
+                        f"- Promoted: {item.get('promoted_at') or 'not recorded'}",
+                        f"- Reviewed: {item.get('reviewed_at') or 'pending'}"
+                        + (f" by user {item.get('reviewer_user_id')}" if item.get("reviewer_user_id") else ""),
                         f"- Risk Tags: {validation_meta.get('risk_tags') or 'none'}",
                         f"- Attempted: {validation_meta.get('attempted') or 'unknown'}",
                         f"- Impact Bound: {validation_meta.get('impact_bound') or 'not recorded'}",
@@ -226,6 +238,21 @@ class ReportingService:
                         "",
                     ]
                 )
+                if item.get("reproduction_script"):
+                    md_lines.extend(
+                        [
+                            "**Reproduction Script**",
+                            "```bash",
+                            str(item["reproduction_script"]).rstrip(),
+                            "```",
+                            "",
+                        ]
+                    )
+                if item.get("evidence_ids"):
+                    md_lines.append("**Linked Evidence**")
+                    for eid in item["evidence_ids"]:
+                        md_lines.append(f"- [{eid}](artifacts/{eid})")
+                    md_lines.append("")
                 if inline_artifacts:
                     md_lines.append("**Artifact Review**")
                     for art_path in inline_artifacts:
@@ -288,6 +315,13 @@ class ReportingService:
             ),
         )
 
+        provenance_path = self._emit_provenance_manifest(
+            paths=paths, run=run, findings=findings, artifacts=artifacts
+        )
+        attestation_path = self._emit_attestation(
+            paths=paths, run=run, report_paths=[md_path, html_path, provenance_path]
+        )
+
         return {
             "markdown_path": str(md_path),
             "html_path": str(html_path),
@@ -296,8 +330,110 @@ class ReportingService:
             "comprehensive_json_path": "",
             "artifact_index_path": "",
             "timeline_csv_path": "",
+            "provenance_path": str(provenance_path),
+            "attestation_path": str(attestation_path),
             "summary": report_json,
         }
+
+    def _emit_provenance_manifest(
+        self,
+        *,
+        paths,
+        run: WorkspaceRun,
+        findings: list[Finding],
+        artifacts: list[Artifact],
+    ) -> Path:
+        """P4-1 — Per-finding provenance manifest.
+
+        Captures the chain-of-custody trio, fingerprint, evidence linkage,
+        and a sha256 over the reproduction script so downstream consumers
+        can verify each finding without trusting the Markdown/HTML render.
+        """
+        artifact_sha: dict[str, str] = {}
+        for artifact in artifacts:
+            artifact_path = Path(artifact.path)
+            if artifact_path.is_file():
+                try:
+                    artifact_sha[artifact.id] = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+
+        rows: list[dict[str, Any]] = []
+        for finding in findings:
+            evidence_ids = list(finding.evidence_ids or [])
+            repro = finding.reproduction_script or ""
+            rows.append(
+                {
+                    "id": finding.id,
+                    "fingerprint": finding.fingerprint or "",
+                    "title": finding.title,
+                    "severity": finding.severity,
+                    "status": finding.status,
+                    "disposition": finding.disposition or "draft",
+                    "confidence": float(finding.confidence or 0.0),
+                    "promoted_at": finding.promoted_at.isoformat() if finding.promoted_at else None,
+                    "reviewed_at": finding.reviewed_at.isoformat() if finding.reviewed_at else None,
+                    "reviewer_user_id": finding.reviewer_user_id or None,
+                    "evidence_ids": evidence_ids,
+                    "evidence_sha256": {eid: artifact_sha[eid] for eid in evidence_ids if eid in artifact_sha},
+                    "reproduction_script_sha256": hashlib.sha256(repro.encode("utf-8")).hexdigest() if repro else "",
+                }
+            )
+
+        manifest = {
+            "schema_version": 1,
+            "kind": "vantix.finding_provenance.v1",
+            "run_id": run.id,
+            "engagement_id": run.engagement_id,
+            "workspace_id": run.workspace_id,
+            "target": run.target,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "finding_count": len(rows),
+            "findings": rows,
+        }
+        out_path = paths.artifacts / "findings.provenance.json"
+        paths.write_text(Path(out_path), json.dumps(manifest, indent=2, sort_keys=True))
+        return out_path
+
+    def _emit_attestation(
+        self,
+        *,
+        paths,
+        run: WorkspaceRun,
+        report_paths: list[Path],
+    ) -> Path:
+        """P4-3 — Signable attestation envelope over the rendered reports.
+
+        Writes a manifest of report artifacts with sha256 digests suitable
+        for ``cosign sign-blob`` (see ``scripts/sign-report.sh``). The
+        attestation file itself is what gets signed; verifiers recompute
+        the listed hashes against the rendered files to validate both the
+        signature and the bundle integrity.
+        """
+        entries: list[dict[str, Any]] = []
+        for report_path in report_paths:
+            rp = Path(report_path)
+            if not rp.is_file():
+                continue
+            data = rp.read_bytes()
+            entries.append(
+                {
+                    "path": rp.name,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "size_bytes": len(data),
+                }
+            )
+        envelope = {
+            "schema_version": 1,
+            "kind": "vantix.report_attestation.v1",
+            "run_id": run.id,
+            "workspace_id": run.workspace_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "reports": entries,
+        }
+        out_path = paths.artifacts / "report.attestation.json"
+        paths.write_text(Path(out_path), json.dumps(envelope, indent=2, sort_keys=True))
+        return out_path
 
     def _render_human_html(
         self,

@@ -103,6 +103,18 @@ function SevBadge({ severity }: { severity?: string }) {
   return <Badge variant={v}>{severity || "unknown"}</Badge>;
 }
 
+// P3-5 — hypothesis / validated / refuted lifecycle chip for a vector.
+function VectorLifecycleBadge({ vector }: { vector: Vector }) {
+  const meta = (vector.metadata || {}) as Record<string, unknown>;
+  const status = String(vector.status || "").toLowerCase();
+  const refuted =
+    status === "refuted" || meta.refuted === true || String(meta.fact_kind || "") === "negative_evidence";
+  const validated = !refuted && (status === "validated" || meta.validated === true);
+  if (refuted) return <Badge variant="danger">refuted</Badge>;
+  if (validated) return <Badge variant="ok">validated</Badge>;
+  return <Badge variant="default">hypothesis</Badge>;
+}
+
 function StatusDot({ status, size = 8 }: { status?: string; size?: number }) {
   const cols: Record<string, string> = {
     running: "var(--warn)",
@@ -1384,6 +1396,7 @@ function VectorsPanel({
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <SevBadge severity={v.severity} />
+                    <VectorLifecycleBadge vector={v} />
                     <span style={{ fontSize: ".82rem", fontWeight: 600, color: "var(--ink)" }}>{v.title}</span>
                   </div>
                   <Badge variant={v.status === "selected" ? "ok" : "default"}>{v.status}</Badge>
@@ -1713,15 +1726,19 @@ function ResultsPanel({
   results,
   selectedRunId,
   onOpenPath,
+  events,
   style,
 }: {
   results: RunResults | null;
   selectedRunId: string | undefined;
   onOpenPath: (path: string) => void;
+  events?: EventRecord[];
   style?: CSSProperties;
 }) {
   const findings = results?.findings || [];
   const artifacts = results?.artifacts || [];
+  const dedupEvents = (events || []).filter((e) => e.event_type === "dedup_merged");
+  const suppressedEvents = (events || []).filter((e) => e.event_type === "finding_suppressed");
   const validatedCount = findings.filter((row) => ["validated", "confirmed", "draft"].includes(String(row.status || "").toLowerCase())).length;
   const colStyle: CSSProperties = {
     display: "flex",
@@ -1742,6 +1759,36 @@ function ResultsPanel({
     <Panel title="Findings & Report" meta={`${validatedCount} validated · ${artifacts.length} artifacts`} style={style}>
       {results ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "1 1 auto", minHeight: 0, minWidth: 0 }}>
+          {(dedupEvents.length > 0 || suppressedEvents.length > 0) && (
+            <div
+              style={{
+                padding: "8px 10px",
+                borderRadius: 10,
+                background: "var(--amber-soft, var(--surface-2))",
+                border: "1px solid var(--amber, var(--line))",
+                fontSize: ".74rem",
+                color: "var(--ink)",
+                lineHeight: 1.5,
+                flexShrink: 0,
+                display: "flex",
+                gap: 14,
+                flexWrap: "wrap",
+              }}
+            >
+              {dedupEvents.length > 0 && (
+                <span title={dedupEvents.map((e) => e.message).slice(-3).join(" · ")}>
+                  <strong>{dedupEvents.length}</strong> finding
+                  {dedupEvents.length === 1 ? "" : "s"} deduplicated
+                </span>
+              )}
+              {suppressedEvents.length > 0 && (
+                <span title={suppressedEvents.map((e) => e.message).slice(-3).join(" · ")}>
+                  <strong>{suppressedEvents.length}</strong> finding
+                  {suppressedEvents.length === 1 ? "" : "s"} suppressed by negative evidence
+                </span>
+              )}
+            </div>
+          )}
           {results.executive_summary && (
             <div
               style={{
@@ -1983,16 +2030,54 @@ function ReplayPanel({ replay, style }: { replay: ReplayState | null; style?: CS
 }
 
 // ─── Approvals ──────────────────────────────────────────────────────────────
+// P3-4 — approval rows are cross-referenced against policy_decision run
+// events so operators can see the full audit context (action kind, verdict,
+// required approval tier, history) instead of just the single-line reason.
+function policyDecisionsFromEvents(events: EventRecord[] | undefined) {
+  return (events || [])
+    .filter((e) => e.event_type === "policy_decision")
+    .map((e) => ({
+      id: e.id,
+      at: e.created_at,
+      level: e.level,
+      message: e.message,
+      action_kind: String((e.payload as Record<string, unknown>)?.action_kind || ""),
+      verdict: String((e.payload as Record<string, unknown>)?.verdict || ""),
+      reason: String((e.payload as Record<string, unknown>)?.reason || ""),
+      audit: Boolean((e.payload as Record<string, unknown>)?.audit),
+    }));
+}
+
 function ApprovalsPanel({
   approvals,
   onApprove,
   onReject,
+  events,
 }: {
   approvals: Approval[];
   onApprove: (a: Approval) => void;
   onReject: (a: Approval) => void;
+  events?: EventRecord[];
 }) {
   const pending = approvals.filter((a) => a.status === "pending").length;
+  const decisions = policyDecisionsFromEvents(events);
+  const [drawer, setDrawer] = useState<Approval | null>(null);
+
+  function openDrawer(a: Approval) {
+    setDrawer(a);
+  }
+
+  function matchingDecisions(a: Approval) {
+    const needle = `${a.title} ${a.detail} ${a.reason}`.toLowerCase();
+    return decisions.filter(
+      (d) =>
+        (d.action_kind && needle.includes(d.action_kind.toLowerCase())) ||
+        (d.reason && needle.includes(d.reason.toLowerCase())) ||
+        d.verdict === "require_approval" ||
+        d.verdict === "block",
+    );
+  }
+
   return (
     <Panel
       title="Approvals"
@@ -2017,6 +2102,9 @@ function ApprovalsPanel({
                   {a.status}
                 </Badge>
                 <span style={{ fontSize: ".8rem", fontWeight: 600, color: "var(--ink)" }}>{a.title}</span>
+                <Btn size="xs" variant="ghost" onClick={() => openDrawer(a)}>
+                  Audit
+                </Btn>
               </div>
               <p style={{ margin: "0 0 10px", fontSize: ".76rem", color: "var(--ink-dim)", lineHeight: 1.5 }}>
                 {a.detail}
@@ -2037,6 +2125,58 @@ function ApprovalsPanel({
       ) : (
         <EmptyState icon="✓" text="No actions pending approval." />
       )}
+
+      {drawer ? (
+        <aside
+          role="dialog"
+          aria-label="Approval audit"
+          style={{
+            position: "fixed",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: "min(480px, 100%)",
+            zIndex: 40,
+            overflowY: "auto",
+            background: "var(--surface-1)",
+            borderLeft: "1px solid var(--line)",
+            padding: 16,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <h3 style={{ margin: 0 }}>Audit: {drawer.title}</h3>
+            <Btn size="sm" variant="ghost" onClick={() => setDrawer(null)}>Close</Btn>
+          </div>
+          <p style={{ fontSize: ".76rem", color: "var(--ink-dim)" }}>
+            Status <strong>{drawer.status}</strong> · Reason <strong>{drawer.reason || "—"}</strong>
+          </p>
+          <h4 style={{ marginTop: 12 }}>Policy decisions ({matchingDecisions(drawer).length})</h4>
+          {matchingDecisions(drawer).length ? (
+            <ul style={{ fontSize: ".74rem", paddingLeft: 18 }}>
+              {matchingDecisions(drawer).map((d) => (
+                <li key={d.id} style={{ marginBottom: 6 }}>
+                  <div>
+                    <Badge variant={d.verdict === "block" ? "danger" : d.verdict === "require_approval" ? "warn" : "default"}>
+                      {d.verdict || "—"}
+                    </Badge>{" "}
+                    <strong>{d.action_kind || "unknown"}</strong>
+                    {d.audit ? <span style={{ color: "var(--ink-dim)" }}> · audited</span> : null}
+                  </div>
+                  <div style={{ color: "var(--ink-dim)" }}>{d.reason || d.message}</div>
+                  <div style={{ fontSize: ".68rem", color: "var(--ink-muted)" }}>{d.at}</div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="empty">No matching policy decisions in the current event window.</p>
+          )}
+          <h4 style={{ marginTop: 12 }}>Grant history</h4>
+          <p style={{ fontSize: ".74rem", color: "var(--ink-dim)" }}>
+            All approvals for this run:{" "}
+            {approvals.map((a) => `${a.title}=${a.status}`).join(" · ") || "none"}
+          </p>
+        </aside>
+      ) : null}
     </Panel>
   );
 }
@@ -3419,6 +3559,7 @@ export default function App() {
                 results={results}
                 selectedRunId={selectedRun?.id}
                 onOpenPath={handleOpenPath}
+                events={events}
                 style={{ flex: "1 1 auto", minHeight: 0 }}
               />
             </div>
@@ -3431,7 +3572,7 @@ export default function App() {
         {tab === "config" && (
           <div className="vx-workspace vx-workspace-split">
             <div className="vx-col">
-              <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} />
+              <ApprovalsPanel approvals={approvals} onApprove={handleApprove} onReject={handleReject} events={events} />
               <HighRiskSurfacesPanel run={selectedRun} onSave={handleSaveHighRiskSurfaces} />
               <SourcePanel sourceStatus={sourceStatus} />
               <SkillsPanel applications={skillApps} onApply={handleApplySkills} selectedRunId={selectedRun?.id} />

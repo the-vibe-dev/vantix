@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from secops.models import RunMetric, WorkerLease, WorkerRuntimeStatus, WorkflowExecution, WorkflowPhaseRun, WorkspaceRun
 from secops.services.workflows.checkpoints import CheckpointService
+from secops.services.workflows.idempotency import phase_idempotency_key
 from secops.services.workflows.phases import PHASE_SEQUENCE, next_phase
 from secops.services.workflows.types import PhaseStatus, RetryClass, WorkerLeaseState, WorkflowStatus
 
@@ -207,6 +208,13 @@ class WorkflowEngine:
             workflow.current_phase = candidate.phase_name
             workflow.attempt_count = max(workflow.attempt_count, candidate.attempt)
             workflow.updated_at = now
+
+        metadata = dict(candidate.metadata_json or {})
+        if not metadata.get("idempotency_key"):
+            metadata["idempotency_key"] = phase_idempotency_key(
+                candidate.run_id, candidate.phase_name, metadata.get("inputs")
+            )
+            candidate.metadata_json = metadata
 
         run = db.get(WorkspaceRun, candidate.run_id)
         if run is not None and run.status not in {"blocked", "cancelled", "failed"}:
@@ -519,6 +527,12 @@ class WorkflowEngine:
             lease.heartbeat_at = now
             lease.lease_expires_at = now
 
+        parent_meta = dict(phase_run.metadata_json or {})
+        retry_meta: dict = {"retry_from_phase_run_id": phase_run.id}
+        if parent_meta.get("idempotency_key"):
+            retry_meta["idempotency_key"] = parent_meta["idempotency_key"]
+        if parent_meta.get("inputs") is not None:
+            retry_meta["inputs"] = parent_meta["inputs"]
         next_attempt = WorkflowPhaseRun(
             run_id=phase_run.run_id,
             workflow_id=phase_run.workflow_id,
@@ -527,7 +541,7 @@ class WorkflowEngine:
             status=PhaseStatus.RETRYING.value,
             retry_class=retry_class,
             next_attempt_at=now + timedelta(seconds=max(1, delay_seconds)),
-            metadata_json={"retry_from_phase_run_id": phase_run.id},
+            metadata_json=retry_meta,
         )
         db.add(next_attempt)
         db.flush()

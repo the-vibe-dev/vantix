@@ -62,6 +62,7 @@ from secops.schemas import (
     WorkflowStateRead,
     FindingPromotionCreate,
     FindingRead,
+    FindingReviewCreate,
     RunProviderRouteCreate,
     PlanningBundleRead,
     ReplayStateRead,
@@ -71,6 +72,7 @@ from secops.services.context_builder import ContextBuilder
 from secops.services.execution import execution_manager
 from secops.services.events import normalize_event_payload
 from secops.services.finding_promotion import FindingPromotionService
+from secops.services.finding_review import FindingReviewService, ReviewError
 from secops.services.learning import LearningService
 from secops.services.phase_state import RunPhaseService
 from secops.services.storage import StorageLayout
@@ -211,6 +213,9 @@ def _backfill_specialist_status(db: Session, run_id: str) -> None:
 @router.post("", response_model=RunRead)
 def create_run(payload: RunCreate, db: Session = Depends(get_db)) -> WorkspaceRun:
     service = RunService(db)
+    config = dict(payload.config or {})
+    if payload.quick:
+        config["scan_profile"] = "quick"
     try:
         run = service.create_run(
             engagement_id=payload.engagement_id,
@@ -219,7 +224,7 @@ def create_run(payload: RunCreate, db: Session = Depends(get_db)) -> WorkspaceRu
             ports=payload.ports,
             services=payload.services,
             tags=payload.tags,
-            config=payload.config,
+            config=config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -230,6 +235,98 @@ def create_run(payload: RunCreate, db: Session = Depends(get_db)) -> WorkspaceRu
 def list_runs(limit: int = 100, db: Session = Depends(get_db)) -> list[WorkspaceRun]:
     limit = max(1, min(int(limit), 500))
     return db.query(WorkspaceRun).order_by(WorkspaceRun.started_at.desc()).limit(limit).all()
+
+
+@router.get("/compare")
+def compare_runs(a: str = Query(...), b: str = Query(...), db: Session = Depends(get_db)) -> dict:
+    """P3-6 — structured diff between two runs over findings, phases, vectors."""
+    run_a = db.get(WorkspaceRun, a)
+    run_b = db.get(WorkspaceRun, b)
+    if run_a is None or run_b is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    def _finding_map(run_id: str) -> dict[str, dict]:
+        rows = db.query(Finding).filter(Finding.run_id == run_id).all()
+        out: dict[str, dict] = {}
+        for f in rows:
+            key = f.fingerprint or f"id:{f.id}"
+            out[key] = {
+                "id": f.id,
+                "title": f.title,
+                "severity": f.severity,
+                "status": f.status,
+                "disposition": f.disposition,
+                "fingerprint": f.fingerprint,
+            }
+        return out
+
+    def _severity_histogram(findings: dict[str, dict]) -> dict[str, int]:
+        hist: dict[str, int] = {}
+        for row in findings.values():
+            sev = str(row.get("severity") or "info")
+            hist[sev] = hist.get(sev, 0) + 1
+        return hist
+
+    def _phase_durations(run_id: str) -> dict[str, float]:
+        rows = db.query(WorkflowPhaseRun).filter(WorkflowPhaseRun.run_id == run_id).all()
+        out: dict[str, float] = {}
+        for phase in rows:
+            started = _as_utc(getattr(phase, "started_at", None))
+            finished = _as_utc(getattr(phase, "completed_at", None))
+            if started is None or finished is None:
+                continue
+            dur = max(0.0, (finished - started).total_seconds())
+            name = str(phase.phase_name or "")
+            out[name] = max(out.get(name, 0.0), round(dur, 3))
+        return out
+
+    def _vector_count(run_id: str) -> int:
+        return db.query(Fact).filter(Fact.run_id == run_id, Fact.kind == "vector").count()
+
+    fa, fb = _finding_map(a), _finding_map(b)
+    keys_a, keys_b = set(fa), set(fb)
+    only_a = sorted(keys_a - keys_b)
+    only_b = sorted(keys_b - keys_a)
+    common = sorted(keys_a & keys_b)
+    common_changed: list[dict] = []
+    for key in common:
+        left, right = fa[key], fb[key]
+        changed = {
+            k: {"a": left.get(k), "b": right.get(k)}
+            for k in ("severity", "status", "disposition")
+            if left.get(k) != right.get(k)
+        }
+        if changed:
+            common_changed.append({"fingerprint": key, "changes": changed, "title": left.get("title")})
+
+    pa, pb = _phase_durations(a), _phase_durations(b)
+    phase_diff = []
+    for name in sorted(set(pa) | set(pb)):
+        phase_diff.append(
+            {
+                "phase_name": name,
+                "duration_a_seconds": pa.get(name),
+                "duration_b_seconds": pb.get(name),
+                "delta_seconds": round((pb.get(name) or 0.0) - (pa.get(name) or 0.0), 3),
+            }
+        )
+
+    return {
+        "run_a": {"id": run_a.id, "status": run_a.status, "started_at": _as_utc(run_a.started_at).isoformat() if run_a.started_at else None},
+        "run_b": {"id": run_b.id, "status": run_b.status, "started_at": _as_utc(run_b.started_at).isoformat() if run_b.started_at else None},
+        "findings": {
+            "only_in_a": [fa[k] for k in only_a],
+            "only_in_b": [fb[k] for k in only_b],
+            "changed": common_changed,
+            "severity_a": _severity_histogram(fa),
+            "severity_b": _severity_histogram(fb),
+        },
+        "phases": phase_diff,
+        "vectors": {
+            "count_a": _vector_count(a),
+            "count_b": _vector_count(b),
+        },
+    }
 
 
 @router.get("/{run_id}", response_model=RunRead)
@@ -310,6 +407,21 @@ def _is_allowed_runtime_path(path: Path, run: WorkspaceRun) -> bool:
     return False
 
 
+def _is_registered_run_artifact(path: Path, run_id: str, db: Session) -> bool:
+    artifact_rows = db.query(Artifact.path).filter(Artifact.run_id == run_id).all()
+    for row in artifact_rows:
+        raw_path = str(row[0] or "").strip()
+        if not raw_path:
+            continue
+        try:
+            artifact_resolved = Path(raw_path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if artifact_resolved == path:
+            return True
+    return False
+
+
 @router.get("/{run_id}/file")
 def open_run_file(run_id: str, path: str = Query(min_length=1), db: Session = Depends(get_db)):
     run = db.get(WorkspaceRun, run_id)
@@ -326,6 +438,8 @@ def open_run_file(run_id: str, path: str = Query(min_length=1), db: Session = De
         raise HTTPException(status_code=404, detail="File not found")
     if not _is_allowed_runtime_path(resolved, run):
         raise HTTPException(status_code=403, detail="File path not allowed")
+    if not _is_registered_run_artifact(resolved, run_id, db):
+        raise HTTPException(status_code=403, detail="File is not a registered run artifact")
     media_type = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
     return FileResponse(path=str(resolved), media_type=media_type, filename=resolved.name)
 
@@ -774,6 +888,37 @@ def promote_finding(run_id: str, payload: FindingPromotionCreate, db: Session = 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     RunPhaseService().transition(run, "reporting", reason="finding-promoted", details={"finding_id": finding.id})
+    db.commit()
+    db.refresh(finding)
+    return finding
+
+
+@router.post("/{run_id}/findings/{finding_id}/review", response_model=FindingRead)
+def review_finding(
+    run_id: str,
+    finding_id: str,
+    payload: FindingReviewCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Finding:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    ctx = getattr(request.state, "auth", None)
+    reviewer = getattr(ctx, "username", "") or ""
+    if not reviewer:
+        raise HTTPException(status_code=401, detail="Reviewer identity not established")
+    try:
+        finding = FindingReviewService().review(
+            db,
+            run,
+            finding_id,
+            reviewer_username=reviewer,
+            disposition=payload.disposition,
+            note=payload.note,
+        )
+    except ReviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.commit()
     db.refresh(finding)
     return finding

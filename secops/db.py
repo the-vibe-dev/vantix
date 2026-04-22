@@ -87,7 +87,16 @@ def ensure_sqlite_compat_schema() -> None:
                 conn.execute("ALTER TABLE findings ADD COLUMN evidence_ids TEXT NOT NULL DEFAULT '[]'")
             if "reproduction_script" not in findings_columns:
                 conn.execute("ALTER TABLE findings ADD COLUMN reproduction_script TEXT NOT NULL DEFAULT ''")
+            if "promoted_at" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN promoted_at DATETIME")
+            if "reviewed_at" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN reviewed_at DATETIME")
+            if "reviewer_user_id" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN reviewer_user_id VARCHAR(36)")
+            if "disposition" not in findings_columns:
+                conn.execute("ALTER TABLE findings ADD COLUMN disposition VARCHAR(32) NOT NULL DEFAULT 'draft'")
             conn.execute("CREATE INDEX IF NOT EXISTS ix_findings_run_fingerprint ON findings (run_id, fingerprint)")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_findings_reviewer_user_id ON findings (reviewer_user_id)")
         conn.commit()
 
 

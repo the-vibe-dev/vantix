@@ -104,17 +104,17 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     if not codex_available:
         warnings.append("Codex binary is not available on PATH or SECOPS_CODEX_BIN")
     if codex_probe_error:
-        warnings.append(f"Codex workspace probe failed: {codex_probe_error}")
+        warnings.append("Codex workspace probe failed")
     if not settings.enable_codex_execution:
         warnings.append("Codex execution is disabled")
     if not runtime_ok:
         warnings.append("Runtime root is not writable")
     if tool_probe_error:
-        warnings.append(f"Tool probe failed: {tool_probe_error}")
+        warnings.append("Tool probe failed")
     if db_probe_error:
-        warnings.append(f"Database probe failed: {db_probe_error}")
+        warnings.append("Database probe failed")
     if workers_probe_error:
-        warnings.append(f"Worker status probe failed: {workers_probe_error}")
+        warnings.append("Worker status probe failed")
     return {
         "product": "Vantix",
         "version": "0.1.0",

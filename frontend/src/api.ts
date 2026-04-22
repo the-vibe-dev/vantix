@@ -121,6 +121,67 @@ export type Finding = {
   summary: string;
   evidence: string;
   confidence: number;
+  fingerprint?: string | null;
+  evidence_ids?: string[];
+  reproduction_script?: string | null;
+  promoted_at?: string | null;
+  reviewed_at?: string | null;
+  reviewer_user_id?: string | null;
+  disposition?: string | null;
+};
+
+export type FindingReviewPayload = {
+  disposition: "draft" | "reviewed" | "confirmed" | "dismissed" | string;
+  note?: string;
+};
+
+export type RuntimeHealth = {
+  generated_at: string;
+  leases: {
+    total: number;
+    by_state: Record<string, number>;
+    stale: Array<{
+      lease_id: string;
+      run_id: string;
+      phase_name: string;
+      worker_id: string;
+      heartbeat_age_seconds: number;
+    }>;
+  };
+  workers: {
+    total: number;
+    rows: Array<{
+      worker_id: string;
+      hostname: string;
+      status: string;
+      current_run_id: string;
+      current_phase: string;
+      heartbeat_at: string;
+      heartbeat_age_seconds: number | null;
+    }>;
+    stale: Array<Record<string, unknown>>;
+    latest_heartbeat_age_seconds: number | null;
+  };
+  thresholds: { stale_heartbeat_seconds: number; stale_lease_seconds: number };
+};
+
+export type RunCompare = {
+  run_a: { id: string; status: string; started_at: string | null };
+  run_b: { id: string; status: string; started_at: string | null };
+  findings: {
+    only_in_a: Finding[];
+    only_in_b: Finding[];
+    changed: Array<{ fingerprint: string; title?: string; changes: Record<string, { a: unknown; b: unknown }> }>;
+    severity_a: Record<string, number>;
+    severity_b: Record<string, number>;
+  };
+  phases: Array<{
+    phase_name: string;
+    duration_a_seconds: number | null;
+    duration_b_seconds: number | null;
+    delta_seconds: number;
+  }>;
+  vectors: { count_a: number; count_b: number };
 };
 
 export type EventRecord = {
@@ -524,4 +585,12 @@ export const api = {
     request<Run>(`/api/v1/runs/${runId}/provider-route`, { method: "POST", body: JSON.stringify({ provider_id }) }),
   updateValidationConfig: (runId: string, payload: ValidationConfigUpdate) =>
     request<Run>(`/api/v1/runs/${runId}/validation-config`, { method: "POST", body: JSON.stringify(payload) }),
+  reviewFinding: (runId: string, findingId: string, payload: FindingReviewPayload) =>
+    request<Finding>(`/api/v1/runs/${runId}/findings/${findingId}/review`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getRuntimeHealth: () => request<RuntimeHealth>("/runtime/health"),
+  compareRuns: (a: string, b: string) =>
+    request<RunCompare>(`/api/v1/runs/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
 };

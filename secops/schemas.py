@@ -40,6 +40,7 @@ class RunCreate(BaseModel):
     ports: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+    quick: bool = False
 
 
 class RunValidationConfigUpdate(BaseModel):
@@ -176,6 +177,18 @@ class FindingRead(BaseModel):
     remediation: str
     confidence: float
     created_at: datetime
+    fingerprint: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    reproduction_script: str = ""
+    promoted_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    reviewer_user_id: str | None = None
+    disposition: str = "draft"
+
+
+class FindingReviewCreate(BaseModel):
+    disposition: str
+    note: str = ""
 
 
 class ContextBundleRead(BaseModel):

@@ -901,6 +901,7 @@ class ExecutionManager:
                     workspace_root=paths.root,
                     target=url,
                     run_config=cfg,
+                    engagement_id=run.engagement_id,
                 )
                 score = (len(current.observations) * 10) + int(current.network_summary.get("total_requests") or 0) + len(current.route_graph)
                 if score > best_score:
@@ -923,6 +924,7 @@ class ExecutionManager:
                 workspace_root=paths.root,
                 target=target_url,
                 run_config=dict(run_config_snapshot or {}),
+                engagement_id=run.engagement_id,
             )
             target_url = best_url
             config = dict(run.config_json or {})
@@ -930,23 +932,28 @@ class ExecutionManager:
             browser_cfg["entry_url"] = target_url
             config["browser"] = browser_cfg
             run.config_json = config
+            screenshot_artifact_by_url: dict[str, str] = {}
             for item in result.artifacts:
                 kind = str(item.get("kind") or "")
                 path = str(item.get("path") or "")
                 if not kind or not path:
                     continue
-                db.add(
-                    Artifact(
-                        run_id=run.id,
-                        kind=kind,
-                        path=path,
-                        metadata_json={
-                            "phase": "browser-assessment",
-                            "agent_session_id": session.id,
-                            "captured_at": result.completed_at,
-                        },
-                    )
+                artifact_row = Artifact(
+                    run_id=run.id,
+                    kind=kind,
+                    path=path,
+                    metadata_json={
+                        "phase": "browser-assessment",
+                        "agent_session_id": session.id,
+                        "captured_at": result.completed_at,
+                    },
                 )
+                db.add(artifact_row)
+                db.flush()
+                if kind == "screenshot":
+                    url_key = str(item.get("url") or "")
+                    if url_key:
+                        screenshot_artifact_by_url[url_key] = artifact_row.id
             route_values: list[str] = []
             emitted_vectors: set[str] = set()
             for obs in result.observations:
@@ -1030,6 +1037,7 @@ class ExecutionManager:
                     title = f"Hidden/admin surface candidate at {obs.url}"
                     if title not in emitted_vectors:
                         emitted_vectors.add(title)
+                        shot_id = screenshot_artifact_by_url.get(obs.url)
                         vector = self._browser_vector(
                             run_id=run.id,
                             title=title,
@@ -1040,6 +1048,7 @@ class ExecutionManager:
                             prerequisites=["route validation"],
                             noise_level="quiet",
                             requires_approval=True,
+                            evidence_artifact_ids=[shot_id] if shot_id else [],
                         )
                         db.add(vector)
                 for hint in (obs.route_hints or [])[:20]:
@@ -4059,6 +4068,7 @@ class ExecutionManager:
         prerequisites: list[str],
         noise_level: str,
         requires_approval: bool,
+        evidence_artifact_ids: list[str] | None = None,
     ) -> Fact:
         score = 0.45
         if severity.lower() in {"high", "critical"}:
@@ -4087,6 +4097,7 @@ class ExecutionManager:
             "provenance": {"facts": [], "artifacts": [], "origin_phase": "browser-assessment"},
             "scope_check": "required-before-validation",
             "safety_notes": "Bounded validation follows run validation.risk_mode; high-impact vectors are attempted when in scope and recorded with impact metadata.",
+            "evidence_artifact_ids": list(evidence_artifact_ids or []),
         }
         return Fact(
             run_id=run_id,

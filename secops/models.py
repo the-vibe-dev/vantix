@@ -518,6 +518,10 @@ class Finding(Base):
     evidence_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     reproduction_script: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewer_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    disposition: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)
 
     run: Mapped[WorkspaceRun] = relationship(back_populates="findings")
 
