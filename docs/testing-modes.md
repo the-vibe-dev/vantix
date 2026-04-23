@@ -51,8 +51,8 @@ Vantix reports separate evidence by confidence class:
 
 The repository includes sanitized OWASP Juice Shop lab artifacts that demonstrate both modes:
 
-- [Black-box reference HTML report](examples/juice-shop-blackbox-report.html)
-- [White-box reference HTML report](examples/juice-shop-whitebox-report.html)
+- [Black-box reference report](examples/juice-shop-blackbox-report.md)
+- [White-box reference report](examples/juice-shop-whitebox-report.md)
 - [Animated UI capture](../juiceblackbox.svg)
 
 The black-box benchmark demonstrates external runtime validation. The white-box benchmark demonstrates the additional source-candidate layer, including a dedicated source-analysis report section with file/line evidence.

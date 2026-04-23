@@ -109,8 +109,8 @@ Across real-world bug bounty workflows, Vantix helped separate reportable vulner
 In an authorized OWASP Juice Shop benchmark run, Vantix identified **32 candidate vectors in under 7 minutes** while the operator UI tracked the engagement, validation progress, evidence, and report output. A follow-up white-box run using uploaded source produced the same runtime-validated finding set and added **23 source-backed candidates** in a dedicated report section for reviewer follow-up.
 
 - [Animated UI capture](juiceblackbox.svg)
-- [Black-box reference HTML report](docs/examples/juice-shop-blackbox-report.html)
-- [White-box reference HTML report](docs/examples/juice-shop-whitebox-report.html)
+- [Black-box reference report](docs/examples/juice-shop-blackbox-report.md)
+- [White-box reference report](docs/examples/juice-shop-whitebox-report.md)
 
 <p align="center">
   <a href="juiceblackbox.svg">

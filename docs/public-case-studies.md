@@ -7,8 +7,8 @@ These case studies describe representative outcomes from authorized security tes
 Vantix was also exercised against OWASP Juice Shop in authorized benchmark runs. A black-box run identified **32 candidate vectors in under 7 minutes** while preserving operator-visible progress and evidence. A white-box run with uploaded source preserved the same runtime report shape and added a dedicated source-analysis section with **23 source-backed candidates** for reviewer follow-up.
 
 - [Animated UI capture](../juiceblackbox.svg)
-- [Black-box reference HTML report](examples/juice-shop-blackbox-report.html)
-- [White-box reference HTML report](examples/juice-shop-whitebox-report.html)
+- [Black-box reference report](examples/juice-shop-blackbox-report.md)
+- [White-box reference report](examples/juice-shop-whitebox-report.md)
 - [Black-box and white-box testing model](testing-modes.md)
 
 ![Animated Vantix UI capture for an OWASP Juice Shop benchmark engagement](../juiceblackbox.svg)
