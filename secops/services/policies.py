@@ -4,9 +4,10 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from secops.config import settings
+from secops.agents.contracts import ActionProposal
 from secops.models import WorkspaceRun
 
 
@@ -26,6 +27,48 @@ class SubprocessRecord:
     timed_out: bool
     error_class: str
     duration_seconds: float
+
+
+@dataclass(slots=True)
+class PlanStepDecision:
+    index: int
+    action_type: str
+    verdict: str
+    reason: str
+    risk: str
+    target_ref: str
+    rewrite: dict[str, Any]
+    approval_required: bool
+
+
+@dataclass(slots=True)
+class PlanCompileResult:
+    verdict: str
+    steps: list[PlanStepDecision]
+    blocked_count: int
+    approval_count: int
+    rewrite_count: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "verdict": self.verdict,
+            "blocked_count": self.blocked_count,
+            "approval_count": self.approval_count,
+            "rewrite_count": self.rewrite_count,
+            "steps": [
+                {
+                    "index": step.index,
+                    "action_type": step.action_type,
+                    "verdict": step.verdict,
+                    "reason": step.reason,
+                    "risk": step.risk,
+                    "target_ref": step.target_ref,
+                    "rewrite": step.rewrite,
+                    "approval_required": step.approval_required,
+                }
+                for step in self.steps
+            ],
+        }
 
 
 SECRET_PATTERNS = [
@@ -70,6 +113,9 @@ class ExecutionPolicyService:
                 continue
         return grants
 
+    def _has_grant(self, run: WorkspaceRun, kind: str) -> bool:
+        return int(self._approval_grants(run).get(kind, 0) or 0) > 0
+
     def _consume_grant(self, run: WorkspaceRun, kind: str) -> bool:
         grants = self._approval_grants(run)
         remaining = int(grants.get(kind, 0))
@@ -79,7 +125,7 @@ class ExecutionPolicyService:
         run.config_json = {**(run.config_json or {}), "approval_grants": grants}
         return True
 
-    def evaluate(self, run: WorkspaceRun, *, action_kind: str) -> PolicyDecision:
+    def evaluate(self, run: WorkspaceRun, *, action_kind: str, consume_grants: bool = True) -> PolicyDecision:
         kind = (action_kind or "").strip().lower()
         if kind and kind in self._persistent_grants(run):
             return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
@@ -98,11 +144,11 @@ class ExecutionPolicyService:
                 return PolicyDecision(verdict="require_approval", reason="write actions require approval", audit=True)
             return PolicyDecision(verdict="allow_with_audit", reason="write action allowed", audit=True)
         if kind in {"recon_high_noise", "exploit_validation"}:
-            if self._consume_grant(run, kind):
+            if self._consume_grant(run, kind) if consume_grants else self._has_grant(run, kind):
                 return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
             return PolicyDecision(verdict="require_approval", reason=f"{kind} requires operator approval", audit=True)
         if kind in {"browser_assessment", "browser_auth", "browser_high_noise", "browser_sensitive_route"}:
-            if self._consume_grant(run, kind):
+            if self._consume_grant(run, kind) if consume_grants else self._has_grant(run, kind):
                 return PolicyDecision(verdict="allow_with_audit", reason=f"{kind} operator-approved", audit=True)
             cfg = dict(run.config_json or {})
             browser = dict(cfg.get("browser") or {})
@@ -117,6 +163,73 @@ class ExecutionPolicyService:
         if kind in {"external_network", "network"}:
             return PolicyDecision(verdict="allow_with_audit", reason="external network action audited", audit=True)
         return PolicyDecision(verdict="allow", reason="default policy")
+
+    def compile_action_plan(self, run: WorkspaceRun, actions: Iterable[ActionProposal | dict[str, Any]]) -> PlanCompileResult:
+        """Annotate a proposed action plan without consuming approvals.
+
+        This is the policy-shaping path. Runtime callers still use
+        ``evaluate(..., consume_grants=True)`` immediately before execution.
+        """
+
+        steps: list[PlanStepDecision] = []
+        blocked = 0
+        approvals = 0
+        rewrites = 0
+        for index, raw in enumerate(actions):
+            action = raw if isinstance(raw, ActionProposal) else ActionProposal.model_validate(raw)
+            kind = action.action_type.strip().lower()
+            decision = self.evaluate(run, action_kind=kind, consume_grants=False)
+            rewrite = self._rewrite_for_action(action, decision)
+            verdict = decision.verdict
+            if rewrite:
+                verdict = "rewrite"
+                rewrites += 1
+            if decision.verdict == "block":
+                blocked += 1
+            if decision.verdict == "require_approval":
+                approvals += 1
+            steps.append(
+                PlanStepDecision(
+                    index=index,
+                    action_type=kind,
+                    verdict=verdict,
+                    reason=decision.reason,
+                    risk=action.risk,
+                    target_ref=action.target_ref,
+                    rewrite=rewrite,
+                    approval_required=decision.verdict == "require_approval",
+                )
+            )
+        verdict = "allow"
+        if blocked:
+            verdict = "blocked"
+        elif approvals:
+            verdict = "approval_required"
+        elif rewrites:
+            verdict = "rewrite"
+        return PlanCompileResult(
+            verdict=verdict,
+            steps=steps,
+            blocked_count=blocked,
+            approval_count=approvals,
+            rewrite_count=rewrites,
+        )
+
+    def _rewrite_for_action(self, action: ActionProposal, decision: PolicyDecision) -> dict[str, Any]:
+        kind = action.action_type.strip().lower()
+        if decision.verdict == "block":
+            return {}
+        if kind in {"write_action", "filesystem_write"} and action.risk in {"high", "critical"}:
+            return {
+                "prefer_action_type": "read_only_probe",
+                "reason": "High-risk write action should be converted to non-mutating validation before execution.",
+            }
+        if kind == "exploit_validation" and action.risk in {"high", "critical"}:
+            return {
+                "required_evidence": sorted(set([*action.required_evidence, "request_response", "state_delta"])),
+                "reason": "High-risk validation requires explicit proof and state-change evidence.",
+            }
+        return {}
 
     def run_subprocess(
         self,

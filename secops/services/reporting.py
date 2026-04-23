@@ -301,7 +301,25 @@ class ReportingService:
         md_path = paths.artifacts / "run_report.md"
         html_path = paths.artifacts / "run_report.html"
         report_json["executive_summary"] = executive_summary
+        json_path = paths.artifacts / "run_report.json"
+        comprehensive_payload = self._build_comprehensive_payload(
+            run=run,
+            facts=facts,
+            findings=findings,
+            events=events,
+            artifacts=artifacts,
+            executive_summary=executive_summary,
+            port_values=port_values,
+            service_values=service_values,
+        )
+        comprehensive_md_path = paths.artifacts / "comprehensive_security_assessment_report.md"
+        comprehensive_json_path = paths.artifacts / "comprehensive_security_assessment_report.json"
+        artifact_index = self._build_artifact_index(run.id, artifacts)
+        artifact_index_path = paths.artifacts / "artifact_index.json"
+        artifact_index_md_path = paths.artifacts / "artifact_index.md"
+        timeline_csv_path = paths.artifacts / "timeline.csv"
         paths.write_text(Path(md_path), "\n".join(md_lines) + "\n")
+        paths.write_text(Path(json_path), json.dumps(report_json, indent=2, sort_keys=True))
         paths.write_text(
             Path(html_path),
             self._render_human_html(
@@ -314,22 +332,29 @@ class ReportingService:
                 screenshots=screenshots,
             ),
         )
+        paths.write_text(Path(comprehensive_md_path), self._render_comprehensive_markdown(comprehensive_payload))
+        paths.write_text(Path(comprehensive_json_path), json.dumps(comprehensive_payload, indent=2, sort_keys=True))
+        paths.write_text(Path(artifact_index_path), json.dumps(artifact_index, indent=2, sort_keys=True))
+        paths.write_text(Path(artifact_index_md_path), self._render_artifact_index_markdown(artifact_index))
+        self._write_timeline_csv(timeline_csv_path, events)
 
         provenance_path = self._emit_provenance_manifest(
             paths=paths, run=run, findings=findings, artifacts=artifacts
         )
         attestation_path = self._emit_attestation(
-            paths=paths, run=run, report_paths=[md_path, html_path, provenance_path]
+            paths=paths,
+            run=run,
+            report_paths=[md_path, html_path, json_path, comprehensive_md_path, comprehensive_json_path, provenance_path],
         )
 
         return {
             "markdown_path": str(md_path),
             "html_path": str(html_path),
-            "json_path": "",
-            "comprehensive_markdown_path": "",
-            "comprehensive_json_path": "",
-            "artifact_index_path": "",
-            "timeline_csv_path": "",
+            "json_path": str(json_path),
+            "comprehensive_markdown_path": str(comprehensive_md_path),
+            "comprehensive_json_path": str(comprehensive_json_path),
+            "artifact_index_path": str(artifact_index_path),
+            "timeline_csv_path": str(timeline_csv_path),
             "provenance_path": str(provenance_path),
             "attestation_path": str(attestation_path),
             "summary": report_json,

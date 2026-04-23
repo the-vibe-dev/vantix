@@ -34,6 +34,7 @@ from secops.models import (
 from secops.mode_profiles import get_mode_profile
 from secops.schemas import (
     AgentSessionRead,
+    AttackGraphRead,
     AttackChainCreate,
     AttackChainRead,
     ApprovalRead,
@@ -68,9 +69,11 @@ from secops.schemas import (
     ReplayStateRead,
 )
 from secops.security import require_csrf, require_user
+from secops.attack_graph.service import AttackGraphService
 from secops.services.context_builder import ContextBuilder
 from secops.services.execution import execution_manager
-from secops.services.events import normalize_event_payload
+from secops.replay.manifest import build_replay_manifest
+from secops.services.events import canonical_event_view, normalize_event_payload
 from secops.services.finding_promotion import FindingPromotionService
 from secops.services.finding_review import FindingReviewService, ReviewError
 from secops.services.learning import LearningService
@@ -141,18 +144,7 @@ def _blocked_reason_class(reason: str) -> str:
 
 
 def _serialize_event(event: RunEvent) -> dict[str, Any]:
-    normalized_type, payload = normalize_event_payload(event.event_type, event.message, event.payload_json)
-    return {
-        "id": event.id,
-        "run_id": event.run_id,
-        "agent_session_id": event.agent_session_id,
-        "sequence": event.sequence,
-        "event_type": normalized_type,
-        "level": event.level,
-        "message": event.message,
-        "payload_json": payload,
-        "created_at": event.created_at,
-    }
+    return canonical_event_view(event)
 
 
 def _metric_sum(metric_rows: list[RunMetric], name: str) -> float:
@@ -513,6 +505,17 @@ def list_run_agents(run_id: str, db: Session = Depends(get_db)) -> list[AgentSes
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return db.query(AgentSession).filter(AgentSession.run_id == run_id).order_by(AgentSession.started_at.asc()).all()
+
+
+@router.get("/{run_id}/attack-graph", response_model=AttackGraphRead)
+def get_attack_graph(run_id: str, sync: bool = True, db: Session = Depends(get_db)) -> dict[str, Any]:
+    run = db.get(WorkspaceRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    payload = AttackGraphService().read_run(db, run, sync=sync)
+    if sync:
+        db.commit()
+    return payload
 
 
 @router.get("/{run_id}/facts", response_model=list[FactRead])
@@ -1186,6 +1189,7 @@ def get_run_replay(run_id: str, limit: int = 400, db: Session = Depends(get_db))
     )
     report_path = next((row.path for row in artifacts if row.kind == "report"), "")
     report_json_path = next((row.path for row in artifacts if row.kind == "report-json"), "")
+    manifest = build_replay_manifest(run, events, artifacts, phase_history=list(state.get("history") or []), limit=limit)
     summary = {
         "event_count": len(events),
         "phase_transition_count": len([event for event in events if normalize_event_payload(event.event_type, event.message, event.payload_json)[0] == "phase_transition"]),
@@ -1206,6 +1210,7 @@ def get_run_replay(run_id: str, limit: int = 400, db: Session = Depends(get_db))
         "report_path": report_path,
         "report_json_path": report_json_path,
         "summary": summary,
+        "manifest": manifest,
     }
 
 
@@ -1234,16 +1239,9 @@ def stream_run(run_id: str, db: Session = Depends(get_db)):
                 )
                 for event in events:
                     last_sequence = event.sequence
-                    normalized_type, payload = normalize_event_payload(event.event_type, event.message, event.payload_json)
-                    payload = {
-                        "id": event.id,
-                        "sequence": event.sequence,
-                        "event_type": normalized_type,
-                        "level": event.level,
-                        "message": event.message,
-                        "payload": payload,
-                        "created_at": event.created_at.isoformat(),
-                    }
+                    payload = _serialize_event(event)
+                    payload["payload"] = payload.pop("payload_json", {})
+                    payload["created_at"] = event.created_at.isoformat()
                     yield f"data: {json.dumps(payload)}\n\n"
                 current_run = stream_db.get(WorkspaceRun, run_id)
                 if current_run is None or current_run.status in {"completed", "failed", "cancelled"}:

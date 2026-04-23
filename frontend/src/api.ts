@@ -278,6 +278,14 @@ export type ReplayState = {
   report_path: string;
   report_json_path: string;
   summary: Record<string, unknown>;
+  manifest: Record<string, unknown>;
+};
+
+export type AttackGraph = {
+  run_id: string;
+  summary: Record<string, unknown>;
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<Record<string, unknown>>;
 };
 
 export type SkillPack = {
@@ -498,6 +506,7 @@ export const api = {
   getRun: (runId: string) => request<Run>(`/api/v1/runs/${runId}`),
   getSourceStatus: (runId: string) => request<SourceStatus>(`/api/v1/runs/${runId}/source-status`),
   getGraph: (runId: string) => request<{ run_id: string; status: string; phase: RunPhase; tasks: Task[]; agents: AgentSession[]; approvals: Approval[] }>(`/api/v1/runs/${runId}/graph`),
+  getAttackGraph: (runId: string, sync = true) => request<AttackGraph>(`/api/v1/runs/${runId}/attack-graph?sync=${sync ? "true" : "false"}`),
   getApprovals: (runId: string) => request<Approval[]>(`/api/v1/runs/${runId}/approvals`),
   getPhase: (runId: string) => request<RunPhase>(`/api/v1/runs/${runId}/phase`),
   getWorkflowState: (runId: string) => request<WorkflowState>(`/api/v1/runs/${runId}/workflow-state`),

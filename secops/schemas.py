@@ -219,6 +219,20 @@ class RunEventRead(BaseModel):
     message: str
     payload: dict[str, Any] = Field(validation_alias="payload_json")
     created_at: datetime
+    schema_version: str = ""
+    parent_event_id: str | None = None
+    phase: str = ""
+    agent_role: str = ""
+    target_ref: str = ""
+    action_id: str = ""
+    action_type: str = ""
+    risk: str = "info"
+    policy: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] = Field(default_factory=dict)
+    artifact_ids: list[str] = Field(default_factory=list)
+    graph_delta_ids: list[str] = Field(default_factory=list)
 
 
 class WorkflowExecutionRead(BaseModel):
@@ -414,6 +428,35 @@ class RunGraphRead(BaseModel):
     tasks: list[TaskRead]
     agents: list[AgentSessionRead]
     approvals: list[ApprovalRead]
+
+
+class AttackGraphNodeRead(BaseModel):
+    id: str
+    type: str
+    key: str
+    label: str
+    source_kind: str = ""
+    source_id: str = ""
+    confidence: float = 0.0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AttackGraphEdgeRead(BaseModel):
+    id: str
+    source: str
+    target: str
+    type: str
+    source_kind: str = ""
+    source_id: str = ""
+    confidence: float = 0.0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AttackGraphRead(BaseModel):
+    run_id: str
+    summary: dict[str, Any] = Field(default_factory=dict)
+    nodes: list[AttackGraphNodeRead] = Field(default_factory=list)
+    edges: list[AttackGraphEdgeRead] = Field(default_factory=list)
 
 
 class TerminalRead(BaseModel):
@@ -624,6 +667,7 @@ class ReplayStateRead(BaseModel):
     report_path: str = ""
     report_json_path: str = ""
     summary: dict[str, Any] = Field(default_factory=dict)
+    manifest: dict[str, Any] = Field(default_factory=dict)
 
 
 class FindingPromotionCreate(BaseModel):

@@ -1,70 +1,238 @@
-<svg width="1400" height="820" viewBox="0 0 1400 820" fill="none" xmlns="http://www.w3.org/2000/svg">
-<defs>
-<linearGradient id="r" x1="0" y1="0" x2="1" y2="1">
-<stop stop-color="#ff4d4d"/><stop offset="1" stop-color="#930000"/>
-</linearGradient>
-<style>
-  .box { fill:#0d1117; stroke:rgba(255,255,255,0.16); stroke-width:2; rx:20; }
-  .t1 { fill:#f0f6fc; font: 700 26px Arial, Helvetica, sans-serif; }
-  .t2 { fill:#c9d1d9; font: 500 18px Arial, Helvetica, sans-serif; }
-  .mini { fill:#ffb3b3; font: 700 16px Arial, Helvetica, sans-serif; letter-spacing:1px; }
-</style>
-</defs>
-<rect width="1400" height="820" rx="28" fill="#07090d"/>
-<g opacity="0.1" stroke="#fff">
-<path d="M0 100H1400"/><path d="M0 200H1400"/><path d="M0 300H1400"/><path d="M0 400H1400"/><path d="M0 500H1400"/><path d="M0 600H1400"/><path d="M0 700H1400"/>
-<path d="M100 0V820"/><path d="M300 0V820"/><path d="M500 0V820"/><path d="M700 0V820"/><path d="M900 0V820"/><path d="M1100 0V820"/><path d="M1300 0V820"/>
-</g>
+<svg width="1500" height="960" viewBox="0 0 1500 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1500" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07090d"/>
+      <stop offset="1" stop-color="#0e1117"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ff4d4d"/>
+      <stop offset="1" stop-color="#930000"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1250 120) rotate(120) scale(620 780)">
+      <stop stop-color="#ff2a2a" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ff2a2a" stop-opacity="0"/>
+    </radialGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#c9d1d9"/>
+    </marker>
+    <style>
+      .title  { fill:#f0f6fc; font: 800 30px "Inter", Arial, sans-serif; letter-spacing:1px; }
+      .kicker { fill:#ffa5a5; font: 700 14px "Inter", Arial, sans-serif; letter-spacing:3px; }
+      .band-title { fill:#ffa5a5; font: 700 13px "Inter", Arial, sans-serif; letter-spacing:3px; }
+      .node-title { fill:#f0f6fc; font: 700 18px "Inter", Arial, sans-serif; }
+      .node-sub   { fill:#8b949e; font: 500 12px "Inter", monospace; }
+      .band       { fill:#0b0e13; stroke:rgba(255,255,255,0.08); stroke-width:1.5; }
+      .node       { fill:#10141a; stroke:rgba(255,255,255,0.16); stroke-width:1.5; }
+      .node-hl    { fill:#1a1118; stroke:#ff4d4d; stroke-width:2; }
+      .edge       { stroke:rgba(201,209,217,0.55); stroke-width:2; fill:none; }
+    </style>
+  </defs>
 
-<rect x="70" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.2" stroke="#ff4d4d"/>
-<text x="100" y="118" class="mini">OPERATOR EXPERIENCE</text>
-<text x="100" y="154" class="t1">React / Vite UI</text>
-<text x="100" y="182" class="t2">Chat • Runs • Vectors • Results • Settings</text>
+  <rect width="1500" height="960" rx="28" fill="url(#bg)"/>
+  <rect width="1500" height="960" rx="28" fill="url(#glow)"/>
+  <g opacity="0.06" stroke="#fff">
+    <path d="M0 120H1500"/><path d="M0 240H1500"/><path d="M0 360H1500"/><path d="M0 480H1500"/><path d="M0 600H1500"/><path d="M0 720H1500"/><path d="M0 840H1500"/>
+    <path d="M200 0V960"/><path d="M400 0V960"/><path d="M600 0V960"/><path d="M800 0V960"/><path d="M1000 0V960"/><path d="M1200 0V960"/><path d="M1400 0V960"/>
+  </g>
 
-<rect x="550" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.22" stroke="#ff4d4d"/>
-<text x="580" y="118" class="mini">CONTROL PLANE</text>
-<text x="580" y="154" class="t1">FastAPI Backend</text>
-<text x="580" y="182" class="t2">Routers • APIs • status • skills • tools</text>
+  <text x="56" y="58" class="kicker">SYSTEM ARCHITECTURE</text>
+  <text x="56" y="96" class="title">Vantix — control plane, engine, agents, evidence</text>
 
-<rect x="1030" y="70" width="300" height="120" rx="22" fill="url(#r)" fill-opacity="0.14" stroke="#ff4d4d"/>
-<text x="1060" y="118" class="mini">RUN ORCHESTRATION</text>
-<text x="1060" y="154" class="t1">Scheduler</text>
-<text x="1060" y="182" class="t2">Seeds tasks, vectors, notes, phases</text>
+  <!-- Band 1: Operator + Control Plane -->
+  <rect x="40" y="132" width="1420" height="150" rx="20" class="band"/>
+  <text x="60" y="158" class="band-title">CONTROL PLANE</text>
+  <g>
+    <rect x="64"   y="172" width="280" height="96" rx="16" class="node-hl"/>
+    <text x="84"   y="204" class="node-title">React / Vite UI</text>
+    <text x="84"   y="226" class="node-sub">FindingEvidenceDrawer · RuntimeHealth</text>
+    <text x="84"   y="242" class="node-sub">VectorLifecycle · RunCompare · Approvals</text>
+    <text x="84"   y="258" class="node-sub">frontend/src/</text>
 
-<rect x="430" y="260" width="540" height="120" rx="22" fill="#0d1117" stroke="rgba(255,255,255,0.16)"/>
-<text x="460" y="308" class="mini">DURABLE EXECUTION</text>
-<text x="460" y="344" class="t1">Workflow Engine</text>
-<text x="460" y="372" class="t2">Phase runs • retries • checkpoints • worker leases • run metrics</text>
+    <rect x="368"  y="172" width="280" height="96" rx="16" class="node-hl"/>
+    <text x="388"  y="204" class="node-title">FastAPI Backend</text>
+    <text x="388"  y="226" class="node-sub">/runs · /review · /compare · /health</text>
+    <text x="388"  y="242" class="node-sub">/metrics (Prometheus)</text>
+    <text x="388"  y="258" class="node-sub">secops/routers/</text>
 
-<rect x="100" y="470" width="220" height="110" class="box"/>
-<text x="130" y="518" class="t1" style="font-size:24px;">Memory</text>
-<text x="130" y="548" class="t2">Dense records, facts, continuity</text>
+    <rect x="672"  y="172" width="260" height="96" rx="16" class="node"/>
+    <text x="692"  y="204" class="node-title">Policy Layer</text>
+    <text x="692"  y="226" class="node-sub">scope enforcement</text>
+    <text x="692"  y="242" class="node-sub">approval tiers · audit log</text>
+    <text x="692"  y="258" class="node-sub">policy_decision events</text>
 
-<rect x="360" y="470" width="220" height="110" class="box"/>
-<text x="390" y="518" class="t1" style="font-size:24px;">CVE Intel</text>
-<text x="390" y="548" class="t2">Local cache and enrichment</text>
+    <rect x="956"  y="172" width="260" height="96" rx="16" class="node"/>
+    <text x="976"  y="204" class="node-title">Auth</text>
+    <text x="976"  y="226" class="node-sub">cookie + CSRF (UI)</text>
+    <text x="976"  y="242" class="node-sub">bearer token (CLI)</text>
+    <text x="976"  y="258" class="node-sub">session → reviewer_user_id</text>
 
-<rect x="620" y="470" width="220" height="110" class="box"/>
-<text x="650" y="518" class="t1" style="font-size:24px;">Skill Packs</text>
-<text x="650" y="548" class="t2">Role/mode-aware prompt compaction</text>
+    <rect x="1240" y="172" width="196" height="96" rx="16" class="node"/>
+    <text x="1260" y="204" class="node-title">Store</text>
+    <text x="1260" y="226" class="node-sub">SQLite / Postgres</text>
+    <text x="1260" y="242" class="node-sub">alembic migrations</text>
+  </g>
 
-<rect x="880" y="470" width="220" height="110" class="box"/>
-<text x="910" y="518" class="t1" style="font-size:24px;">Approvals</text>
-<text x="910" y="548" class="t2">Review gates and operator control</text>
+  <!-- Band 2: Workflow Engine -->
+  <rect x="40" y="306" width="1420" height="140" rx="20" class="band"/>
+  <text x="60" y="332" class="band-title">DURABLE WORKFLOW ENGINE</text>
+  <g>
+    <rect x="64"   y="344" width="300" height="92" rx="16" class="node-hl"/>
+    <text x="84"   y="376" class="node-title">Phase Orchestrator</text>
+    <text x="84"   y="398" class="node-sub">lease + heartbeat + checkpoint</text>
+    <text x="84"   y="414" class="node-sub">secops/services/workflows/engine.py</text>
 
-<rect x="1140" y="470" width="220" height="110" class="box"/>
-<text x="1170" y="518" class="t1" style="font-size:24px;">Results</text>
-<text x="1170" y="548" class="t2">Findings, artifacts, reports</text>
+    <rect x="388"  y="344" width="300" height="92" rx="16" class="node"/>
+    <text x="408"  y="376" class="node-title">Scavenger</text>
+    <text x="408"  y="398" class="node-sub">re-claim on lease expiry</text>
+    <text x="408"  y="414" class="node-sub">≤120s reclaim target</text>
 
-<rect x="240" y="650" width="920" height="110" rx="22" fill="#0d1117" stroke="rgba(255,255,255,0.16)"/>
-<text x="270" y="698" class="mini">SPECIALIST LAYER</text>
-<text x="270" y="734" class="t1">Orchestrator • Recon • Knowledge Base • Vector Store • Researcher • Forge • Exploit • Report</text>
+    <rect x="712"  y="344" width="340" height="92" rx="16" class="node"/>
+    <text x="732"  y="376" class="node-title">Idempotency Layer</text>
+    <text x="732"  y="398" class="node-sub">phase_idempotency_key()</text>
+    <text x="732"  y="414" class="node-sub">upsert_fact_by_fingerprint()</text>
 
-<g stroke="rgba(255,255,255,0.22)" stroke-width="3">
-<path d="M370 130H550"/>
-<path d="M850 130H1030"/>
-<path d="M700 190V260"/>
-<path d="M700 380V440"/>
-<path d="M700 580V650"/>
-</g>
+    <rect x="1076" y="344" width="360" height="92" rx="16" class="node"/>
+    <text x="1096" y="376" class="node-title">Adapter Error Classifier</text>
+    <text x="1096" y="398" class="node-sub">transient vs permanent</text>
+    <text x="1096" y="414" class="node-sub">per-adapter: nmap · CVE · browser · HTTP</text>
+  </g>
+
+  <!-- Band 3: Specialist agents -->
+  <rect x="40" y="470" width="1420" height="150" rx="20" class="band"/>
+  <text x="60" y="496" class="band-title">SPECIALIST AGENTS</text>
+  <g>
+    <rect x="64"   y="512" width="172" height="96" rx="14" class="node"/>
+    <text x="84"   y="544" class="node-title">Orchestrator</text>
+    <text x="84"   y="566" class="node-sub">emits vector_hypothesis</text>
+    <text x="84"   y="582" class="node-sub">drives phase plan</text>
+
+    <rect x="252"  y="512" width="140" height="96" rx="14" class="node"/>
+    <text x="272"  y="544" class="node-title">Recon</text>
+    <text x="272"  y="566" class="node-sub">passive + active</text>
+    <text x="272"  y="582" class="node-sub">nmap + DNS + certs</text>
+
+    <rect x="408"  y="512" width="160" height="96" rx="14" class="node"/>
+    <text x="428"  y="544" class="node-title">Researcher</text>
+    <text x="428"  y="566" class="node-sub">CVE correlation</text>
+    <text x="428"  y="582" class="node-sub">knowledge base</text>
+
+    <rect x="584"  y="512" width="160" height="96" rx="14" class="node"/>
+    <text x="604"  y="544" class="node-title">Developer</text>
+    <text x="604"  y="566" class="node-sub">crafts repro script</text>
+    <text x="604"  y="582" class="node-sub">payload synthesis</text>
+
+    <rect x="760"  y="512" width="160" height="96" rx="14" class="node-hl"/>
+    <text x="780"  y="544" class="node-title">Executor</text>
+    <text x="780"  y="566" class="node-sub">ExploitValidation</text>
+    <text x="780"  y="582" class="node-sub">benign-PoC only</text>
+
+    <rect x="936"  y="512" width="180" height="96" rx="14" class="node-hl"/>
+    <text x="956"  y="544" class="node-title">Browser</text>
+    <text x="956"  y="566" class="node-sub">Playwright · perform_login</text>
+    <text x="956"  y="582" class="node-sub">HAR · screenshot · DOM</text>
+
+    <rect x="1132" y="512" width="160" height="96" rx="14" class="node"/>
+    <text x="1152" y="544" class="node-title">Reporter</text>
+    <text x="1152" y="566" class="node-sub">markdown · html</text>
+    <text x="1152" y="582" class="node-sub">provenance + attest</text>
+
+    <rect x="1308" y="512" width="128" height="96" rx="14" class="node"/>
+    <text x="1328" y="544" class="node-title">Skills</text>
+    <text x="1328" y="566" class="node-sub">role-aware</text>
+    <text x="1328" y="582" class="node-sub">skill packs</text>
+  </g>
+
+  <!-- Band 4: Evidence + Trust -->
+  <rect x="40" y="644" width="1420" height="150" rx="20" class="band"/>
+  <text x="60" y="670" class="band-title">EVIDENCE &amp; TRUST LAYER</text>
+  <g>
+    <rect x="64"   y="686" width="220" height="96" rx="14" class="node"/>
+    <text x="84"   y="718" class="node-title">Artifacts</text>
+    <text x="84"   y="740" class="node-sub">sha256-addressed</text>
+    <text x="84"   y="756" class="node-sub">screenshot · DOM · HAR · HTTP</text>
+
+    <rect x="300"  y="686" width="220" height="96" rx="14" class="node"/>
+    <text x="320"  y="718" class="node-title">Facts</text>
+    <text x="320"  y="740" class="node-sub">vector · validated</text>
+    <text x="320"  y="756" class="node-sub">negative_evidence · attack_chain</text>
+
+    <rect x="536"  y="686" width="240" height="96" rx="14" class="node-hl"/>
+    <text x="556"  y="718" class="node-title">Findings</text>
+    <text x="556"  y="740" class="node-sub">fingerprint + custody trio</text>
+    <text x="556"  y="756" class="node-sub">disposition (terminal-latched)</text>
+
+    <rect x="792"  y="686" width="260" height="96" rx="14" class="node-hl"/>
+    <text x="812"  y="718" class="node-title">Provenance</text>
+    <text x="812"  y="740" class="node-sub">findings.provenance.json</text>
+    <text x="812"  y="756" class="node-sub">evidence_sha256 · repro_sha256</text>
+
+    <rect x="1068" y="686" width="220" height="96" rx="14" class="node-hl"/>
+    <text x="1088" y="718" class="node-title">Attestation</text>
+    <text x="1088" y="740" class="node-sub">report.attestation.json</text>
+    <text x="1088" y="756" class="node-sub">cosign sign-blob</text>
+
+    <rect x="1304" y="686" width="132" height="96" rx="14" class="node"/>
+    <text x="1324" y="718" class="node-title">Report</text>
+    <text x="1324" y="740" class="node-sub">md + html</text>
+    <text x="1324" y="756" class="node-sub">evidence links</text>
+  </g>
+
+  <!-- Band 5: Observability + externals -->
+  <rect x="40" y="818" width="1420" height="112" rx="20" class="band"/>
+  <text x="60" y="844" class="band-title">OBSERVABILITY · EXTERNAL</text>
+  <g>
+    <rect x="64"   y="858" width="240" height="56" rx="12" class="node"/>
+    <text x="84"   y="892" class="node-title">/runtime/health</text>
+
+    <rect x="320"  y="858" width="240" height="56" rx="12" class="node"/>
+    <text x="340"  y="892" class="node-title">/metrics (Prometheus)</text>
+
+    <rect x="576"  y="858" width="240" height="56" rx="12" class="node"/>
+    <text x="596"  y="892" class="node-title">RunEvent stream</text>
+
+    <rect x="832"  y="858" width="240" height="56" rx="12" class="node"/>
+    <text x="852"  y="892" class="node-title">LLM provider</text>
+
+    <rect x="1088" y="858" width="200" height="56" rx="12" class="node"/>
+    <text x="1108" y="892" class="node-title">CVE intel</text>
+
+    <rect x="1304" y="858" width="132" height="56" rx="12" class="node"/>
+    <text x="1324" y="892" class="node-title">cosign</text>
+  </g>
+
+  <!-- inter-band edges -->
+  <g marker-end="url(#arrow)">
+    <!-- UI → API -->
+    <path class="edge" d="M344 220 L368 220"/>
+    <!-- API → Policy / Auth / Store -->
+    <path class="edge" d="M648 220 L672 220"/>
+    <path class="edge" d="M932 220 L956 220"/>
+    <path class="edge" d="M1216 220 L1240 220"/>
+    <!-- API → Engine -->
+    <path class="edge" d="M508 268 L508 344"/>
+    <!-- Engine internal -->
+    <path class="edge" d="M364 390 L388 390"/>
+    <path class="edge" d="M688 390 L712 390"/>
+    <path class="edge" d="M1052 390 L1076 390"/>
+    <!-- Engine → Agents -->
+    <path class="edge" d="M214 436 L214 512"/>
+    <path class="edge" d="M840 436 L840 512"/>
+    <path class="edge" d="M1216 436 L1216 512"/>
+    <!-- Agents → Evidence band -->
+    <path class="edge" d="M174 608 L174 686"/>
+    <path class="edge" d="M840 608 L656 686"/>
+    <path class="edge" d="M1016 608 L912 686"/>
+    <path class="edge" d="M1212 608 L1370 686"/>
+    <!-- Evidence chain left→right -->
+    <path class="edge" d="M284 734 L300 734"/>
+    <path class="edge" d="M520 734 L536 734"/>
+    <path class="edge" d="M776 734 L792 734"/>
+    <path class="edge" d="M1052 734 L1068 734"/>
+    <path class="edge" d="M1288 734 L1304 734"/>
+    <!-- Attestation → cosign -->
+    <path class="edge" d="M1178 782 L1370 858"/>
+    <!-- API → metrics/health -->
+    <path class="edge" d="M440 268 C 440 820, 184 820, 184 858"/>
+    <path class="edge" d="M508 268 C 508 820, 440 820, 440 858"/>
+  </g>
 </svg>

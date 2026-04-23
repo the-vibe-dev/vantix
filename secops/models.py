@@ -62,6 +62,8 @@ class WorkspaceRun(Base):
     operator_notes: Mapped[list["OperatorNote"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     agent_sessions: Mapped[list["AgentSession"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     facts: Mapped[list["Fact"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    attack_graph_nodes: Mapped[list["AttackGraphNode"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    attack_graph_edges: Mapped[list["AttackGraphEdge"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     messages: Mapped[list["RunMessage"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     workflows: Mapped[list["WorkflowExecution"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     workflow_phase_runs: Mapped[list["WorkflowPhaseRun"]] = relationship(back_populates="run", cascade="all, delete-orphan")
@@ -215,6 +217,50 @@ class Fact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     run: Mapped[WorkspaceRun] = relationship(back_populates="facts")
+
+
+class AttackGraphNode(Base):
+    __tablename__ = "attack_graph_nodes"
+    __table_args__ = (
+        UniqueConstraint("run_id", "node_type", "stable_key", name="uq_attack_graph_node_run_type_key"),
+        Index("ix_attack_graph_nodes_run_type", "run_id", "node_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    node_type: Mapped[str] = mapped_column(String(64), index=True)
+    stable_key: Mapped[str] = mapped_column(String(255), index=True)
+    label: Mapped[str] = mapped_column(String(255), default="")
+    source_kind: Mapped[str] = mapped_column(String(64), default="")
+    source_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="attack_graph_nodes")
+
+
+class AttackGraphEdge(Base):
+    __tablename__ = "attack_graph_edges"
+    __table_args__ = (
+        UniqueConstraint("run_id", "source_node_id", "edge_type", "target_node_id", name="uq_attack_graph_edge_run_src_type_dst"),
+        Index("ix_attack_graph_edges_run_type", "run_id", "edge_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    source_node_id: Mapped[str] = mapped_column(ForeignKey("attack_graph_nodes.id"), index=True)
+    target_node_id: Mapped[str] = mapped_column(ForeignKey("attack_graph_nodes.id"), index=True)
+    edge_type: Mapped[str] = mapped_column(String(64), index=True)
+    source_kind: Mapped[str] = mapped_column(String(64), default="")
+    source_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    run: Mapped[WorkspaceRun] = relationship(back_populates="attack_graph_edges")
 
 
 class Artifact(Base):

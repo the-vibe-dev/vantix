@@ -17,6 +17,9 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [What This Product Does](#what-this-product-does)
+- [Example Outcomes](#example-outcomes)
+- [Public Case Studies](#public-case-studies)
 - [Features](#features)
 - [What's New](#whats-new)
 - [Architecture](#architecture)
@@ -52,6 +55,44 @@
 Vantix combines durable multi-phase workflow orchestration with specialist AI agents (recon, researcher, developer, executor, reporter, browser) to produce audit-ready findings — each backed by on-disk evidence, a deterministic reproduction script, a reviewer disposition, and a signed attestation. Operators stay in control through policy gates, approval prompts, and a live operator UI that shows what the agent is doing, what it found, and why every action was allowed.
 
 Vantix sits between scanners (fast, shallow, no chain) and open-ended agentic frameworks (deep, exploratory, but nothing verifiable comes out). The engine writes its own audit trail as it runs — the report is the deliverable, not the starting point.
+
+## What This Product Does
+
+Vantix runs authorized autonomous security testing with an emphasis on logic flaws, trust-boundary failures, protocol correctness bugs, and systemic authorization issues. It follows flows across browser state, API calls, backend assertions, and evidence artifacts, then groups related observations by root cause instead of flooding the operator with isolated symptoms.
+
+The product is built for high-signal triage: validate what matters, suppress weak candidates, preserve proof, and produce decision-ready findings that an operator can review, reproduce, and disclose responsibly.
+
+## Example Outcomes
+
+- Authentication flows where server-side trust depends on client-controlled state.
+- Protocol state-machine bugs where malformed but structurally valid data stalls recovery or synchronization.
+- Low-privilege roles exposing reusable secrets or authentication material across multiple endpoints.
+- Unauthenticated access to CMS or control-plane data that should remain internal.
+- Duplicate-risk reduction through root-cause grouping, negative evidence, and finding fingerprints.
+
+## Public Case Studies
+
+These examples are anonymized and sanitized. They do not name customers, vendors, targets, domains, endpoints, payloads, or private reports. See [Public Case Studies](docs/public-case-studies.md) for the longer public-safe version.
+
+### Authentication Trust-Boundary Failure
+
+Vantix identified an authentication flow where server-side trust depended on client-controlled state. By tracing frontend state and backend assertion handling together, it surfaced a path where a session could be generated without the expected server-side verification. This class of issue can lead to account impersonation or full authentication bypass depending on identity scope and enforcement model.
+
+### Protocol State-Machine Liveness Bug
+
+Vantix found a protocol correctness flaw where malformed but structurally valid data was accepted as complete. That state prevented recovery requests for missing data, which could stall forward progress without sustained traffic or resource exhaustion. The proof was bounded and deterministic against production-equivalent code paths.
+
+### Systemic Low-Privilege Secret Exposure
+
+Vantix identified a pattern where low-privilege read-only users could retrieve reusable authentication material across multiple API surfaces. The root cause was inconsistent redaction and sensitive data being treated as safe observational output. The finding was grouped as a systemic privilege-boundary failure rather than a set of unrelated leaks.
+
+### Unauthenticated CMS Control-Plane Exposure
+
+Vantix uncovered unauthenticated access to structured backend data such as hidden objects, draft-state metadata, and operational configuration. The issue exposed internal control-plane state rather than only public content. Vantix classified the impact by object sensitivity and the downstream attack surface exposed by integration metadata.
+
+### High-Signal Triage And Duplicate-Risk Reduction
+
+Across real-world bug bounty workflows, Vantix helped separate reportable vulnerabilities from common duplicates and low-impact noise. Related observations were grouped by root cause, while weak candidates were suppressed with negative evidence. The result is fewer low-value submissions and clearer operator decisions.
 
 ## Features
 
@@ -532,6 +573,7 @@ python -m pytest -q tests/
 - [Capability Matrix](docs/capability-matrix.md)
 - [Coverage Matrix](docs/coverage_matrix.md)
 - [Positioning](docs/positioning.md)
+- [Public Case Studies](docs/public-case-studies.md)
 - [Browser Agent](docs/browser_agent.md)
 - [Browser Policies](docs/browser_policies.md)
 - [XBOW Evaluation Workflow](docs/xbow-evaluation.md)
