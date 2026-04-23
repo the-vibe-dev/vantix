@@ -9,8 +9,8 @@ This matrix is intentionally conservative. Vantix is an operator control plane f
 | Evidence-first reporting | Yes | High | Facts, artifacts, findings, provenance-aware reports. |
 | Browser-native authorized web assessment | Yes | Medium | Route discovery, forms, network summaries, screenshots, session state. |
 | Browser-authenticated assessment | Yes | Medium | Operator-provided auth only; approval-gated; bounded flows. |
-| Black-box recon orchestration | Yes | Medium | Low-noise recon, CVE/intel enrichment, vector generation. |
-| White-box source intake | Yes | Medium | Local path, GitHub URL, staged upload intake with source analysis hooks. |
+| Black-box recon orchestration | Yes | Medium | Low-noise recon, browser/API discovery, CVE/intel enrichment, vector generation, and runtime validation artifacts. |
+| White-box source intake | Yes | Medium | Local path, GitHub URL, staged upload intake, source-backed candidate extraction, and separate white-box report sections. |
 | Attack-chain modelling | Yes | Medium | Candidate chains, vector selection, finding promotion. |
 | Multi-worker recovery | Partial | Medium | Lease-based claims and reclaim are present; wider concurrency hardening is still active work. |
 | Replay mode | Partial | Medium | Timeline, phase history, and replay snapshot views exist; full what-if simulation is not complete yet. |
@@ -22,6 +22,7 @@ This matrix is intentionally conservative. Vantix is an operator control plane f
 - Policy and approval control
 - Evidence capture and report generation
 - Browser evidence as first-class assessment output
+- Separate black-box validated findings from white-box source candidates
 - Local-first runtime and storage model
 
 ## Current gaps
@@ -30,3 +31,5 @@ This matrix is intentionally conservative. Vantix is an operator control plane f
 - More robust multi-worker hardening and scavenging visibility
 - Richer replay and what-if operator tooling
 - More polished public trust assets and sanitized sample reports
+
+See [Black-Box And White-Box Testing](testing-modes.md) for report semantics and when to use each mode.

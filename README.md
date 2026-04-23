@@ -19,7 +19,9 @@
 - [Overview](#overview)
 - [What This Product Does](#what-this-product-does)
 - [Example Outcomes](#example-outcomes)
+- [Black-Box And White-Box Testing](#black-box-and-white-box-testing)
 - [Public Case Studies](#public-case-studies)
+- [OWASP Juice Shop Benchmark Example](#owasp-juice-shop-benchmark-example)
 - [Features](#features)
 - [What's New](#whats-new)
 - [Architecture](#architecture)
@@ -70,6 +72,14 @@ The product is built for high-signal triage: validate what matters, suppress wea
 - Unauthenticated access to CMS or control-plane data that should remain internal.
 - Duplicate-risk reduction through root-cause grouping, negative evidence, and finding fingerprints.
 
+## Black-Box And White-Box Testing
+
+Vantix supports both black-box and white-box assessment modes. Black-box runs start from an in-scope target and build evidence from observable behavior: browser state, API traffic, network services, runtime responses, screenshots, HTTP exchanges, and bounded validation probes. This is the right mode when source is unavailable or when the operator wants to measure what an external tester can prove from the deployed system alone.
+
+White-box runs add source intake through a local path, GitHub URL, or staged source upload. Source analysis produces file/line-backed candidates for risky sinks such as raw query construction, trust-boundary bypasses, unsafe parser configuration, SSRF fetches, and client-side HTML trust decisions. Reports keep those source candidates separate from validated findings so reviewers can distinguish runtime proof from source-backed leads that still need validation.
+
+See [Black-Box And White-Box Testing](docs/testing-modes.md) for the operating model and report semantics.
+
 ## Public Case Studies
 
 These examples are anonymized and sanitized. They do not name customers, vendors, targets, domains, endpoints, payloads, or private reports. See [Public Case Studies](docs/public-case-studies.md) for the longer public-safe version.
@@ -93,6 +103,20 @@ Vantix uncovered unauthenticated access to structured backend data such as hidde
 ### High-Signal Triage And Duplicate-Risk Reduction
 
 Across real-world bug bounty workflows, Vantix helped separate reportable vulnerabilities from common duplicates and low-impact noise. Related observations were grouped by root cause, while weak candidates were suppressed with negative evidence. The result is fewer low-value submissions and clearer operator decisions.
+
+## OWASP Juice Shop Benchmark Example
+
+In an authorized OWASP Juice Shop benchmark run, Vantix identified **32 candidate vectors in under 7 minutes** while the operator UI tracked the engagement, validation progress, evidence, and report output. A follow-up white-box run using uploaded source produced the same runtime-validated finding set and added **23 source-backed candidates** in a dedicated report section for reviewer follow-up.
+
+- [Animated UI capture](juiceblackbox.svg)
+- [Black-box reference HTML report](docs/examples/juice-shop-blackbox-report.html)
+- [White-box reference HTML report](docs/examples/juice-shop-whitebox-report.html)
+
+<p align="center">
+  <a href="juiceblackbox.svg">
+    <img src="juiceblackbox.svg" alt="Animated Vantix UI capture for an OWASP Juice Shop benchmark engagement" width="90%"/>
+  </a>
+</p>
 
 ## Features
 

@@ -14,7 +14,7 @@ set -euo pipefail
 
 CTF_ROOT="${CTF_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LEARN_ENGINE="$CTF_ROOT/scripts/learn_engine.py"
-ARTIFACTS_ROOT="$CTF_ROOT/artifacts"
+ARTIFACTS_ROOT="${ARTIFACTS_ROOT:-$CTF_ROOT/artifacts}"
 
 SOURCE_DIR=""
 LANG="auto"
@@ -47,6 +47,8 @@ TS=$(date +%Y%m%d-%H%M%S)
 SAFE_TARGET="${TARGET_IP//./_}"
 OUT_DIR="$ARTIFACTS_ROOT/${SAFE_TARGET:-local}/source_audit"
 mkdir -p "$OUT_DIR"
+DETAIL_DIR="$OUT_DIR/details"
+mkdir -p "$DETAIL_DIR"
 REPORT="$OUT_DIR/${TS}_findings.md"
 
 echo "[*] source-audit: dir=$SOURCE_DIR lang=$LANG"
@@ -57,11 +59,13 @@ if [[ "$LANG" == "auto" ]]; then
   php_count=$(file_counts php)
   py_count=$(file_counts py)
   js_count=$(file_counts js)
+  ts_count=$(file_counts ts)
   c_count=$(file_counts c)
   cpp_count=$(file_counts cpp)
   rb_count=$(file_counts rb)
   max=0
-  for pair in "php:$php_count" "python:$py_count" "js:$js_count" "c:$c_count"; do
+  js_total=$((js_count + ts_count))
+  for pair in "php:$php_count" "python:$py_count" "js:$js_total" "c:$c_count"; do
     lang_name="${pair%%:*}"
     count="${pair##*:}"
     if [[ "$count" -gt "$max" ]]; then max="$count"; LANG="$lang_name"; fi
@@ -76,13 +80,36 @@ TOTAL_FINDINGS=0
 declare -a FINDINGS=()
 
 grep_pattern() {
-  local name="$1" cwe="$2" severity="$3" pattern="$4" glob="$5"
+  local name="$1" cwe="$2" severity="$3" pattern="$4"
+  shift 4
   local results
-  results=$(grep -rn --include="$glob" -P "$pattern" "$SOURCE_DIR" 2>/dev/null | head -30 || true)
+  local include_args=()
+  for glob in "$@"; do
+    include_args+=(--include="$glob")
+  done
+  results=$(grep -rn \
+    --exclude-dir=.git \
+    --exclude-dir=node_modules \
+    --exclude-dir=test \
+    --exclude-dir=tests \
+    --exclude-dir=cypress \
+    --exclude-dir=codefixes \
+    --exclude-dir=private \
+    --exclude-dir=dist \
+    --exclude-dir=build \
+    --exclude-dir=coverage \
+    --exclude='*.min.js' \
+    --exclude='*.map' \
+    "${include_args[@]}" \
+    -P "$pattern" "$SOURCE_DIR" 2>/dev/null | head -30 || true)
   if [[ -n "$results" ]]; then
     local count
     count=$(echo "$results" | wc -l)
-    FINDINGS+=("$severity|$name|$cwe|$count|$results")
+    local safe_name detail_file
+    safe_name=$(echo "$name" | tr '[:upper:] /' '[:lower:]__' | tr -cd 'a-z0-9_-')
+    detail_file="$DETAIL_DIR/${safe_name}.txt"
+    echo "$results" > "$detail_file"
+    FINDINGS+=("$severity|$name|$cwe|$count|$detail_file")
     TOTAL_FINDINGS=$((TOTAL_FINDINGS + count))
   fi
 }
@@ -115,21 +142,25 @@ fi
 
 # ── JavaScript/Node patterns ──────────────────────────────────────────────────
 if [[ "$LANG" == "js" || "$LANG" == "generic" ]]; then
-  grep_pattern "JS eval"                      "CWE-94"  "HIGH"   '\beval\s*\(' '*.js'
-  grep_pattern "JS innerHTML assignment"      "CWE-79"  "HIGH"   'innerHTML\s*=' '*.js'
-  grep_pattern "JS document.write"            "CWE-79"  "MEDIUM" 'document\.write\s*\(' '*.js'
-  grep_pattern "JS dangerouslySetInnerHTML"   "CWE-79"  "HIGH"   'dangerouslySetInnerHTML' '*.{js,jsx,tsx}'
-  grep_pattern "Node child_process shell"     "CWE-78"  "HIGH"   'exec\s*\(|spawn\s*\(.*shell.*true' '*.js'
-  grep_pattern "Node SSRF http.get"           "CWE-918" "MEDIUM" 'http\.(get|request)\s*\([^)]*\+[^)]*\)' '*.js'
+  grep_pattern "JS eval"                       "CWE-94"  "HIGH"   '\beval\s*\(' '*.js' '*.jsx' '*.ts' '*.tsx'
+  grep_pattern "JS innerHTML assignment"       "CWE-79"  "HIGH"   'innerHTML\s*=' '*.js' '*.jsx' '*.ts' '*.tsx'
+  grep_pattern "JS document.write"             "CWE-79"  "MEDIUM" 'document\.write\s*\(' '*.js' '*.jsx' '*.ts' '*.tsx'
+  grep_pattern "JS dangerouslySetInnerHTML"    "CWE-79"  "HIGH"   'dangerouslySetInnerHTML' '*.js' '*.jsx' '*.ts' '*.tsx'
+  grep_pattern "Angular trusted HTML bypass"   "CWE-79"  "HIGH"   'bypassSecurityTrustHtml\s*\(' '*.ts' '*.tsx'
+  grep_pattern "Node child_process shell"      "CWE-78"  "HIGH"   "(require\\(['\\\"]child_process['\\\"]\\)|from ['\\\"]child_process['\\\"]|child_process\\.|require\\(['\\\"]child_process['\\\"]\\)\\.(exec|spawn|execFile))" '*.js' '*.ts'
+  grep_pattern "Node SSRF URL fetch/request"   "CWE-918" "HIGH"   '(fetch|request|http\.(get|request)|https\.(get|request))\s*\(\s*([^)]*req\.(body|query|params)|[^)]*\bimageUrl\b|url\b)' '*.js' '*.ts'
+  grep_pattern "Sequelize raw SQL interpolation" "CWE-89" "HIGH"  'sequelize\.query\s*\(\s*`[^`]*\$\{' '*.js' '*.ts'
+  grep_pattern "XML external entity expansion" "CWE-611" "HIGH"   'parseXml\s*\([^)]*noent\s*:\s*true' '*.js' '*.ts'
+  grep_pattern "Unsafe YAML load"              "CWE-502" "MEDIUM" 'yaml\.load\s*\(' '*.js' '*.ts'
 fi
 
 # ── C/C++ patterns ────────────────────────────────────────────────────────────
 if [[ "$LANG" == "c" || "$LANG" == "generic" ]]; then
-  grep_pattern "C strcpy/strcat unsafe"       "CWE-120" "HIGH"   '\b(strcpy|strcat|gets|sprintf)\s*\(' '*.{c,cpp,h}'
-  grep_pattern "C system() call"              "CWE-78"  "HIGH"   '\bsystem\s*\(' '*.{c,cpp}'
-  grep_pattern "C recv/read unchecked size"   "CWE-120" "MEDIUM" '\b(recv|read)\s*\([^,]+,[^,]+,[^,]+\)' '*.{c,cpp}'
-  grep_pattern "C format string"              "CWE-134" "HIGH"   '\b(printf|fprintf|sprintf)\s*\([^"]*\$' '*.{c,cpp}'
-  grep_pattern "C alloca"                     "CWE-770" "LOW"    '\balloca\s*\(' '*.{c,cpp}'
+  grep_pattern "C strcpy/strcat unsafe"       "CWE-120" "HIGH"   '\b(strcpy|strcat|gets|sprintf)\s*\(' '*.c' '*.cpp' '*.h'
+  grep_pattern "C system() call"              "CWE-78"  "HIGH"   '\bsystem\s*\(' '*.c' '*.cpp'
+  grep_pattern "C recv/read unchecked size"   "CWE-120" "MEDIUM" '\b(recv|read)\s*\([^,]+,[^,]+,[^,]+\)' '*.c' '*.cpp'
+  grep_pattern "C format string"              "CWE-134" "HIGH"   '\b(printf|fprintf|sprintf)\s*\([^"]*\$' '*.c' '*.cpp'
+  grep_pattern "C alloca"                     "CWE-770" "LOW"    '\balloca\s*\(' '*.c' '*.cpp'
 fi
 
 # ── semgrep (if available) ────────────────────────────────────────────────────
@@ -185,18 +216,18 @@ fi
     echo "| Severity | Finding | CWE | Matches |"
     echo "|----------|---------|-----|---------|"
     for entry in "${FINDINGS[@]}"; do
-      IFS='|' read -r sev name cwe count results <<< "$entry"
+      IFS='|' read -r sev name cwe count detail_file <<< "$entry"
       echo "| $sev | $name | $cwe | $count |"
     done
     echo ""
     echo "## Finding Details"
     echo ""
     for entry in "${FINDINGS[@]}"; do
-      IFS='|' read -r sev name cwe count results <<< "$entry"
+      IFS='|' read -r sev name cwe count detail_file <<< "$entry"
       echo "### [$sev] $name ($cwe)"
       echo ""
       echo '```'
-      echo "$results" | head -10
+      head -10 "$detail_file"
       echo '```'
       echo ""
 
@@ -242,12 +273,19 @@ echo "[+] Report: $REPORT"
 
 # ── learn ingest ──────────────────────────────────────────────────────────────
 if [[ -f "$LEARN_ENGINE" ]]; then
-  python3 "$LEARN_ENGINE" \
+  set +e
+  INGEST_OUTPUT=$(python3 "$LEARN_ENGINE" \
     --root "$CTF_ROOT" \
     ingest \
     --session-id "$SESSION_ID" \
     --source-path "$REPORT" \
-    2>&1 | tail -2
+    2>&1 | tail -2)
+  INGEST_RC=${PIPESTATUS[0]}
+  set -e
+  [[ -n "$INGEST_OUTPUT" ]] && echo "$INGEST_OUTPUT"
+  if [[ "$INGEST_RC" -ne 0 ]]; then
+    echo "[!] learning ingest skipped or failed for source audit report (rc=$INGEST_RC)"
+  fi
 fi
 
 echo "[+] source-audit complete. Total findings: $TOTAL_FINDINGS"

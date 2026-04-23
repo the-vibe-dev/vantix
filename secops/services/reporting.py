@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from secops.models import Artifact, Fact, Finding, RunEvent, WorkspaceRun, WorkflowExecution, WorkflowPhaseRun
@@ -39,6 +40,9 @@ class ReportingService:
             .order_by(WorkflowPhaseRun.created_at.asc())
             .all()
         )
+
+        facts = self._ensure_source_candidate_facts(db, run, facts, artifacts)
+        source_candidates = self._source_candidates_from_facts(facts) or self._source_candidates_from_artifacts(artifacts)
 
         report_json = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -85,6 +89,10 @@ class ReportingService:
             "artifacts": [{"id": art.id, "kind": art.kind, "path": art.path} for art in artifacts],
             "events": [{"id": ev.id, "sequence": ev.sequence, "type": ev.event_type, "level": ev.level, "message": ev.message} for ev in events[-80:]],
             "negative_evidence": [fact.value for fact in facts if fact.kind in {"negative_evidence", "no_finding"}],
+            "source_analysis": {
+                "candidate_count": len(source_candidates),
+                "candidates": source_candidates,
+            },
         }
         observation_facts = [fact for fact in facts if fact.kind in {"port", "service", "route", "form", "cve", "intel", "browser-session"}]
         hypothesis_facts = [fact for fact in facts if fact.kind in {"vector", "attack_chain"}]
@@ -158,7 +166,9 @@ class ReportingService:
         executive_summary = (
             f"Assessment completed for {run.target or 'unknown target'}. "
             f"Discovered {len(port_values)} open ports and {len(service_values)} service fingerprints. "
-            f"Validated findings: {len(validated_findings)}. CVE references: {len(cve_values)}."
+            f"Validated findings: {len(validated_findings)}. "
+            f"White-box source candidates: {len(source_candidates)}. "
+            f"CVE references: {len(cve_values)}."
         )
 
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -205,6 +215,35 @@ class ReportingService:
             "",
             "## Technical Findings",
         ]
+        if source_candidates:
+            md_lines.extend(
+                [
+                    "",
+                    "## White-Box Source Analysis",
+                    (
+                        f"Source analysis identified {len(source_candidates)} source-backed candidate(s). "
+                        "These are file/line findings requiring runtime validation before they should be counted as validated exploit findings."
+                    ),
+                    "",
+                ]
+            )
+            for idx, item in enumerate(source_candidates, start=1):
+                md_lines.extend(
+                    [
+                        f"### S{idx}. {item['title']}",
+                        f"- Severity: {str(item.get('severity') or 'info').upper()}",
+                        f"- CWE: {item.get('cwe') or 'not mapped'}",
+                        f"- Confidence: {float(item.get('confidence') or 0.0):.2f}",
+                        f"- Source File: `{item.get('relative_source_file') or item.get('source_file') or ''}`",
+                        f"- Line: {item.get('line') or 'unknown'}",
+                        f"- Artifact: {item.get('artifact_path') or 'not recorded'}",
+                        "",
+                        "```text",
+                        str(item.get("snippet") or "").rstrip(),
+                        "```",
+                        "",
+                    ]
+                )
         if finding_rows:
             for idx, item in enumerate(finding_rows, start=1):
                 clean_evidence = self._strip_artifact_suffix(str(item.get("evidence") or "(not provided)"))
@@ -329,6 +368,7 @@ class ReportingService:
                 service_values=service_values,
                 severity_counts=severity_counts,
                 findings=finding_rows,
+                source_candidates=source_candidates,
                 screenshots=screenshots,
             ),
         )
@@ -469,6 +509,7 @@ class ReportingService:
         service_values: list[str],
         severity_counts: dict[str, int],
         findings: list[dict[str, Any]],
+        source_candidates: list[dict[str, Any]],
         screenshots: list[str],
     ) -> str:
         def esc(value: Any) -> str:
@@ -510,6 +551,24 @@ class ReportingService:
         if not finding_cards:
             finding_cards.append("<p>No findings were recorded for this run.</p>")
 
+        source_cards: list[str] = []
+        for idx, item in enumerate(source_candidates, start=1):
+            sev = str(item.get("severity") or "info").lower()
+            source_cards.append(
+                (
+                    "<article class='finding'>"
+                    f"<h3>S{idx}. {esc(item.get('title'))}</h3>"
+                    f"<div class='meta'><span class='badge {esc(sev)}'>{esc(sev.upper())}</span>"
+                    f"<span>{esc(item.get('cwe') or 'CWE not mapped')}</span>"
+                    f"<span>Confidence: {float(item.get('confidence') or 0.0):.2f}</span></div>"
+                    f"<p><strong>Source:</strong> {esc(item.get('relative_source_file') or item.get('source_file') or '')}:{esc(item.get('line') or '')}</p>"
+                    f"<p><strong>Artifact:</strong> {esc(item.get('artifact_path') or 'not recorded')}</p>"
+                    f"<pre>{esc(item.get('snippet') or '')}</pre>"
+                    "</article>"
+                )
+            )
+        source_html = "".join(source_cards) if source_cards else "<p>No source-analysis candidates were recorded.</p>"
+
         image_blocks = "".join(self._render_artifact_html_block(path, kind_hint="screenshot") for path in screenshots[:24])
         if not image_blocks:
             image_blocks = "<p>No screenshots were captured.</p>"
@@ -541,10 +600,129 @@ class ReportingService:
             f"<p><strong>Open Ports:</strong> {esc(', '.join(port_values) if port_values else 'none observed')}</p>"
             f"<p><strong>Services:</strong> {esc(', '.join(service_values) if service_values else 'none observed')}</p>"
             "</section>"
+            f"<section><h2>White-Box Source Analysis</h2>{source_html}</section>"
             f"<section><h2>Findings And PoC</h2>{''.join(finding_cards)}</section>"
             f"<section><h2>Evidence Images</h2>{image_blocks}</section>"
             "</div></body></html>"
         )
+
+    def _ensure_source_candidate_facts(
+        self,
+        db: Session,
+        run: WorkspaceRun,
+        facts: list[Fact],
+        artifacts: list[Artifact],
+    ) -> list[Fact]:
+        if any(fact.source == "source-analysis" and fact.kind == "source-candidate" for fact in facts):
+            return facts
+        candidates = self._source_candidates_from_artifacts(artifacts)
+        if not candidates:
+            return facts
+        new_facts: list[Fact] = []
+        for item in candidates[:60]:
+            fact = Fact(
+                run_id=run.id,
+                source="source-analysis",
+                kind="source-candidate",
+                value=str(item.get("title") or ""),
+                confidence=float(item.get("confidence") or 0.0),
+                tags=[
+                    "source",
+                    "white-box",
+                    str(item.get("severity") or "info").lower(),
+                    str(item.get("cwe") or "").lower(),
+                ],
+                metadata_json=dict(item),
+            )
+            db.add(fact)
+            new_facts.append(fact)
+        summary = Fact(
+            run_id=run.id,
+            source="source-analysis",
+            kind="source-analysis-summary",
+            value=f"Source audit produced {len(new_facts)} structured candidate(s)",
+            confidence=0.8,
+            tags=["source", "white-box"],
+            metadata_json={"candidate_count": len(new_facts)},
+        )
+        db.add(summary)
+        try:
+            db.flush()
+        except SQLAlchemyError:
+            db.rollback()
+            return facts
+        return [*facts, *new_facts, summary]
+
+    def _source_candidates_from_facts(self, facts: list[Fact]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for fact in facts:
+            if fact.source != "source-analysis" or fact.kind != "source-candidate":
+                continue
+            meta = dict(fact.metadata_json or {})
+            rows.append(
+                {
+                    "title": fact.value,
+                    "confidence": fact.confidence,
+                    "severity": meta.get("severity") or "info",
+                    "cwe": meta.get("cwe") or "",
+                    "source_file": meta.get("source_file") or "",
+                    "relative_source_file": meta.get("relative_source_file") or "",
+                    "line": meta.get("line") or "",
+                    "snippet": meta.get("snippet") or "",
+                    "artifact_path": meta.get("artifact_path") or "",
+                }
+            )
+        return rows
+
+    def _source_candidates_from_artifacts(self, artifacts: list[Artifact]) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            if artifact.kind != "source-audit-report":
+                continue
+            path = Path(str(artifact.path or ""))
+            if not path.is_file():
+                continue
+            source_ctx = dict((artifact.metadata_json or {}).get("source_context") or {})
+            source_root = Path(str(source_ctx.get("resolved_path") or ""))
+            text = self._read_text_artifact(path)
+            if not text:
+                continue
+            current: dict[str, str] | None = None
+            section_re = re.compile(r"^### \[(?P<severity>[A-Z]+)\] (?P<name>.+?) \((?P<cwe>CWE-\d+)\)\s*$")
+            detail_re = re.compile(r"^(?P<path>/[^:\n]+):(?P<line>\d+):(?P<snippet>.*)$")
+            for raw in text.splitlines():
+                section = section_re.match(raw.strip())
+                if section:
+                    current = section.groupdict()
+                    continue
+                if current is None:
+                    continue
+                detail = detail_re.match(raw.rstrip())
+                if not detail:
+                    continue
+                source_file = detail.group("path")
+                rel_file = source_file
+                if source_root:
+                    try:
+                        rel_file = Path(source_file).resolve().relative_to(source_root.resolve()).as_posix()
+                    except (OSError, ValueError):
+                        rel_file = source_file
+                severity = current["severity"].lower()
+                confidence = {"critical": 0.9, "high": 0.82, "medium": 0.68, "low": 0.45}.get(severity, 0.6)
+                candidates.append(
+                    {
+                        "title": f"{current['name']}: {rel_file}:{detail.group('line')}",
+                        "confidence": confidence,
+                        "severity": current["severity"],
+                        "cwe": current["cwe"],
+                        "source_file": source_file,
+                        "relative_source_file": rel_file,
+                        "line": int(detail.group("line")),
+                        "snippet": detail.group("snippet").strip()[:1000],
+                        "artifact_path": str(path),
+                    }
+                )
+        return candidates
 
     def _extract_artifact_paths(self, text: str) -> list[str]:
         raw = str(text or "")
