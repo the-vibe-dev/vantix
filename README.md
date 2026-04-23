@@ -234,8 +234,8 @@ graph TB
     end
 
     subgraph "Observability"
-        HEALTH[/runtime/health/]
-        METRICS[/metrics/<br/>Prometheus]
+        HEALTH[Runtime health<br/>/runtime/health]
+        METRICS[Metrics<br/>Prometheus]
         EVENTS[RunEvent stream]
     end
 
@@ -290,21 +290,21 @@ graph TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Hypothesis: orchestrator emits vector_hypothesis
-    Hypothesis --> Validating: ExploitValidationService.validate_vector
-    Validating --> Validated: replay succeeds
-    Validating --> Refuted: replay fails
-    Refuted --> NegativeEvidence: sibling negative_evidence Fact written
+    [*] --> Hypothesis: vector_hypothesis
+    Hypothesis --> Validating: validate
+    Validating --> Validated: proof captured
+    Validating --> Refuted: no proof
+    Refuted --> NegativeEvidence: write negative_evidence
     NegativeEvidence --> [*]
-    Validated --> PromotionGate: finding_promotion.promote_finding
-    PromotionGate --> Suppressed: matching negative_evidence found
-    PromotionGate --> Merged: existing fingerprint hit
-    PromotionGate --> Draft: new Finding created
-    Draft --> Reviewed: reviewer accepts
-    Reviewed --> Confirmed: disposition=confirmed (terminal)
-    Reviewed --> Dismissed: disposition=dismissed (terminal)
+    Validated --> PromotionGate: promote
+    PromotionGate --> Suppressed: negative evidence
+    PromotionGate --> Merged: fingerprint match
+    PromotionGate --> Draft: new finding
+    Draft --> Reviewed: reviewer decision
+    Reviewed --> Confirmed: confirmed
+    Reviewed --> Dismissed: dismissed
     Suppressed --> [*]
-    Merged --> [*]: evidence_ids appended
+    Merged --> [*]: evidence appended
     Confirmed --> [*]
     Dismissed --> [*]
 ```
