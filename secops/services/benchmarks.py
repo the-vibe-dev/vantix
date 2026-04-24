@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from json import JSONDecodeError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,11 +38,13 @@ class BenchmarkCatalog:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or settings.validation_benchmarks_root).resolve()
         self.benchmarks_root = self.root / "benchmarks"
+        self._fallback_path = settings.repo_root / "secops" / "artifacts" / "benchmarks" / "devwork_lan_map" / "benchmarks.json"
 
     def list_benchmarks(self) -> list[BenchmarkRecord]:
+        records: list[BenchmarkRecord] = []
         if not self.benchmarks_root.exists():
-            return []
-        records = []
+            fallback = self._load_fallback_records()
+            return sorted(fallback, key=lambda row: row.benchmark_id)
         for bench_dir in sorted(self.benchmarks_root.iterdir()):
             if not bench_dir.is_dir():
                 continue
@@ -49,19 +52,34 @@ class BenchmarkCatalog:
             if metadata is None:
                 continue
             records.append(metadata)
+        fallback = self._load_fallback_records()
+        known_ids = {row.benchmark_id for row in records}
+        for fallback_row in fallback:
+            if fallback_row.benchmark_id not in known_ids:
+                records.append(fallback_row)
         return records
 
     def get(self, benchmark_id: str) -> BenchmarkRecord:
         bench_dir = self.benchmarks_root / benchmark_id
         metadata = self._load_metadata(bench_dir)
         if metadata is None:
-            raise FileNotFoundError(f"Unknown benchmark: {benchmark_id}")
+            fallback = self._load_fallback_metadata(benchmark_id)
+            if fallback is None:
+                raise FileNotFoundError(f"Unknown benchmark: {benchmark_id}")
+            return fallback
         return metadata
 
     def compose_services(self, benchmark_id: str) -> dict[str, Any]:
         bench_dir = self.benchmarks_root / benchmark_id
         compose_path = bench_dir / "docker-compose.yml"
-        data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        if compose_path.exists():
+            data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        else:
+            data = self._compose_services_from_fallback(benchmark_id)
+            if data is None:
+                raise FileNotFoundError(f"Missing benchmark compose: {compose_path}")
+        if data is None:
+            return {}
         return data.get("services", {})
 
     def launch(self, benchmark_id: str) -> dict[str, Any]:
@@ -146,11 +164,14 @@ class BenchmarkCatalog:
 
     def _load_metadata(self, bench_dir: Path) -> BenchmarkRecord | None:
         if not bench_dir.exists():
-            return None
+            return self._load_fallback_metadata(bench_dir.name)
         metadata_path = bench_dir / "benchmark.json"
         if not metadata_path.exists():
-            return None
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            return self._load_fallback_metadata(bench_dir.name)
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (JSONDecodeError, OSError):
+            return self._load_fallback_metadata(bench_dir.name)
         return BenchmarkRecord(
             benchmark_id=bench_dir.name,
             path=bench_dir,
@@ -160,6 +181,62 @@ class BenchmarkCatalog:
             tags=list(payload.get("tags", [])),
             win_condition=payload.get("win_condition", ""),
         )
+
+    def _load_fallback_records(self) -> list[BenchmarkRecord]:
+        entries = self._load_fallback_catalog()
+        records = []
+        for entry in entries:
+            record = self._to_record(entry)
+            if record is not None:
+                records.append(record)
+        return records
+
+    def _load_fallback_metadata(self, benchmark_id: str) -> BenchmarkRecord | None:
+        for entry in self._load_fallback_catalog():
+            if entry.get("benchmark_id") == benchmark_id:
+                return self._to_record(entry)
+        return None
+
+    def _compose_services_from_fallback(self, benchmark_id: str) -> dict[str, Any] | None:
+        for entry in self._load_fallback_catalog():
+            if entry.get("benchmark_id") != benchmark_id:
+                continue
+            services = {}
+            for endpoint in entry.get("endpoints", []):
+                service = endpoint.get("service") or "app"
+                container_port = endpoint.get("container_port")
+                if container_port is None:
+                    continue
+                services[service] = {
+                    "ports": [f"{container_port}:{container_port}"],
+                }
+            return {"services": services} if services else None
+        return None
+
+    def _to_record(self, entry: dict[str, Any]) -> BenchmarkRecord | None:
+        benchmark_id = entry.get("benchmark_id")
+        if not isinstance(benchmark_id, str) or not benchmark_id:
+            return None
+        return BenchmarkRecord(
+            benchmark_id=benchmark_id,
+            path=self.benchmarks_root / benchmark_id,
+            name=entry.get("status", benchmark_id),
+            description=entry.get("notes", ""),
+            level="planned",
+            tags=[],
+            win_condition="",
+        )
+
+    def _load_fallback_catalog(self) -> list[dict[str, Any]]:
+        if not self._fallback_path.exists():
+            return []
+        try:
+            payload = json.loads(self._fallback_path.read_text(encoding="utf-8"))
+        except (OSError, JSONDecodeError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [entry for entry in payload if isinstance(entry, dict)]
 
     def _container_port(self, entry: Any) -> int | None:
         if isinstance(entry, int):

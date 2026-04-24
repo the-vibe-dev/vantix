@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from secops.db import Base
@@ -622,3 +622,60 @@ class UserSession(Base):
     remote_addr: Mapped[str] = mapped_column(String(64), default="")
     user_agent: Mapped[str] = mapped_column(String(255), default="")
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ContentBlob(Base):
+    """Content-addressed immutable blob store.
+
+    Used by the replay layer to pin LLM prompt/response and tool stdout/stderr
+    bytes by sha256 so a run's manifest can be reproduced byte-for-byte.
+    """
+
+    __tablename__ = "content_blobs"
+
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LlmCacheEntry(Base):
+    """Content-addressed cache of LLM calls for deterministic replay.
+
+    Strict key per plan decision #4: keyed by sha256 of
+    ``{model, params_sha256, prompt_sha256}`` so replays are bit-identical.
+    Response body lives in ``content_blobs`` referenced by sha256.
+    """
+
+    __tablename__ = "llm_cache_entries"
+
+    key_sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model: Mapped[str] = mapped_column(String(128))
+    params_sha256: Mapped[str] = mapped_column(String(64))
+    prompt_sha256: Mapped[str] = mapped_column(String(64))
+    response_blob_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BusEvent(Base):
+    """Persistent agent-message bus event (vantix.event.v2 envelope)."""
+
+    __tablename__ = "bus_events"
+    __table_args__ = (
+        Index("ix_bus_events_run_turn", "run_id", "turn_id"),
+        Index("ix_bus_events_run_branch_seq", "run_id", "branch_id", "seq"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    branch_id: Mapped[str] = mapped_column(String(64), default="main")
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    turn_id: Mapped[int] = mapped_column(Integer, default=0)
+    agent: Mapped[str] = mapped_column(String(64))
+    type: Mapped[str] = mapped_column(String(32))
+    payload_json: Mapped[dict[str, Any]] = mapped_column("payload", JSON, default=dict)
+    parent_turn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    caused_by_fact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

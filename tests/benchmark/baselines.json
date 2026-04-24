@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "description": "Pinned baselines for deterministic Vantix benchmark scenarios. See tests/benchmark/test_benchmark_suite.py for the harness. Update when an algorithm change legitimately shifts counts; keep as the regression floor otherwise.",
+  "scenarios": {
+    "juice_shop_lite": {
+      "turns_executed": 3,
+      "actions_dispatched": 5,
+      "observations": 5,
+      "plan_reviews": 3,
+      "terminated_reason": "max_turns"
+    },
+    "dvwa_lite": {
+      "turns_executed": 1,
+      "actions_dispatched": 1,
+      "observations": 1,
+      "plan_reviews": 1,
+      "terminated_reason": "plan_blocked"
+    },
+    "htb_retired_lite": {
+      "turns_executed": 2,
+      "actions_dispatched": 4,
+      "observations": 4,
+      "plan_reviews": 2,
+      "terminated_reason": "no_replan"
+    }
+  }
+}

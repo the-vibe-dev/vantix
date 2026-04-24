@@ -17,6 +17,7 @@ from secops.models import (
     AgentSession,
     ApprovalRequest,
     Artifact,
+    BusEvent,
     Fact,
     Finding,
     OperatorNote,
@@ -55,6 +56,7 @@ from secops.schemas import (
     TerminalRead,
     ArtifactRead,
     BrowserStateRead,
+    BusEventRead,
     VectorCreate,
     VectorRead,
     RunResultsRead,
@@ -1249,3 +1251,45 @@ def stream_run(run_id: str, db: Session = Depends(get_db)):
             time.sleep(settings.default_stream_poll_interval)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{run_id}/bus", response_model=list[BusEventRead])
+def list_run_bus_events(
+    run_id: str,
+    branch_id: str = Query("main"),
+    after_seq: int = Query(0, ge=0),
+    type: str | None = Query(None, description="filter by message type: plan|action|observation|critique|policy_decision"),
+    agent: str | None = Query(None, description="filter by agent role"),
+    limit: int = Query(200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> list[BusEvent]:
+    if db.get(WorkspaceRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    stmt = (
+        db.query(BusEvent)
+        .filter(BusEvent.run_id == run_id)
+        .filter(BusEvent.branch_id == branch_id)
+        .filter(BusEvent.seq > after_seq)
+    )
+    if type:
+        stmt = stmt.filter(BusEvent.type == type)
+    if agent:
+        stmt = stmt.filter(BusEvent.agent == agent)
+    return stmt.order_by(BusEvent.seq.asc()).limit(limit).all()
+
+
+@router.get("/{run_id}/decision-graph")
+def get_decision_graph(
+    run_id: str,
+    branch_id: str = Query("main"),
+    fact_ids: str | None = Query(None, description="comma-separated fact ids to filter the DAG"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """V2-20 — DAG of bus events (nodes=turns, edges=causality)."""
+    from secops.services.decision_graph import build_decision_graph
+
+    if db.get(WorkspaceRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    ids = [s for s in (fact_ids.split(",") if fact_ids else []) if s.strip()]
+    graph = build_decision_graph(db, run_id, branch_id=branch_id, fact_ids=ids or None)
+    return graph.as_dict()

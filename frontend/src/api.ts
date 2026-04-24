@@ -184,6 +184,46 @@ export type RunCompare = {
   vectors: { count_a: number; count_b: number };
 };
 
+export type DecisionGraphNode = {
+  id: string;
+  turn_id: number;
+  agent: string;
+  type: string;
+  seq: number;
+  content_hash: string;
+  payload_summary: string;
+};
+
+export type DecisionGraphEdge = {
+  from_id: string;
+  to_id: string;
+  kind: "turn_predecessor" | "causal_fact" | string;
+};
+
+export type DecisionGraphResponse = {
+  run_id: string;
+  branch_id: string;
+  node_count: number;
+  edge_count: number;
+  nodes: DecisionGraphNode[];
+  edges: DecisionGraphEdge[];
+};
+
+export type BusEvent = {
+  id: string;
+  run_id: string;
+  branch_id: string;
+  seq: number;
+  turn_id: number;
+  agent: string;
+  type: "plan" | "action" | "observation" | "critique" | "policy_decision" | string;
+  payload: Record<string, unknown>;
+  parent_turn_id: number | null;
+  caused_by_fact_ids: string[];
+  content_hash: string;
+  created_at: string;
+};
+
 export type EventRecord = {
   id: string;
   sequence: number;
@@ -602,4 +642,21 @@ export const api = {
   getRuntimeHealth: () => request<RuntimeHealth>("/runtime/health"),
   compareRuns: (a: string, b: string) =>
     request<RunCompare>(`/api/v1/runs/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+  listRunBusEvents: (runId: string, opts: { type?: string; agent?: string; afterSeq?: number; branchId?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.type) q.set("type", opts.type);
+    if (opts.agent) q.set("agent", opts.agent);
+    if (opts.afterSeq) q.set("after_seq", String(opts.afterSeq));
+    if (opts.branchId) q.set("branch_id", opts.branchId);
+    if (opts.limit) q.set("limit", String(opts.limit));
+    const qs = q.toString();
+    return request<BusEvent[]>(`/api/v1/runs/${runId}/bus${qs ? `?${qs}` : ""}`);
+  },
+  getDecisionGraph: (runId: string, opts: { branchId?: string; factIds?: string[] } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.branchId) q.set("branch_id", opts.branchId);
+    if (opts.factIds && opts.factIds.length > 0) q.set("fact_ids", opts.factIds.join(","));
+    const qs = q.toString();
+    return request<DecisionGraphResponse>(`/api/v1/runs/${runId}/decision-graph${qs ? `?${qs}` : ""}`);
+  },
 };

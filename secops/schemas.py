@@ -235,6 +235,23 @@ class RunEventRead(BaseModel):
     graph_delta_ids: list[str] = Field(default_factory=list)
 
 
+class BusEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    branch_id: str
+    seq: int
+    turn_id: int
+    agent: str
+    type: str
+    payload: dict[str, Any] = Field(validation_alias="payload_json")
+    parent_turn_id: int | None = None
+    caused_by_fact_ids: list[str] = Field(default_factory=list)
+    content_hash: str = ""
+    created_at: datetime
+
+
 class WorkflowExecutionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
