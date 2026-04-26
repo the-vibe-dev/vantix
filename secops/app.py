@@ -72,6 +72,16 @@ async def lifespan(_: FastAPI):
     _check_startup_config()
     _run_migrations_if_needed()
     _bootstrap_users_if_needed()
+    try:
+        from secops.db import SessionLocal as _ResumeSession
+        from secops.orchestration.resume import auto_resume_running_runs
+        with _ResumeSession() as db:
+            reset = auto_resume_running_runs(db)
+            if reset:
+                db.commit()
+                logger.warning("auto-resume reset %d run(s) to resuming: %s", len(reset), ", ".join(reset))
+    except Exception:  # noqa: BLE001
+        logger.exception("auto-resume hook failed")
     if settings.enable_background_worker:
         try:
             from secops.db import SessionLocal

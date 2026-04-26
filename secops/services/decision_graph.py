@@ -74,18 +74,24 @@ class DecisionGraph:
 def _payload_summary(payload: dict[str, Any], ev_type: str) -> str:
     if not isinstance(payload, dict):
         return ""
-    if ev_type == "plan":
-        actions = payload.get("actions") or []
+    from secops.bus.messages import canonicalize_type
+    canon = canonicalize_type(ev_type)
+    if canon in ("plan_proposed", "plan_revised"):
+        actions = payload.get("actions") or payload.get("applied_plan", {}).get("actions") or []
         return f"plan({len(actions)} actions)"
-    if ev_type == "action":
+    if canon == "plan_blocked":
+        return f"plan_blocked({payload.get('verdict', payload.get('reason', '?'))})"
+    if canon == "action_dispatched":
         return f"action({payload.get('action_type', '?')})"
-    if ev_type == "observation":
+    if canon == "observation_recorded":
         return f"observation({payload.get('status', '?')})"
-    if ev_type == "critique":
+    if canon == "turn_committed":
         return f"critique(replan={payload.get('should_replan')})"
-    if ev_type == "policy_decision":
-        return f"policy({payload.get('verdict', '?')})"
-    return ev_type
+    if canon in ("policy_evaluated", "proof_created", "fact_promoted"):
+        return f"{canon}({payload.get('verdict', payload.get('phase', '?'))})"
+    if canon in ("run_paused", "run_resumed", "run_branched"):
+        return f"{canon}({payload.get('reason', payload.get('verdict', ''))})"
+    return canon
 
 
 def build_decision_graph(

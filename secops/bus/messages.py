@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 AgentRole = Literal[
@@ -31,7 +31,33 @@ AgentRole = Literal[
     "specialist:report",
 ]
 
-MessageType = Literal["plan", "action", "observation", "critique", "policy_decision"]
+MessageType = Literal[
+    "plan_proposed",
+    "plan_revised",
+    "plan_blocked",
+    "action_dispatched",
+    "observation_recorded",
+    "policy_evaluated",
+    "proof_created",
+    "fact_promoted",
+    "turn_committed",
+    "run_paused",
+    "run_resumed",
+    "run_branched",
+]
+
+LEGACY_TYPE_MAP: dict[str, str] = {
+    "plan": "plan_proposed",
+    "action": "action_dispatched",
+    "observation": "observation_recorded",
+    "critique": "turn_committed",
+    "policy_decision": "policy_evaluated",
+}
+
+
+def canonicalize_type(value: str) -> str:
+    """Coerce a legacy short event type to its canonical name (no-op if already canonical)."""
+    return LEGACY_TYPE_MAP.get(value, value)
 
 PolicyVerdict = Literal["allow", "deny", "approve", "block", "require_approval"]
 
@@ -128,3 +154,10 @@ class BusEnvelope(BaseModel):
     caused_by_fact_ids: list[str] = Field(default_factory=list)
     content_hash: str = ""
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _coerce_legacy_type(cls, v: Any) -> Any:
+        if isinstance(v, str) and v in LEGACY_TYPE_MAP:
+            return LEGACY_TYPE_MAP[v]
+        return v

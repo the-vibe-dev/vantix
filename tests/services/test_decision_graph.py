@@ -71,7 +71,7 @@ def test_decision_graph_filters_by_fact_ids():
         g = build_decision_graph(db, run_id, fact_ids=["fact_a"])
     # The observation event caused by fact_a plus its turn-0 ancestors.
     types = [n.type for n in g.nodes]
-    assert "observation" in types
+    assert "observation_recorded" in types
     # All selected nodes are in turn 0
     assert all(n.turn_id == 0 for n in g.nodes)
 

@@ -679,3 +679,91 @@ class BusEvent(Base):
     caused_by_fact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     content_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReplaySpec(Base):
+    """Signed replay specification — pointer to a turn manifest."""
+
+    __tablename__ = "replay_specs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    branch_id: Mapped[str] = mapped_column(String(64), default="main")
+    manifest_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    manifest_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReplayRun(Base):
+    """A single execution of a ReplaySpec."""
+
+    __tablename__ = "replay_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    spec_id: Mapped[str] = mapped_column(ForeignKey("replay_specs.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    divergence_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary_json: Mapped[dict[str, Any]] = mapped_column("summary", JSON, default=dict)
+
+
+class ReplayStep(Base):
+    """One turn comparison within a ReplayRun."""
+
+    __tablename__ = "replay_steps"
+    __table_args__ = (
+        Index("ix_replay_steps_run_turn", "replay_run_id", "turn_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    replay_run_id: Mapped[str] = mapped_column(ForeignKey("replay_runs.id"), index=True)
+    turn_id: Mapped[int] = mapped_column(Integer, default=0)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    agent: Mapped[str] = mapped_column(String(64), default="")
+    type: Mapped[str] = mapped_column(String(32), default="")
+    expected_msg_sha256: Mapped[str] = mapped_column(String(64), default="")
+    actual_msg_sha256: Mapped[str] = mapped_column(String(64), default="")
+    divergence_kind: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReplayDiff(Base):
+    """Structured divergence detail for a ReplayRun."""
+
+    __tablename__ = "replay_diffs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    replay_run_id: Mapped[str] = mapped_column(ForeignKey("replay_runs.id"), index=True)
+    turn_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), default="")
+    lhs_blob_sha: Mapped[str] = mapped_column(String(64), default="")
+    rhs_blob_sha: Mapped[str] = mapped_column(String(64), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    detail_json: Mapped[dict[str, Any]] = mapped_column("detail", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RunTurnCheckpoint(Base):
+    """Per-turn run-state snapshot used for resume/auto-resume (V25-11).
+
+    Distinct from the phase-level ``RunCheckpoint`` (workflow engine):
+    this row is written by ``run_planner_loop`` at the end of every turn
+    and stores the full RunState payload as a ContentBlob so a crashed
+    run can rebuild in-memory state by replaying bus events ≥ ``seq``.
+    """
+
+    __tablename__ = "run_turn_checkpoints"
+    __table_args__ = (
+        Index("ix_run_turn_checkpoints_run_branch_turn", "run_id", "branch_id", "turn_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(ForeignKey("workspace_runs.id"), index=True)
+    branch_id: Mapped[str] = mapped_column(String(64), default="main")
+    turn_id: Mapped[int] = mapped_column(Integer, default=0)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    run_state_blob_sha: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

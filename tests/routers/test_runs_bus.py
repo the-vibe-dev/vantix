@@ -58,7 +58,7 @@ def test_returns_all_events_for_branch():
         db.commit()
         rows = _call(db, run_id)
     types = [r.type for r in rows]
-    assert types == ["plan", "policy_decision", "action"]
+    assert types == ["plan_proposed", "policy_evaluated", "action_dispatched"]
 
 
 def test_filters_by_type_and_agent():
@@ -66,8 +66,8 @@ def test_filters_by_type_and_agent():
         run_id = _mk_run(db).id
         _seed(db, run_id)
         db.commit()
-        rows = _call(db, run_id, type="policy_decision")
-        assert [r.type for r in rows] == ["policy_decision"]
+        rows = _call(db, run_id, type="policy_evaluated")
+        assert [r.type for r in rows] == ["policy_evaluated"]
         rows = _call(db, run_id, agent="executor")
         assert [r.agent for r in rows] == ["executor"]
 
